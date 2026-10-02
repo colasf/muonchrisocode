@@ -1,0 +1,145 @@
+# MUON : BLOOM - storyboard of the preview stills.   [*] time | what the audience sees
+# Render everything:  python preview.py board     (stills -> previews/board, sheets -> previews/sheets)
+# Times are show time = position in the audio files (they start at 00:00).  * = also on the overview sheet.
+# The three towers stand in front of the wall for the whole show: dark bands until 01:44, lit after.
+
+# ---- SCENE 1 - INTRO  (TouchDesigner scene 1: dot, rings, streak field, star, messenger, body) -------
+* 0:05    | Black wall, white border; top left MUON BLOOM // LOADING (100 % at 0:06, then crosses row by row, red dot at 0:07)
+* 0:13    | Rings leave the dot; HERE / RIGHT NOW in the next bay; arrivals barcode starts: 63 ticks a second
+0:21      | The spiral field of streaks grows out of the dot between the rings; ALWAYS note on the axis
+* 0:26    | The field fills the wall behind the towers. Bottom: the FELT trace, flat at 0.000 - NOTHING
+0:29.6    | "Miniscule": the dot shrinks to a point, MU // POINT-LIKE, the scale ruler dives to 1E-18 m
+0:32.3    | The streak field is sucked back into a white disc: the dot becomes the iron core of a star
+* 0:34    | "A star collapsed, immense": star with its red iron core, notes on leaders, progenitor card, countdown
+0:39.7    | Core mass reaches 1.44: disc and rings contract, core radius falling, countdown T-00.300
+0:40.4    | Bounce: flash, the first rays leave the core, shock ring, neutrino barcode starts
+* 0:42.5  | Supernova: rays burst through the ring plane, behind the towers; one is tagged red - P+, HEADING: HERE
+0:45.5    | "Something bloomed": the camera leaves with the tagged ray; the star and its rays fall back
+* 0:51    | One messenger and its trail; INVISIBLE note; journey strip, two clocks, YEAR counter bottom right
+0:59      | Drums: red rings pulse around the messenger; SPEED 0.999 999 999 999 96 in red in the next bay
+* 1:03.5  | "Through galaxies": M51, M81, M101, Sombrero fall behind; the year counter plunges
+1:06.6    | "Through darkness": galaxies gone, the atmosphere limb rises, FIRST INTERACTION under the messenger
+1:08.6    | "Through the atmosphere above this city": first interaction at 14.6 km in two elevations, MU- 0001 tagged
+* 1:10.2  | The cascade feathers down both bays; one red front line crosses the whole wall at 3.7 km
+1:11.8    | "Through...": the footprint blooms in the focus bay, MU- 0001 lands exactly where YOU will stand
+1:13.2    | "YOU": that muon straight down through the heart; the body assembles slice by slice on the drum roll
+* 1:17    | The drop: figure in the focus bay, red rain across the wall, hero hits tagged, energy per body part
+* 1:21    | Ortho front and side, one per bay either side of the centre tower; red scan slice, hits tagged
+1:27      | "An echo, from a distant past": thorax close-up with the followed track; top view beside it
+1:29.3    | "Through your bones": rib cross-section on the track; tissue densities and energy loss in the next bay
+* 1:31.8  | "Your cells": the cells on the track outlined red; ion pairs per cell listed in the next bay
+1:34.5    | "Ancient, indifferent": DNA helices, the track between the turns, one ionisation
+1:37      | Water molecules: one in ~500 ionised; the muon itself has no measurable size
+1:40.2    | "It is called...": only the red track; what was measured beside it, NAME is a blinking red block
+* 1:42.2  | "A MUON": two plates open in the static: giant MUON tag + the 12 fermions; data table + decay curve
+
+# ---- SCENE 2 - DETECTOR / DATA EXPLAINER  (TouchDesigner: the wireframe detector plate) -----------
+1:46      | "These detectors": the three towers light up, detectors bracketed and WAITING; the plate in wireframe
+1:50      | "Waiting": edge-on view, the four read-outs of the reply chain all waiting
+1:53      | "Every muon that finds them becomes a conductor": a simulated muon crosses the plate, light to the SiPMs
+* 1:58    | "The more powerful the muon, brighter, louder, the reply": three energies, three blooms, three levels
+2:02.5    | "Energy becomes code becomes light becomes sound": the chain lights up word by word
+* 2:09    | "A visitor. A messenger. A muon...": the plate is back in the centre tower, one muon comes down to it
+* 2:14.2  | "A BLOOM": the centre detector answers. The first bloom bursts out of the tower
+
+# ---- SCENE 3 - DETECTORS ACTIVATED  (TouchDesigner: towers, red blooms, white strings) ------------
+2:24      | Waiting. A muon is seen coming to the left tower: dashed path, ETA counting down
+* 2:29    | 2:27 left detector hit: its bloom bursts open and stays, its strings wake up
+2:38      | Second muon on its way to the right tower
+2:42      | 2:40 right detector hit
+2:53      | 2:50 centre detector hit: the hero. Tallest tower, widest bloom
+* 2:58    | All three live: the TouchDesigner tower scene complete, with read-outs, energy scales, hit log
+
+# ---- SCENE 4 - DATA ON / AMBIENT  (TouchDesigner: the spiral galaxy on its grid floor) -------------
+3:01      | Cut to the grid floor and red axes; a red dot sits on the centre detector, first range ring draws itself
+3:04      | A small two-armed spiral of white trails unwinds out of the dot above the centre tower
+* 3:08    | The spiral widens past the 4 kpc ring; first live muons leave red trails from the left detector
+3:14      | The galaxy covers most of the wall behind the towers; a centre hit throws red trails out of the core
+3:22      | Full galaxy, 3 000 trails; right detector hit: a red burst leaves that tower and joins the rotation
+* 3:30.5  | Centre cluster: red shock ring runs across the floor, the whole disc flashes, the core answers
+3:40      | Calm rotation, arms readable into the core; floating numbers ride the trails
+* 3:48    | The big centre hit: core erupts in white and red rays, shock ring sweeps past all three towers
+3:55      | The disc keeps turning, wound and dense, red trails cooled to white, just before the cut
+
+# ---- SCENE 5 - COSMIC GROOVE  (TouchDesigner: the plexus sphere with its halo) ---------------------
+3:57      | Drums in. The body is scanned in from the top in 1.5 s while the first left-tower muons cross it
+4:03.3    | Searching: 13 tracks, a heavy centre-tower muon enters; the halo and the net jump on every kick
+4:12.7    | Right-tower swarm aimed at the core: PoCA dots pile up, the estimate closes in
+* 4:13.1  | Big kick + ANOMALY: the core ring appears, halo sticks jump, a white shock ring leaves the body
+4:20      | Between hits: 46 tracks faded to ghosts, the red core ring and the hot voxels of the tomogram stay
+* 4:28    | Full picture: flagged red bins in the halo and the unrolled profile, RHO_CORE 11.3
+4:35      | Last second before the cut: 94 tracks logged, the picture stands, only the kicks move it
+4:39      | "In the time you spend here": you again, between the towers; show progress bar, count so far 17 577
+* 4:46    | "More than fifty thousand of them will flood through your skin": rain at the real rate, 50 526 by the end
+4:52      | "Every minute of your life": the same number on every time scale; entry map from above
+* 5:02    | Cosmic break - "into the space you leave behind": the body dissolves to a dotted outline
+5:15      | The empty outline, the thin unchanged rain, the count still running: AFTER YOU - UNCHANGED
+
+# ---- SCENE 6 - DANCE  (new: the air-shower study as a groove) ---------------------------------------
+5:24      | The drop: first interaction over the towers in perspective, the shower will fall on DET_L
+* 5:41.6  | Bar 2: the same shower in two elevations (X / Z) in the two widest bays, red front crossing the wall
+* 5:58    | Bar 3: plan view locked on the towers, the footprint blooms around the head of DET_C
+6:20      | Shower 08 at full energy, two dense white / red cascades, DET_L replying live
+* 6:23.6  | Bar 4: elevation on the towers; what reached the ground stands as a comb opening around DET_R, scan line
+6:39.4    | A beat of pure barcode closes the phrase
+* 6:44    | Footprint around DET_R, lone muons landing on the beat, DET_C replying
+
+# ---- SCENE 7 - GLITCH  (new: the dance world breaking) ----------------------------------------------
+6:58      | Break: the wall emptied, one muon alone coming down
+* 7:01    | "Almost nothing": the same muon 2 km above the ground, counters at 000001
+7:06      | Drums in: the two elevations torn sideways, smears, hex dumps, an inverted band
+* 7:15    | Plan view corrupted: barcode bands, the towers and the HUD tear with the picture
+7:24      | Elevation breaking up, bands turning red, the red comb of muons at DET_R
+7:29      | Transition: smears turn vertical, the showers start to fade
+7:32.5    | Almost black: single white and red lanes falling past the towers
+
+# ---- SCENE 8 - OUTLAST  (the time-dilation study, re-laid vertically between the towers) -----------
+7:36.8    | Run 1, gamma 2: MICRO view of the first 2.5 km, classical muons die one by one with their distances
+* 7:54    | Run 2, gamma 6: whole atmosphere, the red front at 6 km, relativistic lanes ending where each muon died
+8:10      | Run 3, gamma 14 lands: 8 of 64 reach the ground; the ledger fills in under the classical lanes
+8:20      | Run 4, gamma 29: 40 still alive at 6 km, proper-time clock still short of its 2.197 us lifetime
+* 8:24    | "It Outlasted the star that made it": 29 of 64 at the ground, classical 0, the red OUTLAST tag
+8:30      | Outlast build: the survivors keep raining down the red lanes, faster and faster, into the rise
+
+# ---- SCENE 9 - RISE  (the towers as columns of rising light) ----------------------------------------
+8:40      | The three towers ignite as columns of light, a kick blooms rings and rays at the centre head
+8:58      | Columns climbing, fan of rays opening above the centre tower, arps flicker on the side ladders
+* 9:10    | Top of the crescendo: columns full, fan to the top of the wall, the muon almost stopped (beta 0.08)
+9:14      | "Everything it was, stripped away": the identity card loses class, charge, gamma, row by row
+9:19      | "The mass.": real hits on DET_C and DET_R, red rings at the centre head, a red ray with its energy
+* 9:22    | "It ends as light": the centre column becomes a beam; the card is rewritten: LIGHT, mass 0, speed c
+9:30      | The beam reaches the top of the wall, photons fly out sideways, 34 million scintillation photons
+9:37      | Rise break - power down, scene 3 reversed: centre and right dark, left tower last
+* 9:55    | "Something is rushing through you": detectors offline, a faint red drizzle keeps falling in the dark
+10:03     | "But now, now, you know": one muon is seen through the centre tower, the towers answer once
+
+# ---- SCENE 10 - DISINTEGRATE  (the sphere falls apart) ----------------------------------------------
+10:08.6   | The sphere is back with its picture (core ring, PoCA cluster); first hits decay on it, a chunk breaks off
+* 10:18.7 | Loud and dense: cratered shell, halo sticks falling, the old tracks decaying as stars around the core
+10:26.2   | A quarter left: fragments of net, stick clusters, decay log full
+10:34.2   | Thinning out: HUD text eroding, counters running backwards, a crescent of the body remains
+* 10:42   | 9 % left: scattered edges, tags fading, log emptying
+10:50     | Almost nothing: lattice, drifting dots, two last sticks, N/N0 .012
+
+# ---- SCENE 11 - OUTRO  (new: the journey as one line, then the whirl of the first minute) -----------
+10:54     | "Nothing chose when": dust of the disintegration settles over the lattice, towers still replying
+* 11:03   | "NOTHING": only the lattice, the three towers and one last bloom on the centre detector
+11:06     | One red dot appears at the left with the words ALMOST NOTHING
+11:20     | The journey draws itself as one line: star, Earth forms, dinosaurs, pyramids, muon discovered
+11:34     | "Billions of years": the red dot leaves the star; two clocks, OUR TIME 5 GYR / ITS OWN TIME 5 KYR
+* 11:47   | "Less than a heartbeat": the dot at T-9.72 ms, a heartbeat trace with its whole life as one red tick
+12:06     | "Passing through your body": the line ends in a figure, heart lit red; JUST LONG ENOUGH
+12:18     | "The universe does not stop": the whole journey on one axis, HERE // CINCINNATI, first repeats
+12:31     | "It continues": hundreds of travellers run the line again, its end curls towards the centre
+* 12:42   | "You are part of this": the line has coiled into a whirl around NOW, beside the centre tower
+12:45.5   | The towers stay live; the whirl grows behind them and continues
+12:51.4   | Drums: 7 000 trails swirl around the red dot, rings thrown out on every hit, passing behind the towers
+* 13:00   | The swirling field of the first minute fills the wall around the dot, towers standing in front of it
+13:14     | The count through you passes 50 000: the bottom-left cell flashes MORE THAN FIFTY THOUSAND
+13:20     | Full whirl, loudest moment, just before the title
+
+# ---- CREDITS -------------------------------------------------------------------------------------------
+13:24     | MUON : BLOOM types on beside the centre tower, the whirl held back softly behind it
+13:27.5   | Drums stop: the detectors power down centre, right, left while the credits finish typing
+13:29.5   | The whirl drains into the dot; credits and "50 526 MUONS WENT THROUGH YOU" sit in their own bays
+* 13:40   | First image again: lattice, one red dot between the dark towers, credits, IT CONTINUES

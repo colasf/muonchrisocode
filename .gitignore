@@ -1,0 +1,22 @@
+# images and video are not versioned (previews, renders, TouchDesigner reference movies)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.exr
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# shower worlds: rebuilt automatically on first use
+data/cache/
