@@ -13,6 +13,13 @@ ENERGY (the pulse) -> CODE (ADC word + the OSC float) -> LIGHT (the bloom) -> SO
   02:00  Energy becomes code becomes light becomes sound  VIEW 05 the chain lights up word by word
   02:05  A visitor. A messenger. A muon...                 the plate flies back into the centre tower,
                                                            one muon comes down to it -> 02:13 A BLOOM
+
+NOTHING THAT SHOWS DATA FADES IN OR POPS IN (muonbloom/build.py). At 01:44 the furniture of the scene
+constructs itself, block after block (strip, view tag and part labels, card, reply chain, bottom panels;
+the three scopes are built by towers.scopes). Then, on every cut of the voice, only what is new is made:
+the name of the view and the leaders to the parts. Each stage of the chain re-plots its read-out when a
+muon reaches it; the callouts grow out of their point; the strip and the view tag are taken apart when the
+plate flies back to its tower. The image (plate, muons, light, blooms) keeps its own life.
 """
 from __future__ import annotations
 
@@ -20,6 +27,7 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud, towers
 from .. import layout as L
 from .. import showdata as sd
@@ -65,7 +73,7 @@ class Detector(Scene):
         self.c_energy = sd.said("Energy becomes code", 120.0)
         self.c_visitor = sd.said("A visitor", 125.02)
         self.c_messenger = sd.said("A messenger", 127.32)
-        self.c_muon = sd.said("A muon...", 130.27)
+        self.c_muon = sd.said("A muon...", 130.27, nth=1)        # nth=1: "...A muon" at 01:41 is the first match
         # simulated muons crossing the plate: (time, energy 0..1, x, z, stage delay)
         self.demo = [(self.c_every + 0.7, 0.50, -1.5, 2.0, 0.12), (self.c_more + 0.6, 0.25, 2.8, -5.0, 0.12),
                      (self.c_more + 2.2, 0.55, -4.2, 5.4, 0.12), (self.c_more + 3.8, 0.95, 0.6, 0.4, 0.12),
@@ -77,6 +85,11 @@ class Detector(Scene):
         self.ph_ang = rng.uniform(0, 2 * np.pi, (len(self.demo), 46))
         self.ph_len = rng.uniform(0.3, 1.0, (len(self.demo), 46))
         self.roles = self._roles(ctx)
+        # the views cut on these; the view tag and the part labels leave when the plate starts to fly back
+        self.cuts = [T0, self.c_wait, self.c_every, self.c_more, self.c_energy, self.c_visitor]
+        ts = np.linspace(self.c_visitor, self.c_messenger + 1.6, 2000)
+        u = np.asarray(smoothstep(self.c_visitor + 0.4, self.c_messenger + 1.6, ts))
+        self.t_fly = float(ts[int(np.argmax(1.0 + 7.5 * u >= 1.5))])
 
     @staticmethod
     def _roles(ctx):
@@ -140,10 +153,11 @@ class Detector(Scene):
         self._visitor(f, t, ctx)
         marks = [(self.c_wait, "WAIT"), (self.c_every, "MUON"), (self.c_more, "REPLY"), (self.c_energy, "CHAIN"),
                  (self.c_visitor, "VISITOR"), (sd.T_BLOOM, "BLOOM")]
-        al = 1.0 - float(smoothstep(self.c_visitor - 0.2, self.c_visitor + 0.5, t))     # clear the sky for the visitor
-        if al > 0.01:
-            hud.show_strip(f, t, ctx, "SCENE 02 // DETECTOR / DATA EXPLAINER", T0, 139.0, marks, alpha=al)
-        return {}
+        age = B.io(t - T0, self.c_visitor - t, out=0.6)                # taken apart: the sky is clear for the visitor
+        if age >= 0.0:
+            hud.show_strip(f, t, ctx, "SCENE 02 // DETECTOR / DATA EXPLAINER", T0, 139.0, marks, age=age)
+        # the edge meters were off during the static of 'A MUON': they are built again with the reveal
+        return {"edge_kw": {"reveal": B.lin(t, T0, T0 + 0.7)}}
 
     def _draw_object(self, f, cam, t, shrink, clip=None, anchor=None):
         if clip:
@@ -170,8 +184,7 @@ class Detector(Scene):
             fade = math.exp(-a / 1.1)
             prog = min(1.0, a / 0.16)
             A = hit - d * 34.0
-            B = A + d * 68.0 * prog
-            P = np.stack([A, B]).astype(np.float32)
+            P = np.stack([A, A + d * 68.0 * prog]).astype(np.float32)
             px, py, _, ok = cam.project(P)
             if ok.all():
                 f.segments("r", px[:1], py[:1], px[1:], py[1:], (0.7 + 0.8 * e) * fade, width=L.LW_BOLD)
@@ -203,31 +216,42 @@ class Detector(Scene):
             f.rings("r", hx, hy, [(10 + 120 * e * (1 - (1 - u) ** 3)) / shrink], (1 - u) ** 1.5 * (0.6 + e), width=L.LW)
             f.dots("w", hx, hy, 3.0, 1.6 * fl)
             if shrink < 1.5 and a < 2.6 and anchor is not None:
-                al = 1 - float(smoothstep(2.0, 2.6, a))
                 hud.callout(f, float(hx[0]), float(hy[0]), anchor[0] - float(hx[0]), anchor[1] - float(hy[0]),
                             f"MU  E {e:.2f}",
                             [f"DE {1.6 + 3.4 * e:.2f} MEV", f"{int(9000 * (1.6 + 3.4 * e)):,} PHOTONS".replace(",", " ")],
-                            red=True, alpha=al, age=a, side=1)
+                            red=True, side=1, build=B.io(ah, 2.6 - a, out=0.4, span=0.9))
         if clip:
             f.set_clip()
 
     def _view_tag(self, f, t, vname, ctx, cam):
+        """Name of the view + part labels. Made at the cut to the scene; on every cut of the voice only what
+        is new is made again (the name of the view, the leaders to the parts: a pen from each part to its
+        label, which stays); all of it is taken apart when the plate starts to fly back to its tower."""
         b0, b1 = self.roles["obj"]
         x, y = b0 + 2, L.HEAD_Y + 52
-        f.tag("w", x, y, f"VIEW {vname}", size=L.T_LABEL, pad=4)
-        f.text("w", x, y + 32, "DET_C // 1 OF 3 IDENTICAL // SIMULATED MUONS", size=L.T_MICRO, alpha=0.7)
+        left = self.t_fly - t
+        a_all = B.io(t - T0 - 0.1, left, out=0.35, span=0.7)                        # what stays from view to view
+        a_cut = B.io(t - max([c for c in self.cuts if c <= t], default=T0), left, out=0.35, span=0.7)   # new in this view
+        B.tag(f, "w", x, y, f"VIEW {vname}", a_cut, size=L.T_LABEL, pad=4, cps=70.0, key=3)
+        f.text("w", x, y + 32, B.resolve("DET_C // 1 OF 3 IDENTICAL // SIMULATED MUONS", a_all - 0.2, 120.0, key=5),
+               size=L.T_MICRO, alpha=0.7)
         # part labels: fixed positions around the view, leaders to the parts
         parts = [("SCINTILLATOR", np.array([[-9.5, 1.0, 9.5]], np.float32), (b0 + 32, 1090.0), 1),
                  ("SIPM A", np.array([[-6.4, 2.8, -0.8]], np.float32), (b0 + 32, 372.0), 1),
                  ("SIPM B", np.array([[6.6, 2.8, -2.0]], np.float32), (b1 - 32, 372.0), -1)]
-        for name, p, (ax, ay), side in parts:
+        for k, (name, p, (ax, ay), side) in enumerate(parts):
             px, py, _, ok = cam.project(p)
             if not ok[0]:
                 continue
             x, y = float(px[0]), float(py[0])
-            f.segments("w", [x, ax + side * 110], [y, ay], [ax + side * 110, ax + side * 96], [ay, ay], 0.6, width=L.LW_HAIR)
-            f.dots("w", [x], [y], 2.4, 1.2)
-            f.tag("w", ax, ay + 7, name, size=L.T_SMALL, pad=4, anchor="ls" if side > 0 else "rs")
+            pl = float(B.ease((a_cut - 0.08 * k) / 0.28))
+            if pl > 0.0:
+                f.dots("w", [x], [y], 2.4, 1.2)
+                B.pen(f, "w", x, y, ax + side * 110, ay, pl, 0.6, width=L.LW_HAIR, head=2.6)
+                if pl >= 1.0:
+                    f.segments("w", [ax + side * 110], [ay], [ax + side * 96], [ay], 0.6, width=L.LW_HAIR)
+            B.tag(f, "w", ax, ay + 7, name, a_all - 0.3 - 0.1 * k, size=L.T_SMALL, pad=4,
+                  anchor="ls" if side > 0 else "rs", cps=70.0, key=10 + k)
 
     # ------------------------------------------------------------------ the chain
     def _current(self, t):
@@ -248,36 +272,41 @@ class Detector(Scene):
         k, age = self._current(t)
         e = self.demo[k][1] if k is not None else 0.0
         delay = self.demo[k][4] if k is not None else 0.0
-        appear = float(smoothstep(T0 + 0.6, T0 + 2.2, t))
         for s, name in enumerate(STAGES):
             y0 = y_top + s * rh
             y1 = y0 + rh - 22
             a = age - s * delay if k is not None else -1.0
             live = a >= 0
             hot = live and a < 1.3
-            al = appear * (1.0 if live else 0.6)
-            f.rects("w", x0, y0, x1, y0 + 4, 0.9 * appear)
-            f.tag("r" if hot else "w", x0, y0 + 36, f"{s + 1:02d} {name}", size=L.T_TAG, pad=5, alpha=appear)
             px0, px1, py0, py1 = x0 + 190, x1 - 6, y0 + 22, y1
-            if s < 3:           # 'becomes' arrow to the next stage
-                xa = x0 + 60
-                f.segments("w", [xa, xa - 7, xa + 7], [y0 + 70, y1 + 6, y1 + 6], [xa, xa, xa], [y1 + 16, y1 + 16, y1 + 16],
-                           0.7 * appear)
-                f.text("w", xa + 16, (y0 + 70 + y1 + 16) / 2 + 6, "BECOMES", size=L.T_MICRO, alpha=0.6 * appear)
+            # the four stages are constructed one after the other at the start of the scene ...
+            with f.build(t - (T0 + 0.6) - 0.2 * s, (x0 - 8, y0 - 10, x1 + 8, y1 + 8), key=30 + s, wave=0.35):
+                f.rects("w", x0, y0, x1, y0 + 4, 0.9)
+                f.tag("r" if hot else "w", x0, y0 + 36, f"{s + 1:02d} {name}", size=L.T_TAG, pad=5)
+                if s < 3:           # 'becomes' arrow to the next stage
+                    xa = x0 + 60
+                    f.segments("w", [xa, xa - 7, xa + 7], [y0 + 70, y1 + 6, y1 + 6], [xa, xa, xa],
+                               [y1 + 16, y1 + 16, y1 + 16], 0.7)
+                    f.text("w", xa + 16, (y0 + 70 + y1 + 16) / 2 + 6, "BECOMES", size=L.T_MICRO, alpha=0.6)
+                if not live:
+                    f.text("w", px0, (py0 + py1) / 2 + 6, "WAITING" if int(t * 2) % 2 else "WAITING _", size=L.T_SMALL,
+                           alpha=0.5)
+                    f.segments("w", [px0], [py1], [px1], [py1], 0.3)
             if not live:
-                f.text("w", px0, (py0 + py1) / 2 + 6, "WAITING" if int(t * 2) % 2 else "WAITING _", size=L.T_SMALL,
-                       alpha=0.5 * appear)
-                f.segments("w", [px0], [py1], [px1], [py1], 0.3 * appear)
                 continue
+            # ... and each one re-plots its read-out when a muon reaches it
             br = 0.55 + 0.45 * math.exp(-a / 0.8)
-            if s == 0:
-                self._stage_energy(f, px0, px1, py0, py1, e, a, br)
-            elif s == 1:
-                self._stage_code(f, px0, px1, py0, py1, e, a, br)
-            elif s == 2:
-                self._stage_light(f, px0, px1, py0, py1, e, a, br, t)
-            else:
-                self._stage_sound(f, px0, px1, py0, py1, e, a, br)
+            with f.build(a, (px0 - 6, py0 - 6, px1 + 6, py1 + 6), key=40 + s, wave=0.25, line=0.22, marks=False):
+                if s == 0:
+                    self._stage_energy(f, px0, px1, py0, py1, e, a, br)
+                elif s == 1:
+                    self._stage_code(f, px0, px1, py0, py1, e, a, br)
+                elif s == 2:
+                    self._stage_light(f, px0, px1, py0, py1, e, a, br, t)
+                else:
+                    self._stage_sound(f, px0, px1, py0, py1, e, a, br)
+            if s == 2:                  # the small bloom is image: it grows out of its point by itself
+                self._stage_bloom(f, px0, px1, py0, py1, e, a, br, t)
 
     @staticmethod
     def _stage_energy(f, x0, x1, y0, y1, e, a, br):
@@ -293,7 +322,7 @@ class Detector(Scene):
         k = np.arange(x0 + 8, x1 - 8, 16.0)
         f.segments("r", k, np.full_like(k, yt), k + 8, np.full_like(k, yt), 0.9)
         f.text("r", x1 - 4, yt - 8, "THRESHOLD", size=L.T_MICRO, anchor="rs", alpha=0.9)
-        f.text("w", x1 - 4, y0 + 16, hud.typed(f"PEAK {e * 3.3:.2f} V   DE {1.6 + 3.4 * e:.2f} MEV", a), size=L.T_SMALL,
+        f.text("w", x1 - 4, y0 + 16, f"PEAK {e * 3.3:.2f} V   DE {1.6 + 3.4 * e:.2f} MEV", size=L.T_SMALL,
                anchor="rs", alpha=0.95)
 
     @staticmethod
@@ -303,17 +332,19 @@ class Detector(Scene):
         bits = [(val >> (11 - i)) & 1 for i in range(12)]
         cw = min(46.0, (x1 - x0 - 10) / 12)
         n = int(min(12, a / 0.035))
+        bx = x0 + 6 + np.arange(12) * cw
+        ya, yb = y0 + 8, y0 + 8 + cw - 8
+        f.segments("w", np.r_[bx, bx + cw - 8, bx + cw - 8, bx], np.r_[np.full(24, ya), np.full(24, yb)],
+                   np.r_[bx + cw - 8, bx + cw - 8, bx, bx], np.r_[np.full(12, ya), np.full(24, yb), np.full(12, ya)], 0.6)
         for i in range(12):
-            bx = x0 + 6 + i * cw
-            f.rect("w", bx, y0 + 8, bx + cw - 8, y0 + 8 + cw - 8, 0.6)
             if i < n and bits[i]:
-                f.rects("w", bx + 3, y0 + 11, bx + cw - 11, y0 + 5 + cw - 8, 0.95 * br + 0.1)
+                f.rects("w", bx[i] + 3, y0 + 11, bx[i] + cw - 11, y0 + 5 + cw - 8, 0.95 * br + 0.1)
         ty = y0 + cw + 34
         f.text("w", x0 + 6, ty, hud.typed(f"ADC {val:04d}/4095   0x{val:03X}", a, delay=0.3), size=L.T_SMALL, alpha=0.9)
         f.text("r", x0 + 6, ty + 30, hud.typed(f"OSC  /MUON/C  ,F  {e:.3f}", a, delay=0.5), size=L.T_LABEL, alpha=0.95)
 
     @staticmethod
-    def _stage_light(f, x0, x1, y0, y1, e, a, br, t):
+    def _stage_bloom(f, x0, x1, y0, y1, e, a, br, t):
         """A small bloom, as open as the muon was strong."""
         ox, oy = x0 + 110, y1 - 6
         grow = 1 - math.exp(-a / 0.3)
@@ -327,6 +358,11 @@ class Detector(Scene):
             else:
                 f.dots("r", ox + x[::2], oy + y[::2], 1.6, 1.2 * br)
         f.set_clip()
+
+    @staticmethod
+    def _stage_light(f, x0, x1, y0, y1, e, a, br, t):
+        """What the bloom is told: brightness, radius, how open, how long."""
+        grow = 1 - math.exp(-a / 0.3)
         bx0, bx1 = x0 + 235, x1 - 6
         if bx1 - bx0 < 60:
             return
@@ -352,7 +388,7 @@ class Detector(Scene):
         xs = x0 + 6 + tt * (x1 - x0 - 12)
         f.polyline("w", xs[:n], ym - w[:n] * (y1 - y0) * 0.44, 1.0 * br, width=L.LW)
         db = 20 * math.log10(max(e, 1e-3))
-        f.text("w", x1 - 4, y0 + 16, hud.typed(f"GAIN {db:+05.1f} DB   VEL {int(e * 127):03d}", a, delay=0.2), size=L.T_SMALL,
+        f.text("w", x1 - 4, y0 + 16, f"GAIN {db:+05.1f} DB   VEL {int(e * 127):03d}", size=L.T_SMALL,
                anchor="rs", alpha=0.95)
 
     # ------------------------------------------------------------------ columns
@@ -363,21 +399,27 @@ class Detector(Scene):
         x = c0 + 4.0
         y = L.HEAD_Y + 86
         wide = c1 - c0 >= 380
-        f.tag("w", x, y, "DETECTORS", size=int(min(62, (c1 - c0 - 30) / (9 * 0.61))), pad=10, bold=True)
+        ts = int(min(62, (c1 - c0 - 30) / (9 * 0.61)))
+        B.tag(f, "w", x, y, "DETECTORS", t - T0, t0=0.1, size=ts, pad=10, bold=True, cps=45.0, key=50, commit=True)
         waiting = t < sd.T_BLOOM
         rows = ["COUNT     3  (L / C / R)", "TYPE      PLASTIC SCINTILLATOR", "READOUT   SIPM x 2 // COINCIDENCE",
                 "SIGNAL    1 FLOAT PER TOWER", "LINK      OSC  /MUON/L /C /R", "RATE      ~0.2 MUONS /S EACH",
                 f"STATE     {'WAITING' if waiting else 'LIVE'}"]
-        n = int((t - T0 - 0.3) * 3.2)
         chars = int((c1 - c0 - 4) / (L.T_SMALL * 0.61))
-        hud.rows(f, x, y + 62, [r[:chars] for r in rows[: max(0, n)]], size=L.T_SMALL, red=(6,))
+        # the rows are decoded one after the other, top to bottom (they used to pop in, one every 0.3 s)
+        with f.build(t - T0 - 0.35, (x - 8, y + 38, c1 + 4, y + 62 + 6 * 25.5 + 12), flow="tb", wave=1.4, cps=90.0, key=51):
+            hud.rows(f, x, y + 62, [r[:chars] for r in rows], size=L.T_SMALL, red=(6,))
         if t >= self.c_every and wide:
             yy = y + 62 + 8 * 26 + 30
-            f.tag("w", x, yy, "REPLY_LOG // SIMULATION", size=L.T_MICRO, pad=3)
-            f.text("w", x, yy + 30, "T        E     ADC   BLOOM  GAIN", size=L.T_MICRO, alpha=0.55)
+            a_log = t - self.c_every            # the log is made when the first simulated muon is announced
+            B.tag(f, "w", x, yy, "REPLY_LOG // SIMULATION", a_log, size=L.T_MICRO, pad=3, cps=90.0, key=52)
+            f.text("w", x, yy + 30, B.resolve("T        E     ADC   BLOOM  GAIN", a_log, 110.0, 0.15, key=53),
+                   size=L.T_MICRO, alpha=0.55)
             done = [m for m in self.demo if m[0] <= t][::-1]
             for r, (tm, e, _, _, _) in enumerate(done):
                 line = f"{sd.tc(tm)[:8]} {e:.2f}  {int(e * 4095):04d}  {int(120 + 420 * e):3d}   {20 * math.log10(e):+05.1f}"
+                if r == 0:                  # the reply that just came in is decoded on top of the log
+                    line = B.resolve(line, t - tm, 110.0, 0.1, key=54)
                 f.text("r" if r == 0 and t - tm < 1.5 else "w", x, yy + 54 + r * 22, line, size=L.T_MICRO,
                        alpha=0.95 if r == 0 else 0.65)
 
@@ -388,67 +430,86 @@ class Detector(Scene):
         x0, x1 = self.roles["reps"]
         x0 += 2.0
         y0 = L.HEAD_Y + 60
-        f.tag("w", x0, y0, "MORE ENERGY = BRIGHTER = LOUDER", size=L.T_MICRO, pad=3)
         ms = self.demo[1:4]
         w = (x1 - x0) / 3
         base = y0 + 330
-        f.segments("w", [x0], [base], [x1], [base], 0.6)
+        # the frame of the comparison is constructed on "The more powerful the muon" ...
+        with f.build(t - (self.c_more - 0.2), (x0 - 8, y0 - 24, x1 + 4, base + 244), key=55, wave=0.45):
+            f.tag("w", x0, y0, "MORE ENERGY = BRIGHTER = LOUDER", size=L.T_MICRO, pad=3)
+            f.segments("w", [x0], [base], [x1], [base], 0.6)
+            for i, (tm, e, _, _, _) in enumerate(ms):
+                f.text("w", x0 + (i + 0.5) * w, base + 28, f"E {e:.2f}", size=L.T_SMALL, anchor="ms",
+                       alpha=0.9 if t >= tm else 0.35)
+            f.text("w", x0, base + 232, "LOUDNESS", size=L.T_MICRO, alpha=0.6)
         for i, (tm, e, _, _, _) in enumerate(ms):
             a = t - tm
             cx = x0 + (i + 0.5) * w
-            f.text("w", cx, base + 28, f"E {e:.2f}", size=L.T_SMALL, anchor="ms", alpha=0.9 if a >= 0 else 0.35)
             if a < 0:
                 continue
             grow = 1 - math.exp(-a / 0.3)
-            for j in range(6):
+            for j in range(6):              # the bloom of this muon: the image, it grows by itself
                 s = (5 + 9 * j) * (0.3 + 1.25 * e) * grow
                 phi = np.linspace(0, 2 * np.pi, 60)
                 x, y = towers._loop(s, j * 1.3, 12, phi, t, 950 + i)
                 f.polyline("r", cx + x, base - 4 + y, (1.2 - 0.14 * j) * (0.6 + 0.4 * math.exp(-a / 1.0)), width=L.LW)
             hgt = 150 * e * grow
             bx = cx - 16
-            f.rect("w", bx, base + 44, bx + 32, base + 200, 0.5)
-            f.rects("w", bx + 3, base + 197 - hgt, bx + 29, base + 197, 0.9)
-        f.text("w", x0, base + 232, "LOUDNESS", size=L.T_MICRO, alpha=0.6)
+            # ... and each loudness meter is made when its muon arrives
+            with f.build(a, (bx - 4, base + 40, bx + 36, base + 204), key=56 + i, wave=0.12, line=0.2, marks=False):
+                f.rect("w", bx, base + 44, bx + 32, base + 200, 0.5)
+                f.rects("w", bx + 3, base + 197 - hgt, bx + 29, base + 197, 0.9)
 
     def _bottom(self, f, t, ctx):
         panels = ctx.slots["panels"]
         y0, y1 = ctx.slots["y0"], ctx.slots["y1"]
         k, age = self._current(t)
+        # the three panels are constructed at the cut, between the scopes of their towers (towers.scopes)
+        ap = [t - T0 - lag for lag in (0.45, 0.65, 0.85)]
         if len(panels) > 0:
             x0, x1 = panels[0]
-            hud.panel_header(f, x0, x1, y0, "STATE")
             flash = k is not None and age < 0.9
             incoming = t >= self.c_visitor
             word = "MUON" if flash else "INCOMING" if incoming else "WAITING"
+            with f.build(ap[0], (x0 - 8, y0 - 24, x1 + 8, y1 + 8), key=60):
+                hud.panel_header(f, x0, x1, y0, "STATE")
+                if x1 - x0 >= 500 and not incoming:
+                    f.text("w", x1, y0 + 44, f"T_WAIT {max(0.0, t - T0) if k is None else age:06.2f} S", size=L.T_SMALL,
+                           anchor="rs", alpha=0.85)
+                    f.text("w", x1, y0 + 70, "EXPECTED 1 EVERY ~5 S", size=L.T_MICRO, anchor="rs", alpha=0.6)
+            # the state word is made again when a muon is caught (MUON) and when the visitor is announced
+            # (INCOMING); WAITING simply resumes its blinking
+            a_word = age if flash else t - self.c_visitor if incoming else 99.0
             if flash or incoming or int(t * 1.6) % 2 == 0 or t < self.c_wait:
-                f.tag("r" if flash or incoming else "w", x0 + 4, y0 + 84, word, size=50, pad=8)
-            if x1 - x0 < 500:                       # narrow panel: the word alone
-                pass
-            elif incoming:
-                f.text("r", x1, y0 + 44, f"ETA {max(0.0, sd.T_BLOOM - t):05.2f} S", size=L.T_SMALL, anchor="rs")
-                f.text("w", x1, y0 + 70, "TARGET DET_C", size=L.T_MICRO, anchor="rs", alpha=0.7)
-            else:
-                f.text("w", x1, y0 + 44, f"T_WAIT {max(0.0, t - T0) if k is None else age:06.2f} S", size=L.T_SMALL,
-                       anchor="rs", alpha=0.85)
-                f.text("w", x1, y0 + 70, "EXPECTED 1 EVERY ~5 S", size=L.T_MICRO, anchor="rs", alpha=0.6)
+                B.tag(f, "r" if flash or incoming else "w", x0 + 4, y0 + 84, word, min(ap[0] - 0.2, a_word), size=50, pad=8,
+                      cps=55.0, key=61)
+            if x1 - x0 >= 500 and incoming:
+                with f.build(t - self.c_visitor, (x1 - 230, y0 + 24, x1 + 4, y0 + 78), key=62, wave=0.15, marks=False):
+                    f.text("r", x1, y0 + 44, f"ETA {max(0.0, sd.T_BLOOM - t):05.2f} S", size=L.T_SMALL, anchor="rs")
+                    f.text("w", x1, y0 + 70, "TARGET DET_C", size=L.T_MICRO, anchor="rs", alpha=0.7)
         if len(panels) > 1:
             x0, x1 = panels[1]
-            hud.panel_header(f, x0, x1, y0, "CHAIN // ENERGY > CODE > LIGHT > SOUND")
             w = (x1 - x0) / 4
             delay = self.demo[k][4] if k is not None else 0.0
-            for s, name in enumerate(STAGES):
+            with f.build(ap[1], (x0 - 8, y0 - 24, x1 + 8, y1 + 8), key=63):
+                hud.panel_header(f, x0, x1, y0, "CHAIN // ENERGY > CODE > LIGHT > SOUND")
+                for s, name in enumerate(STAGES):
+                    a = age - s * delay if k is not None else -1.0
+                    xx = x0 + s * w
+                    f.rect("w", xx + 4, y0 + 22, xx + w - 10, y0 + 70, 0.7)
+                    f.text("w", xx + 6, y0 + 98, name if w >= 96 else name[:1], size=L.T_SMALL,
+                           alpha=0.9 if a >= 0 else 0.45)
+            for s, name in enumerate(STAGES):          # a stage fills up when the muon reaches it
                 a = age - s * delay if k is not None else -1.0
                 xx = x0 + s * w
-                f.rect("w", xx + 4, y0 + 22, xx + w - 10, y0 + 70, 0.7)
                 if a >= 0:
-                    f.rects("r" if a < 1.3 else "w", xx + 8, y0 + 26, xx + w - 14, y0 + 66,
-                            0.5 + 0.5 * math.exp(-a / 0.8))
-                f.text("w", xx + 6, y0 + 98, name if w >= 96 else name[:1], size=L.T_SMALL, alpha=0.9 if a >= 0 else 0.45)
+                    with f.build(a, (xx + 4, y0 + 22, xx + w - 10, y0 + 70), key=64 + s, wave=0.1, flow="lr", marks=False):
+                        f.rects("r" if a < 1.3 else "w", xx + 8, y0 + 26, xx + w - 14, y0 + 66,
+                                0.5 + 0.5 * math.exp(-a / 0.8))
         if len(panels) > 2:
             x0, x1 = panels[2]
-            hud.panel_header(f, x0, x1, y0, "SIMULATED")
-            f.text("w", x0 + 2, y0 + 92, f"{sum(1 for m in self.demo if m[0] <= t):02d}", size=54)
+            with f.build(ap[2], (x0 - 8, y0 - 24, x1 + 8, y1 + 8), key=68):
+                hud.panel_header(f, x0, x1, y0, "SIMULATED")
+                f.text("w", x0 + 2, y0 + 92, f"{sum(1 for m in self.demo if m[0] <= t):02d}", size=54)
 
     # ------------------------------------------------------------------ the visitor
     def _visitor(self, f, t, ctx):
@@ -463,8 +524,10 @@ class Detector(Scene):
         hx, hy = x_top + (ox - x_top) * u, L.FY0 + (oy - L.FY0) * u
         f.set_clip(L.FX0, L.FY0, L.FX1, L.FY1)
         k = np.arange(0, 1.0, 0.04)                          # dashed line of where it will go
-        f.segments("r", x_top + (ox - x_top) * k, L.FY0 + (oy - L.FY0) * k, x_top + (ox - x_top) * (k + 0.02),
-                   L.FY0 + (oy - L.FY0) * (k + 0.02), 0.45)
+        with f.build(t - self.c_visitor, (min(x_top, ox) - 10, L.FY0, max(x_top, ox) + 10, oy), flow="tb", wave=0.5,
+                     marks=False, key=70):
+            f.segments("r", x_top + (ox - x_top) * k, L.FY0 + (oy - L.FY0) * k, x_top + (ox - x_top) * (k + 0.02),
+                       L.FY0 + (oy - L.FY0) * (k + 0.02), 0.45)
         f.segments("r", [x_top], [L.FY0], [hx], [hy], 1.2, width=L.LW_BOLD)
         f.dots("r", [hx], [hy], 6.0, 1.8)
         f.dots("w", [hx], [hy], 2.2, 1.2)
@@ -477,4 +540,4 @@ class Detector(Scene):
             px, py = x_top + (ox - x_top) * uu, L.FY0 + (oy - L.FY0) * uu
             now = t < (self.c_messenger if word == "A VISITOR" else self.c_muon if word == "A MESSENGER" else 1e9)
             hud.callout(f, px, py, -70, 26 if uu < 0.3 else 34, word, red=now, alpha=1.0 if now else 0.55,
-                        age=t - tc, size=L.T_TAG, side=-1)
+                        size=L.T_TAG, side=-1, build=t - tc)

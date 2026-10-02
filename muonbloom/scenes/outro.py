@@ -19,6 +19,13 @@
                                       field drains into the dot. What is left is the lattice of crosses and one
                                       red dot = the first image of the show. It loops.
 
+NOTHING THAT SHOWS DATA FADES (muonbloom/build.py): the strip, the stations of the axis and their glyphs,
+the blocks under the axis, the bottom panels, the tags (NOW, YOU // NOW, the reading of the traveller, MORE
+THAN FIFTY THOUSAND) and the credits are constructed when they come - leaders drawn by a pen, tags pushed
+out, text decoded, figures spinning before they lock - and taken apart, backwards, when they leave. Only
+the drawn things (dust, the line, the traveller, the figure, the whirl, the rings, the light of the towers)
+keep their own ramps.
+
 The three towers stand in front of the wall for the whole show and nobody knows yet where: so there is
 no fixed x in this scene. Everything is laid out from ctx: text, numbers and panels live in ctx.cols
 (the bays between the towers), the time axis skips the towers (no station ever falls behind one), the
@@ -31,6 +38,7 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud, towers
 from .. import layout as L
 from .. import showdata as sd
@@ -54,6 +62,10 @@ T_DRAIN = (806.3, 812.2)                           # ... and nothing new arrives
 T_CREDITS_OUT = (827.0, 832.0)
 PANEL_Y = AX_Y + 140.0                             # top of the blocks under the axis
 BURST = 0.6                                        # size of the towers' live replies in this calm scene
+T_STRIP = (664.0, 765.0)                           # the score strip: made / taken apart (before the whirl gets there)
+T_ANN_OUT = (738.5, 741.8)                         # the annotations of the journey are taken apart, before the line coils
+PANEL_OUT = dict(journey=739.3, clocks=739.6, heart=739.9, here=740.2)     # when each block under the axis is gone
+T_NOW_TAG = (741.2, 767.0)                         # NOW rides beside the dot on its way to the centre of the whirl
 
 
 def fit(size, n_chars, width):
@@ -75,6 +87,21 @@ def fmt_time(s):
             v = s / div
             return f"{v:.2f} {unit}" if v < 10 else f"{v:.1f} {unit}" if v < 100 else f"{v:.0f} {unit}"
     return "0"
+
+
+def _runs(ts, vals, t_end, min_len=0.5):
+    """Runs of one non-zero value in a sampled state: [(t_start, t_end, value)], the short ones dropped.
+    (What rides with a moving point is made when it gets room, and taken apart before it loses it.)"""
+    out, k, n = [], 0, len(vals)
+    while k < n:
+        j = k
+        while j + 1 < n and vals[j + 1] == vals[k]:
+            j += 1
+        a, b = float(ts[k]), (float(ts[j + 1]) if j + 1 < n else float(t_end))
+        if vals[k] and b - a >= min_len:
+            out.append((a, b, vals[k]))
+        k = j + 1
+    return out
 
 
 def _ecg(u):
@@ -160,6 +187,19 @@ class Outro(Scene):
                         b=0.3 + 0.7 * rng.random(n), vx=rng.normal(0, 5, n), vy=rng.uniform(2, 14, n),
                         seg=rng.random(n) < 0.25, ang=rng.uniform(0, np.pi, n), ln=rng.uniform(8, 34, n))
         self.rings = np.array([70.0, 112, 160, 232, 250, 334, 440, 468, 600, 760, 796, 980, 1180]) * self.r_out / 1560.0
+        # build clocks -----------------------------------------------------------------------------
+        self.t_rem_end = float(self.rem["gone"].max()) - 1.1             # the last of the remains is counted out
+        x_star = float(self.X(math.log10(T_STAR)))
+        self.t_fig = T_AXIS[0] + (self.x_now - 4.0 - x_star) / (self.x_now - x_star) * (T_AXIS[1] - T_AXIS[0])
+        ts = np.arange(self.t_dep, self.t_arr, 1.0 / 60.0)                 # the reading that rides with the traveller:
+        side, sides = 0, []                                                # (it keeps its side while it has room there)
+        for v in ts:
+            ok = self._read_sides(float(v))
+            side = side if side in ok else (ok[0] if ok else 0)
+            sides.append(side)
+        self.read_runs = _runs(ts, sides, self.t_arr)
+        ts = np.arange(T_NOW_TAG[0], T_NOW_TAG[1], 1.0 / 30.0)             # NOW, beside the dot on its way to the centre
+        self.now_runs = _runs(ts, [int(self._now_fits(float(v))) for v in ts], T_NOW_TAG[1])
 
     # ------------------------------------------------------------------ geometry from the towers
     def _geometry(self, ctx):
@@ -334,6 +374,20 @@ class Outro(Scene):
         x_star = float(self.X(math.log10(T_STAR)))
         return x_star + (self.x_now - x_star) * p
 
+    def _read_label(self, t):
+        return f"T-{fmt_time(10 ** self.lt_at(self._dot_x(t)))}"
+
+    def _read_sides(self, t):
+        """Sides of the traveller on which its reading has room: -1 left, 1 right (none: a tower is in the way)."""
+        xd = self._dot_x(t)
+        w = len(self._read_label(t)) * L.T_TAG * CHAR_W + 16
+        return [side for side in (-1, 1)
+                if self._fits(*((xd - 16 - w, xd - 10) if side < 0 else (xd + 10, xd + 16 + w)))]
+
+    def _now_fits(self, t):
+        x = float(self._path(np.array([1.0]), t)[0][0])
+        return self._fits(x + 14, x + 96)
+
     def _bottom_slots(self, ctx):
         """Bottom-band panels by need: (wide one for the numbers, another one for the second readout)."""
         panels = sorted(ctx.slots["panels"], key=lambda p: p[0])
@@ -378,19 +432,18 @@ class Outro(Scene):
         c = self.c
         drain = float(smoothstep(*T_DRAIN, t))
         self._lattice(f, 0.72 + 0.28 * drain)
-        a_strip = float(smoothstep(664.0, 668.0, t) * (1 - smoothstep(763.0, 769.0, t)))
         if t < c["nothing"] + 1.0:
             self._remains(f, t)
-        a_j = float(1 - smoothstep(738.5, 745.0, t))             # the annotations of the journey
+        a_img = float(1 - smoothstep(738.5, 745.0, t))           # what is DRAWN of the journey dims into the whirl
         if t >= c["universe"]:            # the world stays under the header until the strip has gone
             top = L.HEAD_Y + 6 - (L.HEAD_Y + 4 - L.FY0) * float(smoothstep(765.0, self.t_hit, t))
             f.set_clip(L.FX0 + 2, top, L.FX1 - 2, L.FY1 - 2)
         if t >= 663.0:
-            self._axis(f, t, ctx, a_j, drain)
-        if a_j > 0.01 and t >= 663.0:
-            self._stations(f, t, ctx, a_j)
-            if t >= T_AXIS[0]:
-                self._panels(f, t, ctx, a_j)
+            self._axis(f, t, ctx, drain)
+        if 663.0 <= t < 745.0:
+            self._stations(f, t, ctx, a_img)
+            if T_AXIS[0] <= t < T_ANN_OUT[1]:
+                self._panels(f, t, ctx)
         if t >= c["universe"]:
             self._travellers(f, t, ctx, drain)
         if t >= 764.0:
@@ -400,11 +453,12 @@ class Outro(Scene):
         self._bottom(f, t, ctx)
         if t >= T_END:
             self._credits(f, t, ctx)
-        if a_strip > 0.01:
+        age = B.io(t - T_STRIP[0], T_STRIP[1] - t, out=0.6, span=1.6)    # the strip is made, then taken apart
+        if age >= 0.0:
             marks = [(c["nothing"], "NOTHING"), (c["billions"], "BILLIONS OF YEARS"), (c["reach"], "REACH YOU"),
                      (c["body"], "YOUR BODY"), (T_COIL, "ACCELERANDO"), (c["part"], "PART OF THIS"),
                      (self.t_hit, "SWIRL")]
-            hud.show_strip(f, t, ctx, "OUTRO // SCENE 11 // THE JOURNEY, ONCE MORE", T0, T_END, marks, a_strip)
+            hud.show_strip(f, t, ctx, "OUTRO // SCENE 11 // THE JOURNEY, ONCE MORE", T0, T_END, marks, age=age)
         # the towers stay live to the end of the music; they power down under the credits, then stand dark
         opt = {"tower_dim": 0.34, "burst_size": BURST}
         if t >= T_PWR + 2.4:
@@ -440,11 +494,15 @@ class Outro(Scene):
         dx, dy = np.cos(r["ang"][m]) * r["ln"][m], np.sin(r["ang"][m]) * r["ln"][m]
         f.segments("w", x[m], y[m], x[m] + dx, y[m] + dy, (0.5 * r["b"] * a)[m])
         n = int((a > 0.5).sum())
-        if n:
-            f.text("w", self.cols[0][0], 272, f"REMAINS {n:03d}", size=L.T_SMALL, alpha=0.7)
+        if n:                             # their count: decoded at the cut, unwritten when the last one goes
+            age = B.io(t - T0 - 0.2, self.t_rem_end - t, out=0.4, span=0.6)
+            f.text("w", self.cols[0][0], 272, B.resolve(f"REMAINS {n:03d}", age, cps=40.0, key=5), size=L.T_SMALL,
+                   alpha=0.7)
 
-    def _axis(self, f, t, ctx, a_j, drain):
-        """The line of the journey (it stays, and coils in 11.1), its decades, the part already travelled."""
+    def _axis(self, f, t, ctx, drain):
+        """The line of the journey (it stays, and coils in 11.1), its decades, the part already travelled.
+        The decades and the units are thrown out as the line passes them, their names decoded; they are taken
+        off again, left to right, before the line coils."""
         c = self.c
         span = self.x_now - self.ax0
         q = float(np.clip((t - T_AXIS[0]) / (T_AXIS[1] - T_AXIS[0]), 0.0, 1.0))
@@ -458,34 +516,63 @@ class Outro(Scene):
             u = (1 - (1 - s) ** 2.0) * u_rev if cp > 0 else s * u_rev
             px, py, _, _ = self._path(u, t)
             f.polyline("w", px, py, 0.85 * (1 - 0.7 * swirl) * (1 - drain), width=L.LW)
-        if a_j <= 0.01 or cp > 0.2:
+        if t >= T_ANN_OUT[1] or cp > 0.2:
             return
+
+        def reach(x):                     # when the line gets to x ...
+            return T_AXIS[0] + (np.asarray(x, np.float64) - x_star) / (self.x_now - x_star) * (T_AXIS[1] - T_AXIS[0])
+
+        def leave(x):                     # ... and when what marks it is taken off again
+            return T_ANN_OUT[0] + 1.5 + 1.4 * (np.asarray(x, np.float64) - self.ax0) / span
+
+        def mark(x, ln):                  # a tick: thrown out long as the line passes, flicked off when it leaves
+            a = t - reach(x)
+            return (np.where(a >= 0.0, ln * (1.0 + 1.6 * np.exp(-np.maximum(a, 0.0) / 0.07)), 0.0)
+                    * (1.0 - B.ease((t - leave(x)) / 0.15)))
+
         # decades + units (the scale lives in the columns)
         lts = np.arange(math.floor(LT0), math.ceil(LT1) - 1, -1.0)
         xs = self.X(lts)
-        m = xs <= x_rev
-        f.segments("w", xs[m], np.full(m.sum(), AX_Y), xs[m], np.full(m.sum(), AX_Y + 7), 0.8 * a_j)
-        for lt, lab in self.units:
+        ln = mark(xs, 7.0)
+        m = ln > 0.3
+        f.segments("w", xs[m], np.full(m.sum(), AX_Y), xs[m], AX_Y + ln[m], 0.8)
+        for k, (lt, lab) in enumerate(self.units):
             x = float(self.X(lt))
-            if x > x_rev or not self._fits(x + 2, x + 74) or x > self.x_now - 150:
+            if not self._fits(x + 2, x + 74) or x > self.x_now - 150:
                 continue
-            f.segments("w", [x], [AX_Y], [x], [AX_Y + 16], 0.9 * a_j, width=L.LW)
-            f.text("w", x + 6, AX_Y + 34, lab, size=L.T_MICRO, alpha=0.6 * a_j)
+            ln = float(mark(x, 16.0))
+            if ln > 0.3:
+                f.segments("w", [x], [AX_Y], [x], [AX_Y + ln], 0.9, width=L.LW)
+            age = B.io(t - float(reach(x)) - 0.06, float(leave(x)) + 0.1 - t, out=0.2, span=0.4)
+            f.text("w", x + 6, AX_Y + 34, B.resolve(lab, age, cps=60.0, key=k), size=L.T_MICRO, alpha=0.6)
         if self._fits(self.ax0, self.ax0 + 190):
-            f.text("w", self.ax0, AX_Y + 62, "LOG TIME BEFORE NOW >", size=L.T_MICRO, alpha=0.5 * a_j * q)
-        # the part already travelled, bold; a flash runs along it on 'an endless, fleeting existence'
+            age = B.io(t - T_AXIS[0] - 0.5, T_ANN_OUT[0] + 1.7 - t, out=0.3, span=0.5)
+            f.text("w", self.ax0, AX_Y + 62, B.decode("LOG TIME BEFORE NOW >", age, cps=60.0, key=2), size=L.T_MICRO,
+                   alpha=0.5)
+        # the part already travelled, bold; a flash runs along it on 'an endless, fleeting existence'. When the
+        # annotations go it is released from its left end: the line is left thin, ready to coil
         xd = self._dot_x(t)
         if t >= self.t_dep and xd > x_star + 2:
             fl = math.exp(-max(0.0, t - c["endless"]) / 1.2) if t >= c["endless"] else 0.0
-            f.segments("w", [x_star], [AX_Y], [xd], [AX_Y], (0.95 + 1.2 * fl) * a_j, width=L.LW_BOLD + 1.5 * fl)
+            xa = x_star + (xd - x_star) * float(B.ease(B.lin(t, T_ANN_OUT[0] + 1.7, T_ANN_OUT[0] + 3.1)))
+            if xd - xa > 1.0:
+                f.segments("w", [xa], [AX_Y], [xd], [AX_Y], 0.95 + 1.2 * fl, width=L.LW_BOLD + 1.5 * fl)
 
-    def _stations(self, f, t, ctx, a_j):
-        """Markers on the axis: what else happened along the way, the glyphs of the show, the traveller."""
-        q = float(np.clip((t - T_AXIS[0]) / (T_AXIS[1] - T_AXIS[0]), 0.0, 1.0))
+    def _stations(self, f, t, ctx, a_img):
+        """Markers on the axis: what else happened along the way, the glyphs of the show, the traveller.
+        Every marker is constructed when the line reaches it (its leader drawn up from the axis, its name
+        decoded) and taken apart again, left to right, before the line coils. a_img only dims what is drawn
+        (the traveller, the figure)."""
         x_star = float(self.X(math.log10(T_STAR)))
-        x_rev = x_star + q * (self.x_now - x_star)
         xd = self._dot_x(t)
         dep = t >= self.t_dep
+
+        def reach(x):                     # when the line gets to x ...
+            return T_AXIS[0] + (x - x_star) / (self.x_now - x_star) * (T_AXIS[1] - T_AXIS[0])
+
+        def leave(x):                     # ... and when its marker is gone again
+            return T_ANN_OUT[0] + 0.5 + 1.6 * (x - self.ax0) / (self.x_now - self.ax0)
+
         star_top = AX_Y - 136.0
         for i, (sec, title, val, _, _) in enumerate(self.marks if t >= T_AXIS[0] else ()):
             if sec is None:
@@ -493,52 +580,63 @@ class Outro(Scene):
                 m_, s_ = divmod(int(t), 60)
                 val = f"-{m_:02d}:{s_:02d}"
             x = float(self.X(math.log10(sec)))
-            if x > x_rev:
+            if i in self.mark_pos and i == 0:
+                star_top = AX_Y - 44 - self.mark_pos[i][0] * 50 - 22.0
+            age = B.io(t - reach(x), leave(x) - t)
+            if age < 0.0:
                 continue
-            age = (t - (T_AXIS[0] + (x - x_star) / (self.x_now - x_star) * (T_AXIS[1] - T_AXIS[0])))
             passed = dep and xd >= x
             fl = math.exp(-max(0.0, (xd - x)) / 160.0) if passed and t < self.t_arr + 1 else 0.0
-            al = a_j * (0.5 + 0.4 * passed + 0.5 * fl)
+            al = 0.5 + 0.4 * passed + 0.5 * fl
             lay = "r" if fl > 0.3 else "w"
-            f.dots(lay, [x], [AX_Y], 3.2, 1.2 * al)
             if i not in self.mark_pos:
-                f.segments(lay, [x], [AX_Y - 10], [x], [AX_Y - 22], 0.75 * al, width=L.LW)
+                with f.build(age, (x - 8, AX_Y - 26, x + 8, AX_Y + 6), flow="bt", wave=0.1, marks=False, key=40 + i):
+                    f.dots(lay, [x], [AX_Y], 3.2, 1.2 * al)
+                    f.segments(lay, [x], [AX_Y - 10], [x], [AX_Y - 22], 0.75 * al, width=L.LW)
                 continue
             row, side = self.mark_pos[i]
             y1 = AX_Y - 44 - row * 50
-            if i == 0:
-                star_top = y1 - 22.0
-            f.segments(lay, [x], [AX_Y - 10], [x], [y1 + 8], 0.75 * al, width=L.LW)
             anchor = "ls" if side > 0 else "rs"
             tx = x + 9 * side
-            f.text(lay, tx, y1, hud.typed(title, age, cps=60), size=L.T_SMALL, alpha=al, anchor=anchor)
-            f.text("w", tx, y1 + 21, hud.typed(val, age, cps=60, delay=0.25), size=L.T_MICRO, alpha=0.7 * al,
-                   anchor=anchor)
+            xe = tx + side * max(len(title) * L.T_SMALL, len(val) * L.T_MICRO) * CHAR_W
+            with f.build(age, (min(x, xe) - 6, y1 - 18, max(x, xe) + 6, AX_Y + 6), flow="bt", wave=0.25, line=0.2,
+                         marks=False, key=40 + i):
+                f.dots(lay, [x], [AX_Y], 3.2, 1.2 * al)
+                f.segments(lay, [x], [AX_Y - 10], [x], [y1 + 8], 0.75 * al, width=L.LW)
+                f.text(lay, tx, y1, title, size=L.T_SMALL, alpha=al, anchor=anchor)
+                f.text("w", tx, y1 + 21, val, size=L.T_MICRO, alpha=0.7 * al, anchor=anchor)
         # its whole life, under the axis, just before now
         x_l = float(self.X(math.log10(TAU_MU)))
-        if x_rev >= x_l and t >= T_AXIS[0] and self._fits(x_l - 160, x_l):
-            al = a_j * (0.55 + 0.45 * (dep and xd >= x_l))
-            f.segments("r", [x_l], [AX_Y + 4], [x_l], [AX_Y + 58], 0.8 * al, width=L.LW)
-            f.text("r", x_l - 8, AX_Y + 56, "ITS WHOLE LIFE", size=L.T_SMALL, alpha=al, anchor="rs")
-            f.text("w", x_l - 8, AX_Y + 77, "2.197 US", size=L.T_MICRO, alpha=0.7 * al, anchor="rs")
-        # glyphs --------------------------------------------------------------
+        if t >= T_AXIS[0] and self._fits(x_l - 160, x_l):
+            al = 0.55 + 0.45 * (dep and xd >= x_l)
+            with f.build(B.io(t - reach(x_l), leave(x_l) - t), (x_l - 166, AX_Y + 2, x_l + 6, AX_Y + 84), flow="tb",
+                         wave=0.2, line=0.2, marks=False, key=51):
+                f.segments("r", [x_l], [AX_Y + 4], [x_l], [AX_Y + 58], 0.8 * al, width=L.LW)
+                f.text("r", x_l - 8, AX_Y + 56, "ITS WHOLE LIFE", size=L.T_SMALL, alpha=al, anchor="rs")
+                f.text("w", x_l - 8, AX_Y + 77, "2.197 US", size=L.T_MICRO, alpha=0.7 * al, anchor="rs")
+        # glyphs: drawn when the line gets to them, taken apart with the stations ------------------
         c0 = self.cols[0]
-        if x_rev > x_star and c0[1] - c0[0] >= 230:      # the star: shells around a point, over the first column
-            g = a_j * (0.6 + 0.4 * (not dep))
+        if t >= T_AXIS[0] and c0[1] - c0[0] >= 230:      # the star: shells around a point, over the first column
+            g = 0.6 + 0.4 * (not dep)
             gx, gy = min(x_star + 138.0, c0[1] - 70.0), 292.0
             rr = np.array([8.0, 16, 26, 37, 49, 60])
-            f.rings("w", [gx] * 6, [gy] * 6, rr * (1 + 0.03 * math.sin(t * 1.3)), 0.6 * g)
-            f.dots("r", [gx], [gy], 4.5, 1.3 * g)
-            if gx - 66 > x_star + 8:
-                f.segments("w", [x_star, x_star], [star_top, gy], [x_star, gx - 66], [gy, gy], 0.45 * g)
+            with f.build(B.io(t - T_AXIS[0] - 0.5, T_ANN_OUT[0] + 1.1 - t),
+                         (x_star - 8, gy - 68, gx + 68, max(star_top, gy + 68) + 4), flow="out",
+                         origin=(x_star, star_top), wave=0.35, marks=False, key=52):
+                f.rings("w", [gx] * 6, [gy] * 6, rr * (1 + 0.03 * math.sin(t * 1.3)), 0.6 * g)
+                f.dots("r", [gx], [gy], 4.5, 1.3 * g)
+                if gx - 66 > x_star + 8:
+                    f.segments("w", [x_star, x_star], [star_top, gy], [x_star, gx - 66], [gy, gy], 0.45 * g)
         mid = [cc for cc in self.cols if cc != c0 and cc != self.col_now and cc[1] - cc[0] >= 330]
-        if mid:                                           # the messenger: a point and the line it draws
+        if mid and t >= T_AXIS[0]:                        # the messenger: a point and the line it draws
             cc = max(mid, key=lambda v: v[1] - v[0])
             gx = float(np.clip(0.5 * (cc[0] + cc[1]), cc[0] + 80.0, cc[1] - 236.0))
             gy = 330.0
-            if x_rev > gx:
-                g = a_j * 0.75
-                ln = min(300.0, gx - cc[0] - 10.0)
+            g = 0.75
+            ln = min(300.0, gx - cc[0] - 10.0)
+            with f.build(B.io(t - reach(gx), T_ANN_OUT[0] + 1.4 - t),
+                         (gx - ln - 6, gy - 30, gx + 232, gy + 0.147 * ln + 8), flow="lr", wave=0.35, marks=False,
+                         key=53):
                 f.segments("w", [gx - ln], [gy + 0.147 * ln], [gx], [gy], 0.0, 0.8 * g, width=L.LW)
                 f.dots("w", [gx], [gy], 4.0, 1.4 * g)
                 f.rings("r", [gx], [gy], [14.0], 0.7 * g)
@@ -546,53 +644,58 @@ class Outro(Scene):
                 f.text("w", gx + 26, gy + 18, "V 0.999 999 999 999 5 C", size=L.T_MICRO, alpha=0.65 * g)
         x_a = float(self.X(math.log10(T_ATM)))
         ca = self._col_of(x_a)
-        if x_rev > x_a and ca is not None:                # 15 km of air: the cascade, above its station
+        if ca is not None and t >= T_AXIS[0]:             # 15 km of air: the cascade, above its station
             passed = dep and xd >= x_a
-            g = a_j * (0.55 + 0.45 * passed)
+            g = 0.55 + 0.45 * passed
             half = max(0.0, min(75.0, x_a - ca[0] - 6.0, ca[1] - x_a - 6.0))
             ax_, ay_ = x_a + 4, 250.0
             k = np.arange(15)
             sp = (hash01(k, 71) - 0.5) * 2.0 * half
             y_split = ay_ + 22 + 30 * hash01(k, 72)
-            f.segments("r", [ax_], [ay_ - 20], [ax_], [ay_ + 24], 0.9 * g, width=L.LW)
-            f.segments("w", np.full(15, ax_), y_split, ax_ + sp, np.full(15, AX_Y - 198.0), 0.55 * g)
-            f.segments("r", [ax_], [ay_ + 24], [ax_ + 6], [AX_Y - 150], 0.8 * g, width=L.LW)
-        if x_rev >= self.x_now - 4:       # you, at the end of the line
-            self._you(f, t, a_j)
+            with f.build(B.io(t - reach(x_a), T_ANN_OUT[0] + 1.9 - t),
+                         (x_a - half - 6, ay_ - 24, x_a + half + 14, AX_Y - 144), flow="tb", wave=0.35, marks=False,
+                         key=54):
+                f.segments("r", [ax_], [ay_ - 20], [ax_], [ay_ + 24], 0.9 * g, width=L.LW)
+                f.segments("w", np.full(15, ax_), y_split, ax_ + sp, np.full(15, AX_Y - 198.0), 0.55 * g)
+                f.segments("r", [ax_], [ay_ + 24], [ax_ + 6], [AX_Y - 150], 0.8 * g, width=L.LW)
+        if t >= self.t_fig:               # you, at the end of the line
+            self._you(f, t, a_img)
         # the traveller and its clock reading
         fade_in = float(smoothstep(663.0, 665.0, t))
         pulse = 0.5 + 0.5 * math.sin(t * 3.0) ** 2
-        f.dots("r", [xd], [AX_Y], 7.5 + 2.0 * pulse, 1.5 * fade_in * a_j)
-        f.dots("w", [xd], [AX_Y], 2.4, 1.2 * fade_in * a_j)
+        f.dots("r", [xd], [AX_Y], 7.5 + 2.0 * pulse, 1.5 * fade_in * a_img)
+        f.dots("w", [xd], [AX_Y], 2.4, 1.2 * fade_in * a_img)
         if dep and t < self.t_arr:
-            f.rings("r", [xd], [AX_Y], [20.0 + 6 * pulse], 0.7 * a_j, width=L.LW)
-            label = f"T-{fmt_time(10 ** self.lt_at(xd))}"
-            w = len(label) * L.T_TAG * CHAR_W + 16
-            for side in (-1, 1):                          # its reading rides with it, on whichever side is free
-                xa, xb = (xd - 16 - w, xd - 10) if side < 0 else (xd + 10, xd + 16 + w)
-                if self._fits(xa, xb):
-                    f.tag("r", xd + 16 * side, AX_Y + 104, label, size=L.T_TAG, pad=5, alpha=a_j,
-                          anchor="rs" if side < 0 else "ls")          # above the headers of the blocks below
-                    f.segments("r", [xd], [AX_Y + 12], [xd], [AX_Y + 98], 0.6 * a_j)
+            f.rings("r", [xd], [AX_Y], [20.0 + 6 * pulse], 0.7, width=L.LW)
+            for a, b, side in self.read_runs:             # its reading rides with it, on whichever side is free:
+                if a <= t < b:                            # made when it gets room, taken apart before it loses it
+                    age = B.io(t - a, b - t, out=0.2, span=0.4)
+                    B.pen(f, "r", xd, AX_Y + 12, xd, AX_Y + 98, B.ease(B.lin(age, 0.0, 0.2)), 0.6, width=1.0, head=2.4)
+                    B.tag(f, "r", xd + 16 * side, AX_Y + 104, self._read_label(t), age, t0=0.1, size=L.T_TAG, pad=5,
+                          anchor="rs" if side < 0 else "ls", cps=70.0, key=8)     # above the headers of the blocks below
                     break
-        elif not dep and t < T_AXIS[0] + 2 and self._fits(xd + 16, xd + 180):
-            f.text("r", xd + 22, AX_Y + 7, hud.typed("ALMOST NOTHING", t - 664.5, cps=14), size=L.T_SMALL,
-                   alpha=0.9 * fade_in * float(1 - smoothstep(T_AXIS[0], T_AXIS[0] + 2, t)))
+        elif t < T_AXIS[0] and self._fits(xd + 16, xd + 180):
+            age = B.io(t - 664.5, T_AXIS[0] - t, out=0.4, span=1.2)      # unwritten before the line starts through it
+            f.text("r", xd + 22, AX_Y + 7, B.decode("ALMOST NOTHING", age, cps=14.0, band=2, key=3), size=L.T_SMALL,
+                   alpha=0.9)
 
-    def _you(self, f, t, a_j):
-        """The figure at the end of the axis (front view in slices, the journey line through the heart)."""
+    def _you(self, f, t, a_img):
+        """The figure at the end of the axis (front view in slices, the journey line through the heart). It
+        assembles slice by slice around the heart when the line gets there; its tag is made, then taken apart
+        with the stations."""
         c = self.c
         Hh = 250.0
         x0 = self.x_now
         y_feet = AX_Y + 0.71 * Hh
         arr = float(smoothstep(self.t_arr - 0.6, self.t_arr + 0.2, t))
-        g = a_j * (0.45 + 0.55 * arr)
+        g = a_img * (0.45 + 0.55 * arr)
         ys = np.arange(0.0, 1.0, 5.0 / Hh)
         xa, xb, yy = [], [], []
         for v in ys:
             for cen, hw in _body(float(v)):
                 xa.append(x0 + (cen - hw) * Hh); xb.append(x0 + (cen + hw) * Hh); yy.append(y_feet - v * Hh)
         xa, xb, yy = np.array(xa), np.array(xb), np.array(yy)
+        there = np.abs(yy - AX_Y) <= 190.0 * B.lin(t, self.t_fig, self.t_fig + 0.7)       # from the heart outwards
         heart = np.abs(yy - AX_Y) < 16
         hot = 0.0
         if t >= self.t_arr - 0.2:
@@ -600,43 +703,47 @@ class Outro(Scene):
         ab = t - c["body"]
         if ab >= 0:
             hot = max(hot, math.exp(-ab / 2.2))
-        f.segments("w", xa[~heart], yy[~heart], xb[~heart], yy[~heart], 0.75 * g, width=L.LW)
-        f.segments("w", xa[heart], yy[heart], xb[heart], yy[heart], 0.75 * g * (1 - hot), width=L.LW)
+        m = there & ~heart
+        f.segments("w", xa[m], yy[m], xb[m], yy[m], 0.75 * g, width=L.LW)
+        m = there & heart
+        f.segments("w", xa[m], yy[m], xb[m], yy[m], 0.75 * g * (1 - hot), width=L.LW)
         if hot > 0.02:
-            f.segments("r", xa[heart], yy[heart], xb[heart], yy[heart], 1.5 * hot * a_j, width=L.LW)
-            f.rings("r", [x0 + 0.012 * Hh], [AX_Y], [10 + 60 * (1 - hot)], hot * a_j, width=L.LW)
+            f.segments("r", xa[m], yy[m], xb[m], yy[m], 1.5 * hot * a_img, width=L.LW)
+            f.rings("r", [x0 + 0.012 * Hh], [AX_Y], [10 + 60 * (1 - hot)], hot * a_img, width=L.LW)
         if 0 <= ab < 5.0:                     # 'passing through your body': from above, as it really does
             u = min(1.0, ab / 0.22)
             fade = float(1 - smoothstep(3.5, 5.0, ab))
             ya, yb_ = y_feet - Hh - 110, y_feet + 26
-            f.segments("r", [x0 + 26], [ya], [x0 + 26 - 34 * u], [ya + (yb_ - ya) * u], 1.2 * fade * a_j, width=L.LW)
+            f.segments("r", [x0 + 26], [ya], [x0 + 26 - 34 * u], [ya + (yb_ - ya) * u], 1.2 * fade * a_img, width=L.LW)
         now = t >= c["moment"]
-        f.tag("r" if (now or arr > 0.5) else "w", x0, y_feet + 44, "YOU // NOW", size=L.T_TAG, pad=5,
-              alpha=a_j * (0.6 + 0.4 * arr), anchor="ms")
+        B.tag(f, "r" if (now or arr > 0.5) else "w", x0, y_feet + 44, "YOU // NOW",
+              B.io(t - self.t_fig - 0.6, T_ANN_OUT[0] + 2.3 - t, out=0.3, span=0.45), size=L.T_TAG, pad=5,
+              alpha=0.6 + 0.4 * arr, anchor="ms", cps=50.0, key=6)
 
-    def _panels(self, f, t, ctx, a_j):
-        """Under the axis, flowed into the columns: the journey, two clocks, a heartbeat, this place."""
+    def _panels(self, f, t, ctx):
+        """Under the axis, flowed into the columns: the journey, two clocks, a heartbeat, this place. Each block
+        constructs itself on its cue and is taken apart - one after the other - before the line coils."""
         c = self.c
         y0 = PANEL_Y
         xd = self._dot_x(t)
         sec = 10 ** self.lt_at(xd)
+
+        def age(t_in, name, out=0.45):
+            return B.io(t - t_in, PANEL_OUT[name] - t, out=out)
+
         if "journey" in self.panel:
             x0, x1 = self.panel["journey"]
-            age = t - T_AXIS[0]
-            f.tag("w", x0, y0 + 36, hud.typed("THE JOURNEY", age, cps=30), size=fit(44, 11, x1 - x0 - 24), pad=8,
-                  alpha=a_j)
             lines = ["ORIGIN    CORE COLLAPSE", "DEPARTED  -5.0 GYR", "MESSENGER PROTON  P+", "GAMMA     1 000 000",
                      "PATH      5.0E9 LY", "LAST LEG  MUON  15 KM", "ARRIVAL   NOW"]
-            for k, ln in enumerate(lines):
-                f.text("w", x0, y0 + 96 + k * 27, hud.typed(ln, age, cps=50, delay=0.6 + 0.25 * k), size=L.T_SMALL,
-                       alpha=0.85 * a_j)
-        age = t - c["stretched"]
-        if "clocks" in self.panel and age > 0:
+            with f.build(age(T_AXIS[0] + 0.2, "journey"), (x0 - 12, y0 - 10, x1 + 6, y0 + 96 + 6 * 27 + 12), flow="tb",
+                         wave=0.45, cps=90.0, key=31):
+                f.tag("w", x0, y0 + 36, "THE JOURNEY", size=fit(44, 11, x1 - x0 - 24), pad=8)
+                for k, ln in enumerate(lines):
+                    f.text("w", x0, y0 + 96 + k * 27, ln, size=L.T_SMALL, alpha=0.85)
+        if "clocks" in self.panel:
             x0, x1 = self.panel["clocks"]
             w = x1 - x0
             wide = w >= 600
-            hud.panel_header(f, x0, x1, y0, "TWO CLOCKS // TIME STRETCHED AROUND IT" if w >= 330 else "TWO CLOCKS",
-                             alpha=a_j)
             muon = sec <= T_ATM
             our = (T_ATM - sec) if muon else (T_STAR - sec)
             its = our / (GAMMA_MU if muon else GAMMA_P)
@@ -644,56 +751,63 @@ class Outro(Scene):
                 our, its = T_ATM, T_ATM / GAMMA_MU
             size = fit(54, 8, (w * 0.5 - 24) if wide else (w - 8))
             xi, yi = (x0 + w * 0.5, y0) if wide else (x0, y0 + 100)
-            f.tag("w", x0 + 2, y0 + 52, "OUR TIME", size=L.T_MICRO, pad=3, alpha=a_j)
-            f.text("w", x0, y0 + 116, hud.typed(fmt_time(our), age, cps=30, delay=0.2), size=size, alpha=a_j)
-            f.tag("r", xi + 2, yi + 52, "ITS OWN TIME", size=L.T_MICRO, pad=3, alpha=a_j)
-            f.text("r", xi, yi + 116, hud.typed(fmt_time(its), age, cps=30, delay=0.5), size=size, alpha=a_j)
             yq = y0 + (0 if wide else 100)
             who = "MUON  GAMMA 30" if muon or t >= self.t_arr else "PROTON  GAMMA 1 000 000"
             line = f"{who}  //  ITS CLOCK RUNS GAMMA TIMES SLOWER" if w >= 545 else who
-            f.text("w", x0, yq + 152, hud.typed(line, age, cps=60, delay=0.8), size=L.T_MICRO, alpha=0.7 * a_j)
-            ar = t - c["reach"]
-            if ar > 0:                        # its own time against its lifetime: just long enough
-                by = yq + 196
-                own = (T_ATM - min(sec, T_ATM)) / GAMMA_MU if t < self.t_arr else T_ATM / GAMMA_MU
-                frac = float(np.clip(own / TAU_MU, 0.0, 1.0))
-                f.rect("w", x0, by, x1, by + 22, 0.7 * a_j)
-                f.rects("r", x0 + 3, by + 3, x0 + 3 + (w - 6) * frac, by + 19, 0.95 * a_j)
-                cap = (f"THE MUON: ITS OWN TIME {own * 1e6:.2f} US  /  ITS LIFETIME 2.197 US" if w >= 495
-                       else f"OWN TIME {own * 1e6:.2f} / 2.197 US")
-                f.text("w", x0, by + 48, hud.typed(cap, ar, cps=60), size=L.T_MICRO, alpha=0.8 * a_j)
-                if t >= self.t_arr:
-                    f.tag("r", x1, by + (52 if w >= 700 else 84), "JUST LONG ENOUGH", size=L.T_SMALL, pad=4,
-                          alpha=a_j, anchor="rs")
-        age = t - c["heartbeat"]
-        if "heart" in self.panel and age > 0:
+            with f.build(age(c["stretched"], "clocks"), (x0 - 10, y0 - 28, x1 + 10, yq + 166), key=32):
+                hud.panel_header(f, x0, x1, y0, "TWO CLOCKS // TIME STRETCHED AROUND IT" if w >= 330 else "TWO CLOCKS")
+                f.tag("w", x0 + 2, y0 + 52, "OUR TIME", size=L.T_MICRO, pad=3)
+                f.text("w", x0, y0 + 116, fmt_time(our), size=size)
+                f.tag("r", xi + 2, yi + 52, "ITS OWN TIME", size=L.T_MICRO, pad=3)
+                f.text("r", xi, yi + 116, fmt_time(its), size=size)
+                f.text("w", x0, yq + 152, line, size=L.T_MICRO, alpha=0.7)
+            # its own time against its lifetime: just long enough
+            by = yq + 196
+            own = (T_ATM - min(sec, T_ATM)) / GAMMA_MU if t < self.t_arr else T_ATM / GAMMA_MU
+            frac = float(np.clip(own / TAU_MU, 0.0, 1.0))
+            cap = (f"THE MUON: ITS OWN TIME {own * 1e6:.2f} US  /  ITS LIFETIME 2.197 US" if w >= 495
+                   else f"OWN TIME {own * 1e6:.2f} / 2.197 US")
+            with f.build(age(c["reach"], "clocks"), (x0 - 6, by - 6, x1 + 6, by + 56), flow="lr", wave=0.3, marks=False,
+                         key=33):
+                f.rect("w", x0, by, x1, by + 22, 0.7)
+                f.rects("r", x0 + 3, by + 3, x0 + 3 + (w - 6) * frac, by + 19, 0.95)
+                f.text("w", x0, by + 48, cap, size=L.T_MICRO, alpha=0.8)
+            B.tag(f, "r", x1, by + (52 if w >= 700 else 84), "JUST LONG ENOUGH",
+                  B.io(t - self.t_arr, PANEL_OUT["clocks"] - t, out=0.3, span=0.5), size=L.T_SMALL, pad=4, anchor="rs",
+                  cps=50.0, key=12, commit=t < T_ANN_OUT[0])
+        if "heart" in self.panel:
             x0, x1 = self.panel["heart"]
-            hud.panel_header(f, x0, x1, y0, "ONE HEARTBEAT // 0.8 S", alpha=a_j)
-            n = 360
-            u = np.linspace(0, 1, n)
-            v = _ecg(u)
-            k = int(n * min(1.0, age / 1.1))
-            base = y0 + 150
-            xr = x1 - 34.0                    # the last label of the ruler ("0.8") still ends inside the column
-            f.segments("w", [x0], [base], [xr], [base], 0.25 * a_j)
-            if k > 1:
-                f.polyline("w", x0 + u[:k] * (xr - x0), base - v[:k] * 96, 0.95 * a_j, width=L.LW)
-            hud.ruler(f, x0, xr, base + 30, 0.0, 0.8, 0.02, 0.1 if xr - x0 >= 520 else 0.2,
-                      fmt=lambda vv: f"{vv:.1f}", inten=0.6 * a_j, lab_dy=30)
-            f.segments("r", [x0 + 1], [y0 + 40], [x0 + 1], [base + 30], 1.3 * a_j, width=L.LW)
-            f.tag("r", x0 + 12, y0 + 52, "ITS WHOLE LIFE 2.197 US", size=L.T_MICRO, pad=3, alpha=a_j)
-            cap = ("LESS THAN ONE PIXEL OF THIS LINE  =  1 / 364 000 OF A HEARTBEAT" if x1 - x0 >= 545
-                   else "ITS LIFE = 1 / 364 000 OF A HEARTBEAT")
-            f.text("w", x0, y0 + 236, hud.typed(cap, age, cps=60, delay=1.0), size=L.T_MICRO, alpha=0.75 * a_j)
-        age = t - c["moment"]
-        if "here" in self.panel and age > 0:
+            a = age(c["heartbeat"], "heart")
+            with f.build(a, (x0 - 10, y0 - 28, x1 + 10, y0 + 250), key=34):
+                hud.panel_header(f, x0, x1, y0, "ONE HEARTBEAT // 0.8 S")
+                n = 360
+                u = np.linspace(0, 1, n)
+                v = _ecg(u)
+                k = int(n * B.lin(a, 0.25, 1.35))             # the trace writes itself in one beat
+                base = y0 + 150
+                xr = x1 - 34.0                    # the last label of the ruler ("0.8") still ends inside the column
+                f.segments("w", [x0], [base], [xr], [base], 0.25)
+                if k > 1:
+                    f.polyline("w", x0 + u[:k] * (xr - x0), base - v[:k] * 96, 0.95, width=L.LW)
+                    if k < n:                     # the pen
+                        f.dots("w", [x0 + u[k - 1] * (xr - x0)], [base - v[k - 1] * 96], 3.0, 1.7)
+                hud.ruler(f, x0, xr, base + 30, 0.0, 0.8, 0.02, 0.1 if xr - x0 >= 520 else 0.2,
+                          fmt=lambda vv: f"{vv:.1f}", inten=0.6, lab_dy=30)
+                f.segments("r", [x0 + 1], [y0 + 40], [x0 + 1], [base + 30], 1.3, width=L.LW)
+                f.tag("r", x0 + 12, y0 + 52, "ITS WHOLE LIFE 2.197 US", size=L.T_MICRO, pad=3)
+                cap = ("LESS THAN ONE PIXEL OF THIS LINE  =  1 / 364 000 OF A HEARTBEAT" if x1 - x0 >= 545
+                       else "ITS LIFE = 1 / 364 000 OF A HEARTBEAT")
+                f.text("w", x0, y0 + 236, cap, size=L.T_MICRO, alpha=0.75)
+        if "here" in self.panel:
             x0, x1 = self.panel["here"]
-            f.tag("r", x0, y0 + 36, hud.typed("HERE", age, cps=20), size=44, pad=8, alpha=a_j)
             lines = ["CINCINNATI, OHIO", "39.1031 N  84.5120 W", "BLINK 2026", f"SHOW TIME {sd.tc(t)[:8]}",
                      f"THROUGH YOU {ctx.through_you(t):,}".replace(",", " ")]
-            for k, ln in enumerate(lines):
-                f.text("w", x0, y0 + 96 + k * 27, hud.typed(ln, age, cps=50, delay=0.4 + 0.25 * k), size=L.T_SMALL,
-                       alpha=0.85 * a_j)
+            wl = max(len(ln) for ln in lines) * L.T_SMALL * CHAR_W
+            with f.build(age(c["moment"], "here"), (x0 - 12, y0 - 10, x0 + max(wl, 150.0) + 8, y0 + 96 + 4 * 27 + 12),
+                         flow="tb", wave=0.4, cps=90.0, key=35):
+                f.tag("r", x0, y0 + 36, "HERE", size=44, pad=8)
+                for k, ln in enumerate(lines):
+                    f.text("w", x0, y0 + 96 + k * 27, ln, size=L.T_SMALL, alpha=0.85)
 
     # --- 11.1 / 11.2 ------------------------------------------------------------------
     def _travellers(self, f, t, ctx, drain):
@@ -766,95 +880,132 @@ class Outro(Scene):
             f.rings("r", [x], [y], [28.0 + 8.0 * pulse + 10.0 * kick], 0.6 * al * big * (1 - drain), width=L.LW)
         if drain > 0.0:
             f.rings("w", [x], [y], [r + 3.0], 0.75 * drain, width=1.5)
-        if t < 772.0 and self._fits(x + 14, x + 96):
-            f.tag("r", x + 22, y - 18, "NOW", size=L.T_TAG, pad=5, alpha=al * float(1 - smoothstep(766.0, 771.0, t)))
+        for a, b, _ in self.now_runs:     # its name rides with it: made when it has room, taken apart before a tower
+            if a <= t < b:
+                B.tag(f, "r", x + 22, y - 18, "NOW", B.io(t - a, b - t, out=0.2, span=0.3), size=L.T_TAG, pad=5, cps=40.0,
+                      key=9)
+                break
 
     def _power_down(self, f, t, ctx):
         """Under the credits, when the drums stop: the detectors power down one by one (centre, right, left).
+        The light of a tower dims; its name falls apart and its scope is taken apart (they do not fade).
         After that the show keeps the towers as dark bands: they never leave the wall."""
-        for key in L.ORDER:
+        fr = int(t * 30)
+        for k, key in enumerate(L.ORDER):
             tw = ctx.towers[key]
             fade = float(1 - smoothstep(T_PWR + PWR_ORDER[key], T_PWR + PWR_ORDER[key] + 1.3, t))
             if fade <= 0.01:
                 towers.dark(f, tw)
+            else:
+                towers.face(f, tw, t, power=1.0, value=0.0, dim=0.0, label=False)
+                f.dim(tw.x0 - 3, tw.top - 3, tw.x1 + 3, tw.bot + 3, fade)
+                f.rect("w", tw.x0, tw.top, tw.x1, tw.bot, 0.16 * (1 - fade), width=L.LW)
+                f.text("w", tw.cx, tw.top - 14, hud.erode(L.NAMES[key], 1.0 - fade, 60 + k, fr), size=L.T_MICRO,
+                       alpha=0.85, anchor="ms")
+            rect = ctx.slots["scopes"].get(key)
+            age = B.io(99.0, T_PWR + PWR_ORDER[key] + 0.9 - t, out=0.5)
+            if rect is None or age < 0.0:
                 continue
-            towers.face(f, tw, t, power=1.0, value=0.0, dim=0.0, label=False)
-            f.dim(tw.x0 - 3, tw.top - 3, tw.x1 + 3, tw.bot + 3, fade)
-            f.rect("w", tw.x0, tw.top, tw.x1, tw.bot, 0.16 * (1 - fade), width=L.LW)
-            f.text("w", tw.cx, tw.top - 14, L.NAMES[key], size=L.T_MICRO, alpha=0.85 * fade, anchor="ms")
-        a = float(1 - smoothstep(T_PWR, T_PWR + 2.3, t))
-        if a > 0.02:
-            towers.scopes(f, ctx, t, alpha=a)
+            tt = t - 3.0 + np.linspace(0.0, 3.0, 150)
+            on = ctx.det.online(key, t)
+            v = ctx.det.value(key, tt) if on else 0.02 + 0.0 * tt
+            h_age, e = ctx.det.last(key, t, echoes=True)
+            hot = e * math.exp(-h_age / 0.4) if h_age < 3 and on else 0.0
+            with f.build(age, (rect[0] - 26.0, rect[1] - 24.0, rect[2] + 4.0, rect[3] + 4.0), wave=0.3, key=20 + k):
+                hud.scope(f, rect, v, f"DETECTOR {k + 1}", f"/MUON/{key} {float(v[-1]):.2f}", hot=hot)
+
+    def _head(self, f, x0, x1, y, title, gone, key, fr):
+        """Header of a bottom panel that is also taken apart: its rule retracts, its title falls apart and its
+        tag closes (gone = 0..1). No fade."""
+        if gone <= 0.0:
+            hud.panel_header(f, x0, x1, y, title)
+            return
+        f.rects("w", x0, y, x0 + (x1 - x0) * (1.0 - gone), y + 5, 0.95)
+        wipe = 1.0 - float(B.ease(B.lin(gone, 0.45, 0.9)))
+        if wipe > 0.02:
+            f.tag("w", x0 + 4, y - 9, hud.erode(title, min(1.0, 1.6 * gone), key, fr), size=L.T_MICRO, pad=3, ref=title,
+                  wipe=wipe)
 
     def _bottom(self, f, t, ctx):
-        """Bottom band: the reading of the traveller (11.0), then the count of arrivals (11.1 / 11.2)."""
+        """Bottom band: the reading of the traveller (11.0), then the count of arrivals (11.1 / 11.2). The panels
+        are constructed, taken apart when the count takes their place, and fall apart under the credits."""
         c = self.c
         main, second, y0, y1 = self._bottom_slots(ctx)
         fr = int(t * 30)
         if main and T_AXIS[0] <= t < c["universe"]:
-            a = float(smoothstep(T_AXIS[0], T_AXIS[0] + 2, t))
+            left = c["universe"] - 0.1 - t
             xa0, xa1 = main
             xd = self._dot_x(t)
             sec = 10 ** self.lt_at(xd)
-            hud.panel_header(f, xa0, xa1, y0, "TIME BEFORE NOW", alpha=a)
             val = f"-{fmt_time(sec)}" if t < self.t_arr else "NOW"
-            f.text("r" if t >= self.t_dep else "w", xa0, y0 + 98, val, size=fit(58, 9, xa1 - xa0), alpha=a)
+            with f.build(B.io(t - T_AXIS[0] - 0.3, left, out=0.45), (xa0 - 10, y0 - 26, xa1 + 10, L.FY1 - 4), key=36):
+                hud.panel_header(f, xa0, xa1, y0, "TIME BEFORE NOW")
+                f.text("r" if t >= self.t_dep else "w", xa0, y0 + 98, val, size=fit(58, 9, xa1 - xa0))
             if second:
                 xb0, xb1 = second
-                hud.panel_header(f, xb0, xb1, y0, "SPEED // FRACTION OF C" if xb1 - xb0 >= 200 else "SPEED / C", alpha=a)
                 sp = "0.999 999 999 999 5" if (sec > T_ATM or t < self.t_dep) else "0.999 444 3"
-                f.text("w", xb0, y0 + 90, sp, size=fit(40, 19, xb1 - xb0), alpha=a)
-                if xb1 - xb0 >= 330:
-                    f.text("w", xb0, y0 + 122, "PROTON, THEN FOR THE LAST 15 KM A MUON", size=L.T_MICRO, alpha=0.6 * a)
+                with f.build(B.io(t - T_AXIS[0] - 0.45, left, out=0.45), (xb0 - 10, y0 - 26, xb1 + 10, L.FY1 - 4),
+                             key=37):
+                    hud.panel_header(f, xb0, xb1, y0, "SPEED // FRACTION OF C" if xb1 - xb0 >= 200 else "SPEED / C")
+                    f.text("w", xb0, y0 + 90, sp, size=fit(40, 19, xb1 - xb0))
+                    if xb1 - xb0 >= 330:
+                        f.text("w", xb0, y0 + 122, "PROTON, THEN FOR THE LAST 15 KM A MUON", size=L.T_MICRO, alpha=0.6)
         elif main and c["universe"] <= t < T_END + 3.0:
-            gone = float(smoothstep(T_END - 1.5, T_END + 2.5, t))          # the credits take over
-            a = float(smoothstep(c["universe"], c["universe"] + 1.5, t))
+            gone = float(smoothstep(T_END - 1.5, T_END + 2.5, t))          # the credits take over: it falls apart
+            age = t - c["universe"]
             xa0, xa1 = main
             w = xa1 - xa0
             arrivals = float(np.maximum(self._phi(t) - self._phi_v(self.d_act) + self.d_ph, 0.0).astype(int).sum())
             flying = int((t > self.d_act).sum())
-            hud.panel_header(f, xa0, xa1, y0, hud.erode("IT CONTINUES // ARRIVALS", gone, 3, fr), alpha=a * (1 - gone))
             two = w >= 450
             size = fit(54, 6, (w * 0.5 - 30) if two else w)
-            f.text("w", xa0, y0 + 96, hud.erode(f"{int(arrivals):,}".replace(",", " "), gone, 4, fr), size=size, alpha=a)
-            if two:
-                xm = xa0 + max(280.0, w * 0.52)
-                f.text("w", xm, y0 + 40, hud.erode("ON THEIR WAY", gone, 5, fr), size=L.T_MICRO, alpha=0.75 * a)
-                f.text("w", xm, y0 + 96, hud.erode(f"{flying:,}".replace(",", " "), gone, 6, fr), size=size, alpha=a)
+            with f.build(age, (xa0 - 10, y0 - 26, xa1 + 10, L.FY1 - 4), key=38):
+                self._head(f, xa0, xa1, y0, "IT CONTINUES // ARRIVALS", gone, 3, fr)
+                f.text("w", xa0, y0 + 96, hud.erode(f"{int(arrivals):,}".replace(",", " "), gone, 4, fr), size=size)
+                if two:
+                    xm = xa0 + max(280.0, w * 0.52)
+                    f.text("w", xm, y0 + 40, hud.erode("ON THEIR WAY", gone, 5, fr), size=L.T_MICRO, alpha=0.75)
+                    f.text("w", xm, y0 + 96, hud.erode(f"{flying:,}".replace(",", " "), gone, 6, fr), size=size)
             if second:
                 xb0, xb1 = second
-                hud.panel_header(f, xb0, xb1, y0, hud.erode("ACCELERANDO >> BARCODE" if xb1 - xb0 >= 210 else
-                                                            "ACCELERANDO", gone, 7, fr), alpha=a * (1 - gone))
-                cols = max(30, int((xb1 - xb0) / 3.7))
-                dt = 3.0 / 130
-                kk = math.floor((t - 3.0) / dt) + np.arange(cols)
-                lv = min(1.0, (t - c["universe"]) / (self.t_hit - c["universe"]))
-                dens = np.full(cols, (0.06 + 0.8 * lv ** 1.5) * (1.0 - gone) ** 2)
-                hud.barcode_lanes(f, xb0, xb1, y0 + 12, y1, dens, kk, lanes=3, seed=11)
-        # the count the voice announced at 04:41: more than fifty thousand
+                with f.build(age - 0.15, (xb0 - 10, y0 - 26, xb1 + 10, L.FY1 - 4), key=39):
+                    self._head(f, xb0, xb1, y0, "ACCELERANDO >> BARCODE" if xb1 - xb0 >= 210 else "ACCELERANDO", gone,
+                               7, fr)
+                    cols = max(30, int((xb1 - xb0) / 3.7))
+                    dt = 3.0 / 130
+                    kk = math.floor((t - 3.0) / dt) + np.arange(cols)
+                    lv = min(1.0, (t - c["universe"]) / (self.t_hit - c["universe"]))
+                    dens = np.full(cols, (0.06 + 0.8 * lv ** 1.5) * (1.0 - gone) ** 2)
+                    hud.barcode_lanes(f, xb0, xb1, y0 + 12, y1, dens, kk, lanes=3, seed=11)
+        # the count the voice announced at 04:41: more than fifty thousand. The tag is made on that muon, and
+        # flashes; the frame of the counter flashes red with it
         t50 = 50000 / ctx.RATE_YOU
         if t >= t50:
             x0, yc, x1, _ = ctx.slots["cell"]
             fl = math.exp(-(t - t50) / 1.5)
             if x1 - x0 >= 260:
-                f.tag("r", x0 + 2, yc - 12, "MORE THAN FIFTY THOUSAND", size=L.T_SMALL, pad=4, alpha=0.75 + 0.25 * fl)
+                B.tag(f, "r", x0 + 2, yc - 12, "MORE THAN FIFTY THOUSAND", t - t50, size=L.T_SMALL, pad=4,
+                      alpha=0.75 + 0.25 * fl, cps=50.0, key=13, commit=True)
             if fl > 0.05:
                 f.rect("r", x0, yc, x1, L.FY1, 1.5 * fl, width=L.LW_FRAME)
 
     # --- credits ---------------------------------------------------------------------
     def _credits(self, f, t, ctx):
         """Over the last drums of the whirl, then on the lattice and the dot. Each block sits in a column of
-        its own, clear of the towers and of the dot. Names are placeholders."""
-        a = t - T_END
-        out = float(1 - smoothstep(*T_CREDITS_OUT, t))
-        if out <= 0.01:
+        its own, clear of the towers and of the dot. Names are placeholders.
+        Nothing fades: the title tag is pushed out and its letters decoded, every line is decoded in turn, the
+        count spins before it locks; at the end the lines are taken apart in reverse order, the title last."""
+        if t >= T_CREDITS_OUT[1]:
             return
+        there = t < T_CREDITS_OUT[0]          # (no flash on the way out)
+
+        def age(t_in, rank, span):            # rank = place in the taking apart (0 = the first to go)
+            return B.io(t - t_in, T_CREDITS_OUT[0] + 0.5 + 0.28 * rank - t, out=0.5, span=span)
+
         if self.cred["A"]:
             x0, x1 = self.cred["A"]
             w = x1 - x0
             ts = fit(104, 12, w - 40)
-            f.tag("w", x0 + ts * 0.15, 380 + ts * 0.86, hud.typed("MUON : BLOOM", a, cps=14), size=ts, pad=ts * 0.15,
-                  bold=True, alpha=out)
             s = float(np.clip(fit(26, 39, w), 14, 26))          # the longest credit line is 38 characters
             head = hud.wrap("A LIVE PERFORMANCE FOR THREE COSMIC-RAY MUON DETECTORS", int(w / (s * CHAR_W)))
             lines = [(ln, 0.9) for ln in head] + [("BLINK // CINCINNATI // OCTOBER 2026", 0.9), ("", 0),
@@ -863,25 +1014,29 @@ class Outro(Scene):
                                                   ("DETECTORS .................. NAME TBC", 0.75),
                                                   ("VOICE ...................... NAME TBC", 0.75),
                                                   ("WITH THANKS TO ............. NAMES TBC", 0.75)]
+            n = len(lines)
+            B.tag(f, "w", x0 + ts * 0.15, 380 + ts * 0.86, "MUON : BLOOM", age(T_END, 7 + n, 1.3), size=ts, pad=ts * 0.15,
+                  bold=True, cps=14.0, lead=3, wipe=0.3, key=14, commit=there)
             y = 380 + ts * 1.3 + s * 2.2
             for k, (ln, al) in enumerate(lines):
-                f.text("w", x0, y + k * s * 1.55, hud.typed(ln, a, cps=60, delay=1.2 + 0.35 * k), size=s, alpha=al * out)
-        age = a - 4.0
-        if self.cred["B"] and age > 0:
+                if ln:
+                    a = age(T_END + 1.2 + 0.35 * k, 6 + (n - 1 - k), len(ln) / 60.0 + 0.4)
+                    f.text("w", x0, y + k * s * 1.55, B.resolve(ln, a, cps=60.0, key=20 + k), size=s, alpha=al)
+        if self.cred["B"]:
             x0, x1 = self.cred["B"]
             w = x1 - x0
+            tb = T_END + 4.0
             num = f"{ctx.through_you(T_END):,}".replace(",", " ")
             ns = fit(120, len(num), w - 8)
             s = float(np.clip(fit(26, 27, w), 14, 26))
-            f.tag("w", x0, 392, hud.typed("WHILE YOU WATCHED", age, cps=30), size=L.T_TAG, pad=5, alpha=out)
+            B.tag(f, "w", x0, 392, "WHILE YOU WATCHED", age(tb, 5, 0.8), size=L.T_TAG, pad=5, cps=30.0, key=15)
             yn = 410 + ns * 0.92
-            f.text("r", x0 - 4, yn, hud.typed(num, age, cps=12, delay=0.5), size=ns, alpha=out)
-            f.text("w", x0, yn + s * 1.8, hud.typed("MUONS WENT THROUGH YOU", age, cps=50, delay=1.2), size=s,
-                   alpha=0.9 * out)
-            n = ctx.det.total(T_END)
-            f.text("w", x0, yn + s * 5.4, hud.typed(f"THE THREE TOWERS CAUGHT {n}", age, cps=50, delay=2.0), size=s,
-                   alpha=0.8 * out)
-            f.text("w", x0, yn + s * 6.95, hud.typed("YOU FELT NONE OF THEM", age, cps=50, delay=2.8), size=s,
-                   alpha=0.8 * out)
-            f.tag("r", x0, yn + s * 10.4, hud.typed("IT CONTINUES", age, cps=20, delay=4.0), size=min(40.0, s * 1.55),
-                  pad=8, alpha=out)
+            f.text("r", x0 - 4, yn, B.resolve(num, age(tb + 0.5, 4, 1.2), cps=12.0, spin=0.6, key=16), size=ns)
+            f.text("w", x0, yn + s * 1.8, B.resolve("MUONS WENT THROUGH YOU", age(tb + 1.2, 3, 0.85), cps=50.0, key=17),
+                   size=s, alpha=0.9)
+            caught = f"THE THREE TOWERS CAUGHT {ctx.det.total(T_END)}"
+            f.text("w", x0, yn + s * 5.4, B.resolve(caught, age(tb + 2.0, 2, 1.0), cps=50.0, key=18), size=s, alpha=0.8)
+            f.text("w", x0, yn + s * 6.95, B.resolve("YOU FELT NONE OF THEM", age(tb + 2.8, 1, 0.85), cps=50.0, key=19),
+                   size=s, alpha=0.8)
+            B.tag(f, "r", x0, yn + s * 10.4, "IT CONTINUES", age(tb + 4.0, 0, 0.9), size=min(40.0, s * 1.55), pad=8,
+                  cps=20.0, key=19, commit=there)

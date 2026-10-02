@@ -17,6 +17,10 @@ THE TOWERS stand in front of the wall for the whole show, nobody knows yet where
 from origin.Lay (ctx.focus, ctx.cols, ctx.slots_pre, ctx.cell_r). The messenger, its trail and its red
 rings live in the focus bay; stars, rays, galaxies and the limb pass behind the towers; every label is
 placed only where the wall is free.
+
+NO FADE for what shows data: the journey strip, the two cards, the notes, the panels, the galaxy tags, the
+marks on the trail and the labels of the limb are constructed when they appear (Frame.build, the helpers
+of build.py) and taken apart when they leave (B.io). Only the image (stars, rays, galaxies, limb) fades.
 """
 from __future__ import annotations
 
@@ -24,6 +28,7 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -175,7 +180,7 @@ class Messenger(Scene):
         # 3 - labels, only where the wall is free
         lay.take((T[0] - 255.0, T[1] - 255.0, T[0] + 255.0, T[1] + 255.0))
         if t < T_ALONE:
-            hero_note(f, lay, T, 9.0, alpha=1.0 - float(smoothstep(T_ALONE - 1.0, T_ALONE - 0.2, t)))
+            hero_note(f, lay, T, 9.0, left=T_ALONE - 0.2 - t)
         self._notes(f, t)
         self._galaxy_tags(f, gal)
         self._limb_labels(f, t, T)
@@ -193,16 +198,15 @@ class Messenger(Scene):
         """What the voice says about it, in the notes column (one block at a time; it leaves for the galaxies)."""
         lay, y = self.lay, self.C[1] - 250.0
         if T_INVISIBLE + 0.3 <= t < T_SPEED - 0.2:
-            al = 1.0 - float(smoothstep(T_SPEED - 1.0, T_SPEED - 0.3, t))
             note(f, lay, y, "INVISIBLE", ["NO LIGHT // NO TRAIL // NO SOUND", "A BARE PROTON // 1.7E-15 M ACROSS",
-                                          "ONE OF 1E53 // THIS ONE IS OURS"], age=t - T_INVISIBLE - 0.3, alpha=al, size=30)
+                                          "ONE OF 1E53 // THIS ONE IS OURS"], size=30,
+                 build=B.io(t - T_INVISIBLE - 0.3, T_SPEED - 0.3 - t, out=0.4))
         elif T_SPEED <= t < T_GALAX:
-            al = 1.0 - float(smoothstep(T_GALAX - 1.0, T_GALAX - 0.4, t))
-            a = t - T_SPEED
-            lines = ["FRACTION OF THE SPEED OF LIGHT", "SLOWER THAN LIGHT BY 13 MICROMETRES / S"]
-            if t >= T_SINCE:
-                lines += ["STRAIGHT LINE: 1.8 H BEHIND ITS OWN LIGHT", "AFTER 4.8E9 YEARS"]
-            note(f, lay, y, "SPEED", lines, age=a, alpha=al, size=30, red=True, big="0.999 999 999 999 96", big_red=True)
+            a = B.io(t - T_SPEED, T_GALAX - 0.4 - t, out=0.4)
+            lines = ["FRACTION OF THE SPEED OF LIGHT", "SLOWER THAN LIGHT BY 13 MICROMETRES / S",
+                     ("STRAIGHT LINE: 1.8 H BEHIND ITS OWN LIGHT", min(a, t - T_SINCE)),        # "travelling ever since"
+                     ("AFTER 4.8E9 YEARS", min(a, t - T_SINCE - 0.25))]
+            note(f, lay, y, "SPEED", lines, size=30, red=True, big="0.999 999 999 999 96", big_red=True, build=a)
 
     def _stars(self, f, t, V, gain=1.0):
         """Rear window: everything we pass falls back towards the star and shrinks."""
@@ -278,7 +282,8 @@ class Messenger(Scene):
                 rect = (min(tx, tx + side * w) - 8.0, ay - 38.0 - 24.0, max(tx, tx + side * w) + 8.0, ay - 38.0 + 70.0)
                 if lay.free(*rect):
                     lay.take(rect)
-                    hud.callout(f, ax, ay, side * 44.0, -38.0, name, lines, age=a - 0.3, alpha=al, side=int(side))
+                    hud.callout(f, ax, ay, side * 44.0, -38.0, name, lines, side=int(side),
+                                build=B.io(a - 0.2, GAL_LIFE - 0.5 - a, out=0.3))
                     shown += 1
                     break
             if shown >= 3:
@@ -302,8 +307,9 @@ class Messenger(Scene):
             else:
                 f.dots("w", xs[::2], ys[::2], 1.5, 0.9 * it * u)
         yh = top + 84.0                             # where it will hit: straight below the messenger
-        f.segments("r", [T[0]], [T[1] + 40.0], [T[0]], [yh], 0.0, 0.8 * u, width=1.3)
-        f.crosses("r", [T[0]], [yh], 14.0, 1.2 * u, width=L.LW)
+        p = float(B.ease(B.lin(t, 65.2, 65.8)))     # the aim line is drawn downwards; the cross rises with the limb
+        f.segments("r", [T[0]], [T[1] + 40.0], [T[0]], [T[1] + 40.0 + (yh - T[1] - 40.0) * p], 0.0, 0.8 * p, width=1.3)
+        f.crosses("r", [T[0]], [yh], 14.0, 1.2, width=L.LW)
 
     def _limb_labels(self, f, t, T):
         u, R, top = self._limb_geom(t)
@@ -313,20 +319,20 @@ class Messenger(Scene):
         col = lay.note or lay.card
         if col is not None:
             xl = col[0] + 24.0
-            for dy, lab in ((0.0, "100 KM // KARMAN LINE"), (46.0, "50 KM // STRATOPAUSE"), (84.0, "15 KM // TROPOPAUSE"),
-                            (112.0, "CINCINNATI 0.147 KM")):
+            for j, (dy, lab) in enumerate(((0.0, "100 KM // KARMAN LINE"), (46.0, "50 KM // STRATOPAUSE"),
+                                           (84.0, "15 KM // TROPOPAUSE"), (112.0, "CINCINNATI 0.147 KM"))):
                 yl = top + dy + R - math.sqrt(max(R * R - (xl - C[0]) ** 2, 1.0))
                 rect = (xl - 4.0, yl - 30.0, xl + text_w(lab, L.T_SMALL) + 6.0, yl - 6.0)
-                if lay.free(*rect, pad=10.0):
+                txt = B.resolve(lab, t - 65.5 - 0.12 * j, 70.0, key=j)       # decoded on its line as the limb rises
+                if txt.strip() and lay.free(*rect, pad=10.0):
                     f.occlude(*rect)
-                    f.text("w", xl, yl - 10.0, lab, size=L.T_SMALL, alpha=0.9 * u)
+                    f.text("w", xl, yl - 10.0, txt, size=L.T_SMALL, alpha=0.9)
         yh = top + 84.0
         if u > 0.4:
-            al = min(1.0, (u - 0.4) * 3)
             for s in ("FIRST INTERACTION // T-" + f"{max(T1 + 0.55 - t, 0):.2f} S", "T-" + f"{max(T1 + 0.55 - t, 0):.2f} S"):
                 w = text_w(s, L.T_SMALL) + 12.0
                 if T[0] + 22.0 + w < lay.focus_col[1] and yh + 12.0 < L.VIEW[3]:
-                    f.tag("r", T[0] + 22.0, yh + 6.0, s, size=L.T_SMALL, pad=4, alpha=al, bold=True)
+                    B.tag(f, "r", T[0] + 22.0, yh + 6.0, s, t - 65.85, size=L.T_SMALL, pad=4, bold=True, cps=70.0, key=6)
                     break
 
     def _messenger(self, f, t, ctx, T, V):
@@ -338,11 +344,13 @@ class Messenger(Scene):
         g = float(smoothstep(T0, T0 + 0.6, t))
         f.segments("w", [x], [y], [x + ux * min(d, 4200.0)], [y + uy * min(d, 4200.0)], 1.25, 0.55, width=3.2)
         f.segments("r", [x], [y], [x + ux * 520.0], [y + uy * 520.0], 1.1, 0.0, width=1.8)
-        solo = float(smoothstep(T_ALONE, T_ALONE + 1.0, t))
-        if solo > 0:                                # distance marks along the trail
+        if t > T_ALONE:                             # distance marks along the trail: thrown out one after the other
             s = 150.0 * np.arange(1, 9)
+            ak = t - T_ALONE - 0.09 * np.arange(8)
+            on = ak >= 0.0
+            hl = 11.0 * (1.0 + 1.6 * np.exp(-np.maximum(ak, 0.0) / 0.07))
             mx, my = x + ux * s, y + uy * s
-            f.segments("w", mx - uy * 11, my + ux * 11, mx + uy * 11, my - ux * 11, 0.85 * solo, width=1.3)
+            f.segments("w", (mx - uy * hl)[on], (my + ux * hl)[on], (mx + uy * hl)[on], (my - ux * hl)[on], 0.85, width=1.3)
         # red rings: one family per drum accent, a small one per kick
         if t >= ACCENTS[0] - 0.02:
             for ta in ACCENTS[ACCENTS <= t]:
@@ -360,17 +368,16 @@ class Messenger(Scene):
         f.dots("r", [x], [y], 13.0, 0.9 * (1.0 - g))
         f.dots("w", [x], [y], 7.5 + 5.5 * g + 3.0 * pulse * g, 1.7)
         f.rings("r", [x], [y], [19.0 + 3.0 * pulse], 1.2 * g, width=2.0)
-        if T_ALONE + 0.3 < t < 66.3:                # its name, hugging it (the data are on the card)
+        an = B.io(t - T_ALONE - 0.3, 66.3 - t, out=0.25, span=0.5)
+        if an > 0.0:                                # its name, hugging it (the data are on the card): made, then taken apart
             sd_ = 1.0 if self.lay.focus_col[1] - x > 130.0 else -1.0
-            al = float(smoothstep(T_ALONE + 0.3, T_ALONE + 0.8, t))
-            f.segments("r", [x + sd_ * 16.0], [y + 16.0], [x + sd_ * 36.0], [y + 36.0], 0.9 * al, width=L.LW)
-            f.tag("r", x + sd_ * 42.0, y + 54.0, "P+", size=L.T_TAG, pad=5, alpha=al, bold=True,
-                  anchor="ls" if sd_ > 0 else "rs")
+            B.pen(f, "r", x + sd_ * 16.0, y + 16.0, x + sd_ * 36.0, y + 36.0, B.lin(an, 0.0, 0.14), 0.9, width=L.LW, head=2.6)
+            B.tag(f, "r", x + sd_ * 42.0, y + 54.0, "P+", an, t0=0.12, size=L.T_TAG, pad=5, bold=True,
+                  anchor="ls" if sd_ > 0 else "rs", key=3)
 
     def _marks(self, f, t, T, V):
         """Light-years behind, written along the trail where the wall is free."""
-        solo = float(smoothstep(T_ALONE, T_ALONE + 1.0, t))
-        if solo <= 0:
+        if t <= T_ALONE:
             return
         x, y = T
         d = math.hypot(V[0] - x, V[1] - y)
@@ -381,7 +388,8 @@ class Messenger(Scene):
             s = f"{done * (1 - 0.11 * (j + 1)):.2E} LY BEHIND".replace("E+0", "E")
             rect = (mx + 14.0, my - 12.0, mx + 26.0 + text_w(s, L.T_MICRO), my + 12.0)
             if self.lay.free(*rect, pad=10.0):
-                f.text("w", mx + 20.0, my + 6.0, s, size=L.T_MICRO, alpha=0.75 * solo)
+                f.text("w", mx + 20.0, my + 6.0, B.resolve(s, t - T_ALONE - 0.09 * (j + 1) - 0.1, 80.0, key=j), size=L.T_MICRO,
+                       alpha=0.75)
 
     # ------------------------------------------------------------------ HUD
     def _strip(self, f, t, ctx):
@@ -389,7 +397,13 @@ class Messenger(Scene):
         the strip, the last hundred thousand years a sliver), with what happened on Earth meanwhile."""
         x0, y0, x1, y1 = L.STRIP
         f.occlude(x0, y0, x1, y1)
-        ix0, iy0, ix1, iy1, yb = hud.strip_base(f, title="JOURNEY // YEARS BEFORE NOW // WHAT HAPPENED HERE MEANWHILE")
+        ix0, iy0, ix1, iy1, yb = hud.strip_base(f, title="JOURNEY // YEARS BEFORE NOW // WHAT HAPPENED HERE MEANWHILE",
+                                                age=t - T0)
+        with f.build(t - T0 - 0.3, L.STRIP, flow="lr", wave=0.5, marks=False, bars="down", key=12):
+            self._strip_body(f, t, ctx, ix0, iy0, ix1, iy1, yb)
+        header_gap(f, ctx, t)
+
+    def _strip_body(self, f, t, ctx, ix0, iy0, ix1, iy1, yb):
         X = lambda tt: ix0 + (np.asarray(tt, np.float64) - T0) / (T1 - T0) * (ix1 - ix0)
         n = int((ix1 - ix0) / 5)
         lv = ctx.cues.loud_curve(T0, T1, n)
@@ -419,7 +433,6 @@ class Messenger(Scene):
         lab = "NOW" if t >= 66.85 else f"-{y:.2E} YR".replace("E+0", "E")
         f.tag("r", xc + 8 if xc < ix1 - 230 else xc - 8, iy1 - 4, lab, size=L.T_SMALL, pad=4, bold=True,
               anchor="ls" if xc < ix1 - 230 else "rs")
-        header_gap(f, ctx, t)
 
     def _card(self, f, t):
         yr = years(t)
@@ -428,7 +441,8 @@ class Messenger(Scene):
             card(f, self.lay, "BLOOM", [("RELEASED   1E53 NUCLEI", "1E53 NUCLEI"), ("P+ 89 %   HE 10 %   Z>2 1 %", "P+ 89 %  HE 10 %"),
                                         ("ACCELERATED IN THE SHOCK", None), ("UP TO 1E15 EV AND MORE", "UP TO 1E15 EV"),
                                         ("DIRECTIONS  ALL", None), (f"STILL IN SIGHT  {n:03d}", f"IN SIGHT  {n:03d}"),
-                                        ("FOLLOWING   ONE", "FOLLOWING ONE")], t - T0, red_title=True, red_rows=(6,), cps=80.0)
+                                        ("FOLLOWING   ONE", "FOLLOWING ONE")], t - T0, red_title=True, red_rows=(6,), cps=80.0,
+                 build=True)
             return
         board = (YEAR0 - yr) / GAMMA
         card(f, self.lay, "MESSENGER", [("PRIMARY    P+  PROTON", "P+  PROTON"), ("ENERGY     3.2E15 EV", "E  3.2E15 EV"),
@@ -437,15 +451,16 @@ class Messenger(Scene):
                                         (f"TO GO      {yr:.3E} LY".replace("E+0", "E"), f"TO GO {yr:.1E} LY".replace("E+0", "E")),
                                         (f"ON BOARD   {board:07.1f} YR", f"BOARD {board:06.1f} YR"), ("CHARGE     +1 E", None),
                                         ("THE MUON IS NOT BORN YET", "NO MUON YET")], t - T_ALONE, red_rows=(4, 5),
-             dim_rows=(7,), cps=80.0)
+             dim_rows=(7,), cps=80.0, build=True)
 
     # bottom band ------------------------------------------------------------------
     def _panels(self, f, t, ctx):
         y0, y1 = L.BOT[1], L.BOT[3]
         fns = [self._p_clocks, self._p_left, self._p_spectrum, self._p_energy]
-        for (x0, x1), fn in zip(self.lay.slots, fns):
-            f.occlude(x0 - 10.0, y0 - 26.0, x1 + 10.0, L.FY1 - 3.0)
-            fn(f, t, ctx, x0, x1, y0, y1)
+        for k, ((x0, x1), fn) in enumerate(zip(self.lay.slots, fns)):       # each panel constructs itself at the cut
+            with f.build(t - T0 - 0.2 - 0.12 * k, (x0 - 8.0, y0 - 24.0, x1 + 8.0, y1 + 8.0), key=50 + k):
+                f.occlude(x0 - 10.0, y0 - 26.0, x1 + 10.0, L.FY1 - 3.0)
+                fn(f, t, ctx, x0, x1, y0, y1)
 
     def _p_clocks(self, f, t, ctx, x0, x1, y0, y1):
         w = x1 - x0
@@ -469,8 +484,9 @@ class Messenger(Scene):
                 name = name.split(" // ")[-1]
             lay_ = "r" if k == 0 and t - te < 1.5 else "w"
             al = 0.95 if k == 0 else 0.65
-            f.text(lay_, x0 + 4, y0 + 40 + k * 25, hud.typed(name, t - te, 90), size=L.T_SMALL, alpha=al)
-            f.text(lay_, x1 - 4, y0 + 40 + k * 25, hud.typed(val, t - te, 90, 0.15), size=L.T_SMALL, alpha=al, anchor="rs")
+            f.text(lay_, x0 + 4, y0 + 40 + k * 25, B.resolve(name, t - te, 90.0, key=k), size=L.T_SMALL, alpha=al)
+            f.text(lay_, x1 - 4, y0 + 40 + k * 25, B.resolve(val, t - te, 90.0, 0.15, key=10 + k, pad=True), size=L.T_SMALL,
+                   alpha=al, anchor="rs")
 
     def _p_spectrum(self, f, t, ctx, x0, x1, y0, y1):
         w = x1 - x0

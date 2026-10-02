@@ -12,11 +12,18 @@ LAYOUT. The towers stand in front of the wall (dark until 01:44): the static run
 the plates never do. They take the focus column and the widest other column from the tower
 placement (see you.Plan); with a single usable bay the table moves under the name. Type sizes
 follow the width of the plates.
+
+NOTHING FADES OR POPS on the plates: once a plate is open its content is constructed (Frame.build): tags
+pushed out, the name and the table decoded out of noise with their figures spinning, rules and the
+fermion boxes drawn by pens, the decay curve traced. Before the plates close the text erodes and the
+whole card is taken apart the way it was made. The counter cell, hidden by the first burst of static,
+is rebuilt when the plates open.
 """
 from __future__ import annotations
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -104,7 +111,7 @@ class Muon(Scene):
         static(f, t, wall, dens, seed=3)
         # a few red bars: the track is still in there somewhere
         static(f, t, wall, 0.012 + 0.03 * (t < T_OPEN), seed=11, layer="r")
-        opt = {"edge_ticks": False, "cell": t >= T_OPEN}
+        opt = {"edge_ticks": False, "cell": t >= T_OPEN, "cell_age": t - T_OPEN}
         if ap <= 0.004:
             return opt
         hh = (y1 - y0) / 2 * ap
@@ -115,22 +122,28 @@ class Muon(Scene):
                 f.rects("w", x0, cy - 2, x1, cy + 2, 1.0 - ap)
         if ap < 0.98:
             return opt
-        age = t - T_OPEN - 0.22
+        # the card is constructed once the plates are open, and taken apart just before they close
+        age = B.io(t - T_OPEN - 0.22, T_CLOSE - t, out=0.4)
         fr = int(t * 30)
         gone = float(smoothstep(T_CLOSE - 0.5, T_CLOSE, t))             # the card starts to break up
+        leave = B.lin(t, T_CLOSE - 0.4, T_CLOSE - 0.03)                 # ... and the name is pulled back
         f.set_clip(self.name_col[0] + 4, y0 + 4, self.name_col[1] - 4, y1 - 4)
-        y_free = self._name_plate(f, self.name_col, age, gone, fr, grid=self.table_col is not None)
-        if self.table_col is None:
-            self._table(f, self.name_col, y_free + 26, age, gone, fr, header=False)
-        else:
+        with f.build(age, (self.name_col[0], y0, self.name_col[1], y1), wave=0.4, marks=False, key=1):
+            y_free = self._name_plate(f, self.name_col, gone, fr, grid=self.table_col is not None, leave=leave)
+            if self.table_col is None:
+                self._table(f, self.name_col, y_free + 26, gone, fr, header=False)
+        if self.table_col is not None:
             f.set_clip(self.table_col[0] + 4, y0 + 4, self.table_col[1] - 4, y1 - 4)
-            self._table(f, self.table_col, y0, age, gone, fr, header=True)
+            with f.build(age - 0.1, (self.table_col[0], y0, self.table_col[1], y1), flow="tb", wave=0.45, marks=False,
+                         key=2):
+                self._table(f, self.table_col, y0, gone, fr, header=True)
         f.set_clip()
         return opt
 
     # ------------------------------------------------------------------ the name
-    def _name_plate(self, f, col, age, gone, fr, grid=True):
-        """IDENTIFIED / MUON / its symbol / the twelve fermions. Returns the y under what it drew."""
+    def _name_plate(self, f, col, gone, fr, grid=True, leave=0.0):
+        """IDENTIFIED / MUON / its symbol / the twelve fermions. Returns the y under what it drew.
+        Drawn inside a build block: nothing is typed or delayed here, the block constructs it."""
         x0, x1 = col
         y0, y1 = PLATE_Y
         w = x1 - x0
@@ -145,18 +158,17 @@ class Muon(Scene):
         # the name, as large as the plate allows
         s = float(np.clip((w - 80 - 52) / (4 * 0.61), 80.0, 330.0))
         base = y0 + 122 + 26 + 0.72 * s
-        f.tag("w", xl + 26, base, hud.typed("MUON", age, cps=40), size=s, pad=26, bold=True)
+        f.tag("w", xl + 26, base, "MUON", size=s, pad=26, bold=True, wipe=1.0 - leave)
         yb = base + 30
         m = max(56.0, 0.36 * s)
-        f.text("r", xl, yb + 26 + 0.78 * m, hud.typed(MU + MINUS, age, cps=30, delay=0.12), size=m, alpha=1.0, bold=True)
+        f.text("r", xl, yb + 26 + 0.78 * m, MU + MINUS, size=m, alpha=1.0, bold=True)
         tx = xl + 2 * 0.61 * m + 34
         notes = ["ELEMENTARY // POINT-LIKE // NO PARTS", "THE ELECTRON'S HEAVY COUSIN"]
         ns = L.T_TAG if text_w(notes[0], L.T_TAG) <= x1 - 40 - tx else L.T_SMALL
         if text_w(notes[0], ns) > x1 - 40 - tx:
             notes = ["ELEMENTARY // NO PARTS", "A HEAVY ELECTRON"]
         for k, ln in enumerate(notes):
-            f.text("w", tx, yb + 26 + 0.38 * m + k * (ns * 1.55), hud.erode(hud.typed(ln, age, cps=140, delay=0.15 + 0.1 * k),
-                                                                         gone, 3 + k, fr), size=ns, alpha=0.9)
+            f.text("w", tx, yb + 26 + 0.38 * m + k * (ns * 1.55), hud.erode(ln, gone, 3 + k, fr), size=ns, alpha=0.9)
         y = yb + 26 + m + 34
         if not grid:
             return y
@@ -174,9 +186,6 @@ class Muon(Scene):
         fs = min(28.0, ch * 0.56, (cw - 16) / (6 * 0.61))
         for r in range(4):
             for c in range(3):
-                a = age - 0.2 - 0.025 * (r * 3 + c)
-                if a < 0:
-                    continue
                 X, Y = gx + lab_w + c * cw, gy + 10 + r * (ch + 7)
                 mu = (r, c) == (2, 1)
                 f.rect("r" if mu else "w", X, Y, X + cw - 10, Y + ch, 0.95 if mu else 0.55, width=L.LW)
@@ -187,12 +196,14 @@ class Muon(Scene):
                 else:
                     f.text("w", X + (cw - 10) / 2, Y + ch * 0.5 + fs * 0.34, FERMIONS[r][c], size=fs, alpha=0.7,
                            anchor="ms")
-            if KIND[r] and lab_w and age > 0.2:
+            if KIND[r] and lab_w:
                 f.text("w", gx, gy + 10 + r * (ch + 7) + ch * 0.68, KIND[r], size=L.T_LABEL, alpha=0.75)
         return gy + 10 + 4 * (ch + 7)
 
     # ------------------------------------------------------------------ the data
-    def _table(self, f, col, y_top, age, gone, fr, header=True):
+    def _table(self, f, col, y_top, gone, fr, header=True):
+        """The data table and the decay. Drawn inside a build block (rows decoded top to bottom, figures
+        spinning, rules drawn, the curve traced)."""
         x0, x1 = col
         y1 = PLATE_Y[1]
         w = x1 - x0
@@ -215,34 +226,26 @@ class Muon(Scene):
         ty = y_top + 1.9 * ls
         vx = xl + LABEL_CH * 0.61 * ls
         for k, (lab, val, sval) in enumerate(rows):
-            a = age - 0.05 - 0.035 * k
-            if a < 0:
-                continue
             y = ty + k * pitch
             f.text("w", xl, y, hud.erode(lab, gone, 10 + k, fr), size=ls, alpha=0.6)
             red = lab in ("NAME", "LIFETIME")
-            f.text("r" if red else "w", vx, y, hud.erode(hud.typed(sval if short else val, a, cps=170), gone, 30 + k, fr),
-                   size=vs, alpha=0.97)
+            f.text("r" if red else "w", vx, y, hud.erode(sval if short else val, gone, 30 + k, fr), size=vs, alpha=0.97)
             f.segments("w", [xl], [y + 0.6 * ls], [xr], [y + 0.6 * ls], 0.22)
         if not decay:
             return
         # decay: the reaction, then N / N0 against its own clock
         yd = ty + len(rows) * pitch + 0.5 * ls
-        a = age - 0.45
-        if a <= 0:
-            return
         f.tag("w", xl, yd, "DECAY", size=L.T_TAG, pad=5)
         eq = fit_text([f"{MU}{MINUS}  {ARROW}  E{MINUS}  +  ANTI-NU E  +  NU {MU}", f"{MU}{MINUS} {ARROW} E{MINUS} + 2 NU"],
                       xr - xl - 110, vs)
-        f.text("w", xl + 110, yd, hud.erode(hud.typed(eq, a, cps=130), gone, 50, fr), size=min(vs, 30.0), alpha=0.95)
+        f.text("w", xl + 110, yd, hud.erode(eq, gone, 50, fr), size=min(vs, 30.0), alpha=0.95)
         cyb = min(y1 - 44, yd + 118)
         hgt = cyb - yd - 34
         if hgt < 24:
             return
         xs = np.linspace(xl, xr, 160)
         u = (xs - xl) / (xr - xl) * 5.0
-        n = int(min(len(xs), a * 420))
-        f.polyline("r", xs[:n], cyb - hgt * np.exp(-u[:n]), 1.0, width=L.LW_BOLD)
+        f.polyline("r", xs, cyb - hgt * np.exp(-u), 1.0, width=L.LW_BOLD)
         f.segments("w", [xl], [cyb], [xr], [cyb], 0.6)
         f.text("w", xr, cyb - hgt + 12, "N / N0", size=L.T_MICRO, alpha=0.7, anchor="rs")
         for k in range(6):

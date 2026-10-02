@@ -10,6 +10,7 @@ import math
 
 import numpy as np
 
+from . import build as B
 from . import hud
 from . import layout as L
 from . import showdata as sd
@@ -92,8 +93,10 @@ def face(f, tw, t, power=1.0, value=0.0, hit_age=99.0, hit_e=0.0, texture=True, 
         for sx, x in ((-1, tw.x0 - b), (1, tw.x1 + b)):
             f.segments("r", [x, x, x], [tw.top - b, tw.top - b, yd + b], [x, x - sx * 22, x - sx * 22],
                        [yd + b, tw.top - b, yd + b], 0.9 * p / 0.35 * blink * 0.6, width=L.LW)
-    if label:
-        f.text("r" if flash > 0.2 else "w", tw.cx, tw.top - 14, L.NAMES[tw.key], size=L.T_MICRO,
+    if label:                   # its name is decoded when the towers come on (the reveal, and again at T_BACK)
+        name = B.resolve(L.NAMES[tw.key], t - (sd.T_BACK if t >= sd.T_BACK else sd.T_REVEAL), 30.0, 0.25, pad=True,
+                         key=ord(tw.key))
+        f.text("r" if flash > 0.2 else "w", tw.cx, tw.top - 14, name, size=L.T_MICRO,
                alpha=0.85 * p / max(p, 0.35) if on else 0.8, anchor="ms")
 
 
@@ -232,7 +235,7 @@ def incoming(f, tw, t, t_hit, slant=None, approach=6.0, label=True):
         if label:
             side = -1 if slant > 0 else 1
             hud.callout(f, hx, hy, side * 60, -30, "INCOMING", [f"ETA {t_hit - t:04.2f} S", f"TARGET {L.NAMES[tw.key]}"],
-                        red=True, age=a, side=side)
+                        red=True, side=side, build=B.io(a, approach - a, out=0.25))
     f.set_clip()
 
 
@@ -305,18 +308,27 @@ def strings(f, towers, t, det, n=27, gain=1.0, power=None, y_span=(700.0, 1170.0
 # scopes + generic overlay
 # ----------------------------------------------------------------------------
 
+def scope_age(key, t, lag=0.0):
+    """Build age of the scope of a tower: it is constructed when the detectors are revealed (and again when
+    they come back, T_BACK) and taken apart when its tower powers down - it never fades."""
+    if t >= sd.T_BACK:
+        return t - sd.T_BACK - lag
+    return B.io(t - sd.T_REVEAL - lag, sd.T_OFF[key] + 0.45 - t, out=0.45)
+
+
 def scopes(f, ctx, t, alpha=1.0, span=3.0):
     """One small oscilloscope per tower, right of its base: the float it streams (what OSC will carry)."""
     for k, key in enumerate(L.ORDER):
-        p = ctx.det.power(key, t)
-        if p <= 0.01 or key not in ctx.slots["scopes"]:
+        if key not in ctx.slots["scopes"]:
             continue
+        rect = ctx.slots["scopes"][key]
         tt = t - span + np.linspace(0.0, span, 150)
         v = ctx.det.value(key, tt) if ctx.det.online(key, t) else 0.02 + 0.0 * tt
         age, e = ctx.det.last(key, t, echoes=True)
         hot = e * math.exp(-age / 0.4) if age < 3 and ctx.det.online(key, t) else 0.0
-        hud.scope(f, ctx.slots["scopes"][key], v, f"DETECTOR {k + 1}", f"/MUON/{key} {float(v[-1]):.2f}",
-                  alpha=alpha * min(1.0, p * 2), hot=hot)
+        with f.build(scope_age(key, t, 0.35 + 0.2 * k), (rect[0] - 26.0, rect[1] - 24.0, rect[2] + 4.0, rect[3] + 4.0),
+                     wave=0.3, key=20 + k):
+            hud.scope(f, rect, v, f"DETECTOR {k + 1}", f"/MUON/{key} {float(v[-1]):.2f}", alpha=alpha, hot=hot)
 
 
 def dark(f, tw, outline=0.16):

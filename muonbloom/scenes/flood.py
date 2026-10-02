@@ -22,6 +22,13 @@ LAYOUT. Nothing has a fixed x: the towers can stand anywhere (see you.Plan).
 A column that does not exist with a placement drops its block; type sizes follow the widths. The
 count never drops: without a side column it shares the focus bay with the figure, or takes the
 title column.
+
+NOTHING FADES OR POPS in the read-outs. The furniture (strip, tags, columns, map, bottom panels) is
+constructed during the first second and a half of the scene (Frame.build, staggered); what the voice
+brings (the projection to the end of the show, the time scales, AFTER YOU) is made on its word: tags
+pushed out, lines decoded, figures spinning before they lock; when the target changes state its
+read-outs are decoded again; in the break the lines that leave fall apart letter by letter and their
+tag and rule are pulled back. The body, its outline and the rain are the image: they keep their ramps.
 """
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -57,6 +65,12 @@ class Flood(Scene):
         self.t_space = sd.said("into the space", 296.68)
         self.t_leave = sd.said("you leave behind", 298.17)
         self.t_gone = self.t_leave + 4.6
+        # when the read-outs change state (gone = smoothstep(t_space, t_gone): PRESENT < 0.05, ABSENT >= 0.98)
+        ts = np.linspace(self.t_space, self.t_gone, 4001)
+        g = np.asarray(smoothstep(self.t_space, self.t_gone, ts))
+        self.t_leaving = float(ts[np.argmax(g >= 0.05)])
+        self.t_half = float(ts[np.argmax(g > 0.5)])
+        self.t_absent = float(ts[np.argmax(g >= 0.98)])
         self.body = Body(33)
         self.P = P = Plan(ctx, panels="slots")
         # who gets which column. The count is what the voice says: it must always have a place.
@@ -170,7 +184,7 @@ class Flood(Scene):
         marks = [(self.t_time, "IN THE TIME"), (self.t_fifty, "50 000"), (self.t_flood, "FLOOD"),
                  (self.t_every, "EVERY MINUTE"), (self.t_will, "AS THEY WILL"), (self.t_leave, "LEAVE BEHIND"),
                  (299.0, "5.1 COSMIC BREAK")]
-        hud.show_strip(f, t, ctx, "FLOOD // 63 MUONS /S THROUGH ONE BODY // REAL TIME", T0, T1, marks)
+        hud.show_strip(f, t, ctx, "FLOOD // 63 MUONS /S THROUGH ONE BODY // REAL TIME", T0, T1, marks, age=t - T0)
         self._draw_bottom(f, t, ctx)
         return {"burst_size": 0.8}
 
@@ -232,22 +246,32 @@ class Flood(Scene):
         state = "PRESENT" if gone < 0.05 else ("LEAVING" if gone < 0.98 else "ABSENT")
         tag = fit_text([f"VIEW // ORTHO_FRONT // TARGET // {state}", f"TARGET // {state}", state], width(col) - 12,
                        L.T_LABEL)
-        f.tag("r" if gone >= 0.98 else "w", x0, y, tag, size=L.T_LABEL, pad=5)
+        if gone < 0.05:                 # made when the scene starts ...
+            B.tag(f, "w", x0, y, tag, t - T0 - 0.05, size=L.T_LABEL, pad=5, cps=90.0, key=1)
+        else:                           # ... its letters are decoded again when the target changes state
+            f.tag("r" if gone >= 0.98 else "w", x0, y,
+                  B.decode(tag, t - (self.t_leaving if gone < 0.98 else self.t_absent), cps=90.0, key=1, pad=True),
+                  size=L.T_LABEL, pad=5, ref=tag)
         shown = "1 IN 5" if t < self.t_flood else "ALL OF THEM // REAL TIME"
-        f.text("w", x0, y + 34, fit_text([f"SHOWING {shown}", shown, "1 IN 5" if t < self.t_flood else "REAL TIME"],
-                                         width(col) - 12, L.T_SMALL), size=L.T_SMALL, alpha=0.8)
-        # height ruler on the left of the figure
+        txt = fit_text([f"SHOWING {shown}", shown, "1 IN 5" if t < self.t_flood else "REAL TIME"], width(col) - 12, L.T_SMALL)
+        f.text("w", x0, y + 34, B.resolve(txt, t - (T0 + 0.25 if t < self.t_flood else self.t_flood), 80.0, key=2),
+               size=L.T_SMALL, alpha=0.8)
+        # height ruler on the left of the figure: its ticks are thrown out from the ground up
         xr = self.fig_x - min(self.fig_half - 96.0, 300.0)
         yb = cam.cy + cam.scale * 0.92
         if xr > col[0] + 70:
-            hud.vruler(f, xr, yb, yb - cam.scale * 1.8, 0.0, 1.8, 0.1, 0.5, fmt=lambda v: f"{v:.1f} M", right=False)
-        if gone > 0.5:
-            a = float(smoothstep(0.5, 1.0, gone))
+            with f.build(t - T0 - 0.4, (xr - 90.0, yb - cam.scale * 1.8 - 12.0, xr + 4.0, yb + 12.0), flow="bt", wave=0.4,
+                         marks=False, key=3):
+                hud.vruler(f, xr, yb, yb - cam.scale * 1.8, 0.0, 1.8, 0.1, 0.5, fmt=lambda v: f"{v:.1f} M", right=False)
+        if gone > 0.5:                  # where the heart was: a red cross is thrown out, the volume of air is decoded
             yh = cam.cy - cam.scale * (HEART[1] - 0.92)
-            f.crosses("r", [self.fig_x + cam.scale * HEART[0]], [yh], 12.0, 0.9 * a, width=L.LW)
+            xh = self.fig_x + cam.scale * HEART[0]
+            with f.build(t - self.t_half, (xh - 14.0, yh - 14.0, xh + 14.0, yh + 14.0), flow="out", wave=0.05,
+                         marks=False, key=4):
+                f.crosses("r", [xh], [yh], 12.0, 0.9, width=L.LW)
             msg = fit_text(["1.80 M  x  0.38 M2  OF AIR", "1.80 M OF AIR", "AIR"], width(col), L.T_LABEL)
-            f.text("w", self.fig_x, Y_BOT - 14, hud.typed(msg, t - self.t_gone + 1.6, cps=30), size=L.T_LABEL,
-                   alpha=0.85 * a, anchor="ms")
+            f.text("w", self.fig_x, Y_BOT - 14, B.resolve(msg, t - self.t_gone + 1.6, 30.0, key=5, pad=True),
+                   size=L.T_LABEL, alpha=0.85, anchor="ms")
 
     # ------------------------------------------------------------------ the count
     def _draw_count(self, f, t, ctx, col, gone):
@@ -257,46 +281,57 @@ class Flood(Scene):
         n_now = ctx.through_you(t)
         n_end = ctx.through_you(SHOW)
         fr = int(t * 30)
+        age = t - T0 - 0.2                  # the column is constructed when the scene starts
         # the show as a bar
         y = Y_TOP + 36
-        f.tag("w", x0, y, "THIS SHOW // 13:22", size=L.T_LABEL, pad=5)
         yb0, yb1 = y + 26, y + 58
         X = lambda tt: x0 + np.asarray(tt, np.float64) / SHOW * (x1 - x0)
-        f.rect("w", x0, yb0, x1, yb1, 0.8, width=L.LW)
-        f.rects("w", x0 + 3, yb0 + 4, float(X(t)), yb1 - 4, 0.9)
-        mins = np.arange(0, SHOW, 60.0)
-        f.segments("w", X(mins), np.full(len(mins), yb1), X(mins), np.full(len(mins), yb1 + 9.0), 0.8)
         proj = float(smoothstep(self.t_fifty, self.t_fifty + 1.2, t))
-        if proj > 0:
-            xe = float(X(t)) + (x1 - 3 - float(X(t))) * proj
-            f.rects("r", float(X(t)), yb0 + 11, xe, yb1 - 11, 0.95)
-        f.segments("r", [float(X(t))], [yb0 - 6], [float(X(t))], [yb1 + 12], 1.2, width=L.LW)
-        f.text("r", float(X(t)) + 6, yb1 + 30, sd.tc(t)[:5], size=L.T_SMALL, alpha=0.95)
-        f.text("w", x1, yb1 + 30, "13:22", size=L.T_SMALL, alpha=0.7, anchor="rs")
+        with f.build(age, (x0 - 8, y - 26, x1 + 8, yb1 + 40), flow="lr", wave=0.4, key=10):
+            f.tag("w", x0, y, "THIS SHOW // 13:22", size=L.T_LABEL, pad=5)
+            f.rect("w", x0, yb0, x1, yb1, 0.8, width=L.LW)
+            f.rects("w", x0 + 3, yb0 + 4, float(X(t)), yb1 - 4, 0.9)
+            mins = np.arange(0, SHOW, 60.0)
+            f.segments("w", X(mins), np.full(len(mins), yb1), X(mins), np.full(len(mins), yb1 + 9.0), 0.8)
+            if proj > 0:                    # "by the end": a red bar runs from now to the end of the show
+                xe = float(X(t)) + (x1 - 3 - float(X(t))) * proj
+                f.rects("r", float(X(t)), yb0 + 11, xe, yb1 - 11, 0.95)
+            f.segments("r", [float(X(t))], [yb0 - 6], [float(X(t))], [yb1 + 12], 1.2, width=L.LW)
+            f.text("r", float(X(t)) + 6, yb1 + 30, sd.tc(t)[:5], size=L.T_SMALL, alpha=0.95)
+            f.text("w", x1, yb1 + 30, "13:22", size=L.T_SMALL, alpha=0.7, anchor="rs")
         # so far
         y1_ = y + 142
         lab = "THROUGH YOU SO FAR" if gone < 0.5 else fit_text(["THROUGH THE SPACE YOU LEFT", "THROUGH THAT SPACE"], w,
                                                                L.T_TAG)
-        f.tag("w", x0, y1_, hud.erode(lab, 1.0 - abs(2 * gone - 1.0) ** 0.5 if 0 < gone < 1 else 0.0, 3, fr),
-              size=L.T_TAG, pad=5)
         big = float(np.clip((w - 10) / (6 * 0.61), 70.0, 176.0))
         yn = y1_ + 20 + 0.84 * big
-        f.text("w", x0 - 6 * k, yn, spaced(n_now), size=big, alpha=1.0, bold=True)
-        f.text("w", x0, yn + 36, fit_text([f"+{RATE:.0f} EVERY SECOND  //  1 MUON /CM2 /MIN  //  0.38 M2",
-                                           f"+{RATE:.0f} EVERY SECOND // 1 /CM2 /MIN", f"+{RATE:.0f} EVERY SECOND"],
-                                          w, L.T_SMALL), size=L.T_SMALL, alpha=0.75)
-        calm = 1.0 - float(smoothstep(self.t_gone - 0.5, self.t_gone + 3.0, t))     # the break: only the count stays
+        with f.build(age - 0.25, (x0 - 8, y1_ - 28, x1 + 8, yn + 46), wave=0.35, key=11):
+            f.tag("w", x0, y1_, hud.erode(lab, 1.0 - abs(2 * gone - 1.0) ** 0.5 if 0 < gone < 1 else 0.0, 3, fr),
+                  size=L.T_TAG, pad=5)
+            f.text("w", x0 - 6 * k, yn, spaced(n_now), size=big, alpha=1.0, bold=True)
+            f.text("w", x0, yn + 36, fit_text([f"+{RATE:.0f} EVERY SECOND  //  1 MUON /CM2 /MIN  //  0.38 M2",
+                                               f"+{RATE:.0f} EVERY SECOND // 1 /CM2 /MIN", f"+{RATE:.0f} EVERY SECOND"],
+                                              w, L.T_SMALL), size=L.T_SMALL, alpha=0.75)
+        # the break: only the count stays. What leaves does not fade: its letters fall apart (1 - calm of them
+        # are gone), then its tag and its rule are pulled back (`back` runs 1 -> 0 at the very end)
+        calm = 1.0 - float(smoothstep(self.t_gone - 0.5, self.t_gone + 3.0, t))
+        back = float(np.clip((calm - 0.01) / 0.15, 0.0, 1.0))
         # by the end
         y2 = yn + 106
         mid = 0.705 * big
         if proj > 0 and calm > 0.01:
-            f.tag("r", x0, y2, "BY THE END OF THIS SHOW", size=L.T_TAG, pad=5, alpha=calm)
+            a2 = t - self.t_fifty           # made on "more than fifty thousand": tag pushed out, the count runs up
+            s2 = "BY THE END OF THIS SHOW"
+            txt, wp = B.tag_state(s2, a2, cps=70.0, key=12)
+            f.tag("r", x0, y2, txt if calm >= 1.0 else hud.erode(s2, 1 - calm, 12, fr), size=L.T_TAG, pad=5, ref=s2,
+                  wipe=min(wp, back))
             n_run = int(n_now + (n_end - n_now) * proj)
-            f.text("r", x0 - 4 * k, y2 + 16 + 0.82 * mid, hud.erode(spaced(n_run), 1 - calm, 7, fr), size=mid, alpha=calm,
-                   bold=True)
+            f.text("r", x0 - 4 * k, y2 + 16 + 0.82 * mid, hud.erode(B.decode(spaced(n_run), a2, cps=50.0, key=13),
+                                                                 1 - calm, 7, fr), size=mid, bold=True)
             xg = x0 + text_w(spaced(n_end), mid) + 26
             if proj >= 1.0 and xg + text_w("> 50 000", 34) <= x1:
-                f.text("w", xg, y2 + 16 + 0.82 * mid, "> 50 000", size=34, alpha=0.9 * calm)
+                f.text("w", xg, y2 + 16 + 0.82 * mid, hud.erode(B.resolve("> 50 000", a2 - 1.2, 40.0, key=14), 1 - calm,
+                                                                8, fr), size=34, alpha=0.9)
         # every time scale
         a = t - self.t_every
         if a > 0:
@@ -307,42 +342,51 @@ class Flood(Scene):
                     ("EVERY YEAR", "1.99 BN"), ("IN 80 YEARS", "159 BN")]
             n_fit = int((Y_BOT - 6 - y3) / pitch)                # rows that fit above the bottom band (one is kept
             rows = rows[: max(0, n_fit - 1)]                     # for AFTER YOU)
-            f.segments("w", [x0], [y3 - 1.33 * rs], [x1], [y3 - 1.33 * rs], 0.7 * calm, width=L.LW)
-            for q, (lab_, val) in enumerate(rows):
+            # the rule over the rows: drawn by a pen on "as they have", pulled back in the break
+            B.pen(f, "w", x0, y3 - 1.33 * rs, x1, y3 - 1.33 * rs, float(B.ease(B.lin(a, 0.0, 0.3))) * back, 0.7,
+                  width=L.LW, head=3.0 if a < 0.3 else 0.0)
+            for q, (lab_, val) in enumerate(rows):          # a row every 0.22 s: decoded, its figure spins and locks
                 ak = a - 0.22 * q
                 if ak < 0:
                     continue
                 yy = y3 + q * pitch
                 hot = q == 1 and a < 4.6
-                f.text("w", x0, yy, hud.erode(hud.typed(lab_, ak, cps=60), 1 - calm, 20 + q, fr), size=rs,
-                       alpha=0.7 * calm)
-                f.text("r" if hot else "w", x1, yy, hud.erode(hud.typed(val, ak, cps=40), 1 - calm, 30 + q, fr),
-                       size=1.13 * rs, alpha=0.97 * calm, anchor="rs")
+                f.text("w", x0, yy, hud.erode(B.decode(lab_, ak, cps=60.0, key=20 + q), 1 - calm, 20 + q, fr), size=rs,
+                       alpha=0.7)
+                f.text("r" if hot else "w", x1, yy,
+                       hud.erode(B.resolve(val, ak, 40.0, key=30 + q, pad=True, spin=0.4), 1 - calm, 30 + q, fr),
+                       size=1.13 * rs, alpha=0.97, anchor="rs")
             aw = t - self.t_will
             if aw > 0 and n_fit >= 1:
                 yy = y3 + len(rows) * pitch
                 keep = max(calm, 0.9)                          # this line stays through the break
-                f.text("w", x0, yy, hud.typed("AFTER YOU", aw, cps=60), size=rs, alpha=0.7 * keep)
-                f.text("r", x1, yy, hud.typed("UNCHANGED", aw, cps=40, delay=0.2), size=1.13 * rs, alpha=0.97 * keep,
-                       anchor="rs")
+                f.text("w", x0, yy, B.decode("AFTER YOU", aw, cps=60.0, key=40), size=rs, alpha=0.7 * keep)
+                f.text("r", x1, yy, B.decode("UNCHANGED", aw, cps=40.0, delay=0.2, key=41, pad=True), size=1.13 * rs,
+                       alpha=0.97 * keep, anchor="rs")
 
     # ------------------------------------------------------------------ left column
     def _draw_left(self, f, t, col, gone):
         x0, x1 = col
         w = x1 - x0
         ts = min(100.0, (w - 40) / (5 * 0.61))
-        f.tag("w", x0 + 10, Y_TOP + 28 + 0.93 * ts, "FLOOD", size=ts, pad=10, bold=True)
+        age = t - T0 - 0.1                  # the column is constructed when the scene starts
+        B.tag(f, "w", x0 + 10, Y_TOP + 28 + 0.93 * ts, "FLOOD", age, size=ts, pad=10, bold=True, wipe=0.2, cps=22.0,
+              key=50)
         rate = RATE * (0.2 + 0.8 * float(smoothstep(self.t_flood - 0.1, self.t_flood + 1.0, t)))
+        state = "     PRESENT" if gone < 0.05 else "      ABSENT" if gone > 0.98 else "     LEAVING"
+        if gone >= 0.05:                    # the state of the target is decoded again when it changes
+            state = B.decode(state, t - (self.t_absent if gone > 0.98 else self.t_leaving), cps=80.0, key=53, pad=True)
         rows = ["MU FLUX    1 /CM2/MIN", f"THROUGH YOU   {RATE:.0f} /S", f"ON SCREEN   {rate:4.1f} /S",
-                "SKIN          1.9 M2", "TARGET   " + ("     PRESENT" if gone < 0.05 else "      ABSENT" if gone > 0.98
-                                                      else "     LEAVING")]
+                "SKIN          1.9 M2", "TARGET   " + state]
         yr = Y_TOP + ts + 96
-        hud.rows(f, x0, yr, rows, size=L.T_SMALL, lead=1.5, red=(4,) if gone > 0.98 else ())
+        with f.build(age - 0.15, (x0 - 6, yr - 24, x1, yr + 5 * 25.5), flow="tb", wave=0.25, marks=False, key=51):
+            hud.rows(f, x0, yr, rows, size=L.T_SMALL, lead=1.5, red=(4,) if gone > 0.98 else ())
         yl = yr + 5 * 25.5 + 30
         full = w >= 300
-        f.tag("w", x0 + 4, yl, "ENTRY_LOG", size=L.T_MICRO, pad=3)
-        if full:
-            f.text("w", x0 + 110, yl, "PART   X     Y    Z    CM", size=L.T_MICRO, alpha=0.5)
+        with f.build(age - 0.35, (x0, yl - 20, x1, yl + 8), flow="lr", wave=0.15, marks=False, key=52):
+            f.tag("w", x0 + 4, yl, "ENTRY_LOG", size=L.T_MICRO, pad=3)
+            if full:
+                f.text("w", x0 + 110, yl, "PART   X     Y    Z    CM", size=L.T_MICRO, alpha=0.5)
         fr = int(t * 30)
         t_stop = self.t_leave + 0.6
         i1s = int(np.searchsorted(self.h_t, min(t, t_stop)))
@@ -354,14 +398,17 @@ class Flood(Scene):
                 line = f"{PART_NAMES[self.h_part[k]]:<7}{e[0]:+.2f} {e[1]:.2f} {e[2]:+.2f} {self.h_frac[k] * 100:5.1f}"
             else:
                 line = f"{PART_NAMES[self.h_part[k]]:<7} {e[1]:.2f} M {self.h_frac[k] * 100:5.1f} CM"
+            # a line is decoded when its muon enters (and the first ones with the log, when the scene starts)
+            line = B.resolve(line, min(t - float(self.h_t[k]), age - 0.45 - 0.03 * row), 170.0, key=k & 0xFFFF)
             if gone > 0:
                 line = hud.erode(line, gone * 1.05, 100 + row, fr)
             f.text("r" if row == 0 and gone < 0.3 else "w", x0, yl + 32 + row * 21, line, size=L.T_MICRO,
                    alpha=0.95 if row < 3 else 0.65)
         if gone > 0.98:
-            f.text("r", x0, yl + 32, "NO TARGET", size=L.T_MICRO, alpha=0.95)
+            f.text("r", x0, yl + 32, B.decode("NO TARGET", t - self.t_absent, cps=50.0, key=54), size=L.T_MICRO, alpha=0.95)
             n_through = int(np.searchsorted(self.h_t, t)) - int(np.searchsorted(self.h_t, self.t_gone))
-            f.text("w", x0, yl + 53, f"PASSED ANYWAY  {n_through:05d}", size=L.T_MICRO, alpha=0.8)
+            f.text("w", x0, yl + 53, B.decode(f"PASSED ANYWAY  {n_through:05d}", t - self.t_absent, cps=70.0, delay=0.2,
+                                              key=55), size=L.T_MICRO, alpha=0.8)
 
     # ------------------------------------------------------------------ entry map
     def _draw_map(self, f, t, col, gone, there):
@@ -369,41 +416,45 @@ class Flood(Scene):
         half = min((xb - xa) / 2 - 8, 200.0)
         cx, cy = xa + half + 8, Y_TOP + 62.0 + half
         sc = half / 0.46
-        f.tag("w", xa, Y_TOP + 36, "ENTRY_MAP // FROM ABOVE", size=L.T_MICRO, pad=3)
-        f.rect("w", cx - half, cy - half, cx + half, cy + half, 0.5)
-        f.rings("w", [cx, cx], [cy, cy], [sc * 0.2, sc * 0.4], 0.3)
-        f.segments("w", [cx - half, cx], [cy, cy - half], [cx + half, cx], [cy, cy + half], 0.22)
-        f.text("w", cx + sc * 0.2 + 4, cy - 5, "0.2 M", size=L.T_MICRO, alpha=0.6)
-        xb = min(xb, xa + 2 * half + 16)
-        span = 13.0
-        i0, i1 = np.searchsorted(self.h_t, t - span), np.searchsorted(self.h_t, t)
-        if i1 > i0:
-            th = self.h_t[i0:i1]
-            has = self.h_has[i0:i1]
-            late = th > self.t_leave                       # no body any more: every muon marks where it passed
-            P = np.where((has & ~late)[:, None], self.h_entry[i0:i1], self.h_mid[i0:i1])
-            use = (has & ~late) | late
-            x, y = cx + P[:, 0] * sc, cy - P[:, 2] * sc
-            ok = use & (np.abs(x - cx) < half - 3) & (np.abs(y - cy) < half - 3)
-            age = t - th
-            f.dots("r", x[ok], y[ok], 2.3, (0.25 + 0.95 * np.exp(-age[ok] / 3.5)))
-            new = ok & (age < 0.12)
-            f.dots("w", x[new], y[new], 2.0, 1.2)
+        age0 = t - T0 - 0.35                # the map and the list are constructed when the scene starts
+        with f.build(age0, (xa - 6, Y_TOP + 14, xa + 2 * half + 22, cy + half + 6), wave=0.4, key=60):
+            f.tag("w", xa, Y_TOP + 36, "ENTRY_MAP // FROM ABOVE", size=L.T_MICRO, pad=3)
+            f.rect("w", cx - half, cy - half, cx + half, cy + half, 0.5)
+            f.rings("w", [cx, cx], [cy, cy], [sc * 0.2, sc * 0.4], 0.3)
+            f.segments("w", [cx - half, cx], [cy, cy - half], [cx + half, cx], [cy, cy + half], 0.22)
+            f.text("w", cx + sc * 0.2 + 4, cy - 5, "0.2 M", size=L.T_MICRO, alpha=0.6)
+            xb = min(xb, xa + 2 * half + 16)
+            span = 13.0
+            i0, i1 = np.searchsorted(self.h_t, t - span), np.searchsorted(self.h_t, t)
+            if i1 > i0:
+                th = self.h_t[i0:i1]
+                has = self.h_has[i0:i1]
+                late = th > self.t_leave                       # no body any more: every muon marks where it passed
+                P = np.where((has & ~late)[:, None], self.h_entry[i0:i1], self.h_mid[i0:i1])
+                use = (has & ~late) | late
+                x, y = cx + P[:, 0] * sc, cy - P[:, 2] * sc
+                ok = use & (np.abs(x - cx) < half - 3) & (np.abs(y - cy) < half - 3)
+                age = t - th
+                f.dots("r", x[ok], y[ok], 2.3, (0.25 + 0.95 * np.exp(-age[ok] / 3.5)))
+                new = ok & (age < 0.12)
+                f.dots("w", x[new], y[new], 2.0, 1.2)
         # entries per part of the body, last 10 s
         yb = cy + half + 62
-        f.tag("w", xa, yb - 22, "ENTRIES // LAST 10 S", size=L.T_MICRO, pad=3)
-        j0 = np.searchsorted(self.h_t, t - 10.0)
-        j1 = np.searchsorted(self.h_t, min(t, self.t_leave + 0.6))
-        g = self.h_group[j0:max(j1, j0)]
-        for k, (name, _) in enumerate(GROUPS):
-            n = int((g == k).sum())
-            yy = yb + 10 + k * 34
-            f.text("w", xa, yy + 16, name, size=L.T_SMALL, alpha=0.85)
-            f.rects("r" if name == "TORSO" else "w", xa + 84, yy + 2,
-                    xa + 84 + min(xb - xa - 150, n * (xb - xa - 150) / 240.0), yy + 18, 0.95)
-            f.text("w", xb, yy + 16, f"{n:03d}", size=L.T_SMALL, alpha=0.85, anchor="rs")
+        with f.build(age0 - 0.3, (xa - 6, yb - 44, xb + 6, yb + 10 + len(GROUPS) * 34 + 4), flow="tb", wave=0.3, key=61):
+            f.tag("w", xa, yb - 22, "ENTRIES // LAST 10 S", size=L.T_MICRO, pad=3)
+            j0 = np.searchsorted(self.h_t, t - 10.0)
+            j1 = np.searchsorted(self.h_t, min(t, self.t_leave + 0.6))
+            g = self.h_group[j0:max(j1, j0)]
+            for k, (name, _) in enumerate(GROUPS):
+                n = int((g == k).sum())
+                yy = yb + 10 + k * 34
+                f.text("w", xa, yy + 16, name, size=L.T_SMALL, alpha=0.85)
+                f.rects("r" if name == "TORSO" else "w", xa + 84, yy + 2,
+                        xa + 84 + min(xb - xa - 150, n * (xb - xa - 150) / 240.0), yy + 18, 0.95)
+                f.text("w", xb, yy + 16, f"{n:03d}", size=L.T_SMALL, alpha=0.85, anchor="rs")
         if gone > 0.98:
-            f.text("r", xa, yb + 10 + len(GROUPS) * 34 + 22, "NOTHING IN THE WAY", size=L.T_SMALL, alpha=0.9)
+            f.text("r", xa, yb + 10 + len(GROUPS) * 34 + 22, B.decode("NOTHING IN THE WAY", t - self.t_absent, cps=50.0,
+                                                                      key=62), size=L.T_SMALL, alpha=0.9)
 
     # ------------------------------------------------------------------ bottom band
     def _draw_bottom(self, f, t, ctx):
@@ -412,32 +463,37 @@ class Flood(Scene):
         panels = [p for p in P.panels if width(p) >= 130.0]
         wide = [p for p in panels if width(p) >= 300.0]
         small = [p for p in panels if width(p) < 300.0]
+        # the panels are constructed when the scene starts, one after the other
+        block = lambda p, k: f.build(t - T0 - 0.3 - 0.15 * k, (p[0] - 8, y0 - 24, p[1] + 8, y1 + 8), wave=0.4, key=70 + k)
         if wide:
             x0, x1 = wide[0]
-            hud.panel_header(f, x0, x1, y0, "MUONS THROUGH YOU")
-            cols = [("PER SECOND", "63"), ("PER MINUTE", "3 780"), ("IN A LIFE", "159 BN")]
-            n = int(min(3, max(1, (x1 - x0) // 150)))
-            cols = cols if n == 3 else [cols[0], cols[2]] if n == 2 else [cols[1]]
-            cw = (x1 - x0) / n
-            for k, (lab, val) in enumerate(cols):
-                f.text("w", x0 + k * cw + 4, y0 + 36, lab, size=L.T_MICRO, alpha=0.75)
-                f.text("r" if lab == "IN A LIFE" else "w", x0 + k * cw + 2, y0 + 96, val, size=40, alpha=0.97)
+            with block(wide[0], 0):
+                hud.panel_header(f, x0, x1, y0, "MUONS THROUGH YOU")
+                cols = [("PER SECOND", "63"), ("PER MINUTE", "3 780"), ("IN A LIFE", "159 BN")]
+                n = int(min(3, max(1, (x1 - x0) // 150)))
+                cols = cols if n == 3 else [cols[0], cols[2]] if n == 2 else [cols[1]]
+                cw = (x1 - x0) / n
+                for k, (lab, val) in enumerate(cols):
+                    f.text("w", x0 + k * cw + 4, y0 + 36, lab, size=L.T_MICRO, alpha=0.75)
+                    f.text("r" if lab == "IN A LIFE" else "w", x0 + k * cw + 2, y0 + 96, val, size=40, alpha=0.97)
         if len(wide) > 1:
             x0, x1 = wide[1]
-            hud.panel_header(f, x0, x1, y0, "ENTRY_BARCODE // 3 S")
-            n = int(np.clip((x1 - x0) / 3.2, 40, 200))
-            dt = 3.0 / n
-            kf = math.floor((t - 3.0) / dt)
-            kk = kf + np.arange(n)
-            tt = kk * dt
-            lo, hi = np.searchsorted(self.h_t, tt), np.searchsorted(self.h_t, tt + dt)
-            dens = 0.04 + 0.92 * np.tanh((hi - lo) / 3.2 * (150.0 / n))
-            quiet = float(smoothstep(self.t_leave, self.t_gone, t))
-            hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5, inten=0.95 - 0.5 * quiet)
+            with block(wide[1], 1):
+                hud.panel_header(f, x0, x1, y0, "ENTRY_BARCODE // 3 S")
+                n = int(np.clip((x1 - x0) / 3.2, 40, 200))
+                dt = 3.0 / n
+                kf = math.floor((t - 3.0) / dt)
+                kk = kf + np.arange(n)
+                tt = kk * dt
+                lo, hi = np.searchsorted(self.h_t, tt), np.searchsorted(self.h_t, tt + dt)
+                dens = 0.04 + 0.92 * np.tanh((hi - lo) / 3.2 * (150.0 / n))
+                quiet = float(smoothstep(self.t_leave, self.t_gone, t))
+                hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5, inten=0.95 - 0.5 * quiet)
         rest = small + wide[2:]
         if rest:
             x0, x1 = rest[0]
-            hud.panel_header(f, x0, x1, y0, "RATE")
-            f.text("w", x0 + 2, y0 + 78, "63", size=58)
-            f.text("w", x0 + 78, y0 + 78, "/S", size=24, alpha=0.8)
-            f.text("w", x0 + 2, y0 + 110, "UNCHANGED", size=L.T_MICRO, alpha=0.75)
+            with block(rest[0], 2):
+                hud.panel_header(f, x0, x1, y0, "RATE")
+                f.text("w", x0 + 2, y0 + 78, "63", size=58)
+                f.text("w", x0 + 78, y0 + 78, "/S", size=24, alpha=0.8)
+                f.text("w", x0 + 2, y0 + 110, "UNCHANGED", size=L.T_MICRO, alpha=0.75)

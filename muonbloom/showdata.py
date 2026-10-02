@@ -86,6 +86,13 @@ def look_span(look, t):
     return SECTIONS[a][2], SECTIONS[b][3]
 
 
+def scene_start(t):
+    """Show time at which the scene on screen at t started: the start of the run of consecutive sections
+    that share its look. What a scene builds its furniture from (`age = t - sd.scene_start(t)`)."""
+    _, sec, _ = section_at(t)
+    return look_span(sec[4], t)[0]
+
+
 def tc(t):
     """Seconds -> MM:SS.mmm show time code."""
     m = int(t // 60)

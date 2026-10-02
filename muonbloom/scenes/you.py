@@ -27,6 +27,18 @@ nobody knows yet where: nothing here has a fixed x. `Plan` reads the tower place
   bottom      counts on every time scale, hit barcode  (ctx.slots_pre panels)
 Only textures (floor lattice, rain, tissue, cells, molecules) run behind the towers. A column
 that does not exist with a given placement simply drops its block.
+
+NOTHING FADES OR POPS in the read-outs (the body, the rain, the tissues are the image: they cut).
+  before the drop   the ACQUIRING line is decoded, two pens trace its bar, a block opens per 16th note
+  the drop (BAR0)   the whole instrument is constructed in about 1.5 s (Frame.build, staggered): title
+                    tag pushed out, parameters and hit log decoded, panels drawn, strip written
+  every hit         its callout is constructed outwards from the hit (leader, plate, tag, lines) and taken
+                    apart the same way when it leaves; its log line is decoded; its tag enters the strip
+  every cut         what is new in the view is made from the cut: view tag, view name, scale bar, range
+                    rings, scan slice, the ticks of the track, the read-out plates of the zoom, the medium
+                    rows of the title column; the scale strip replaces the hit timeline at the first micro
+                    view and its cursor runs down the powers of ten at every cut
+`callout` (age / life) and `plate` are the two helpers; `_cut(t)` gives the time of the last cut.
 """
 from __future__ import annotations
 
@@ -34,6 +46,7 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -146,12 +159,16 @@ class Plan:
         return col
 
 
-def callout(f, x, y, title, lines=(), col=None, prefer=1, dy=-50.0, red=False, alpha=1.0, age=9.0, size=L.T_TAG,
+def callout(f, x, y, title, lines=(), col=None, prefer=1, dy=-50.0, red=False, age=9.0, life=None, size=L.T_TAG,
             lsize=L.T_SMALL, elbow=40.0):
     """hud.callout on a black plate, kept inside `col`. It goes on the `prefer` side (outwards, away from
     what it points at); when the block does not fit there it first drops its data lines, then shortens
-    its leader, and only then changes side."""
-    if alpha <= 0.01 or age < 0:
+    its leader, and only then changes side.
+    It never fades: it is constructed outwards from its point (age = seconds since it appeared: leader drawn
+    by a pen, plate opened, tag pushed out, lines decoded) and, when it has a `life` (seconds it stays), taken
+    apart the same way at the end."""
+    build = B.io(age, None if life is None else life - age, out=0.3, span=0.7)
+    if build < 0:
         return
     lo, hi = col if col else (L.COL_X0, L.COL_X1)
 
@@ -169,9 +186,26 @@ def callout(f, x, y, title, lines=(), col=None, prefer=1, dy=-50.0, red=False, a
     tx = x + side * (elbow + 44)
     y0 = y + dy - size * 0.78
     y1 = y + dy + size * 0.36 + len(lines) * lsize * 1.45 + (16 if lines else 8)
-    f.occlude(min(tx, tx + side * w) - 8, y0, max(tx, tx + side * w) + 8, y1)
-    hud.callout(f, x, y, side * elbow, dy, title, lines, red=red, alpha=alpha, age=age, size=size, lsize=lsize,
-                side=side)
+    wp = (w + 8) * float(B.ease((build - 0.1) / 0.25))   # the plate opens away from the leader, with the tag
+    if wp > 0.0:
+        f.occlude(min(tx - side * 8, tx + side * wp), y0, max(tx - side * 8, tx + side * wp), y1)
+    hud.callout(f, x, y, side * elbow, dy, title, lines, red=red, size=size, lsize=lsize, side=side, build=build)
+
+
+def plate(f, rect, age, dur=0.25, flow="tb"):
+    """The black plate under a read-out, opened instead of popped: it grows from its top edge ('tb'), from its
+    left ('lr') or from its right ('rl') while the read-out is being made. age = seconds since the read-out
+    started to build (None = built, negative = not there: no plate)."""
+    if age is not None and age < 0.0:
+        return
+    g = 1.0 if age is None else float(B.ease(age / dur))
+    x0, y0, x1, y1 = rect
+    if flow == "tb":
+        f.occlude(x0, y0, x1, y0 + (y1 - y0) * g)
+    elif flow == "lr":
+        f.occlude(x0, y0, x0 + (x1 - x0) * g, y1)
+    else:
+        f.occlude(x1 - (x1 - x0) * g, y0, x1, y1)
 
 
 def fit_text(options, room, size):
@@ -397,9 +431,8 @@ def draw_muon(f, cam, m, a, col=None, gain=1.0, tag=True, lines=True):
     if tag and hero and 0 <= ah < 2.4:
         hx, hy, _, _ = cam.project(m["hit"][None].astype(np.float32))
         x, y = float(hx[0]), float(hy[0])
-        alpha = 1 - float(smoothstep(1.8, 2.4, ah))
         callout(f, x, y, m["part"], [f"MU{m['charge']} {m['E']:.3f} GEV", f"DE {m['dE'] * 1000:.1f} MEV"] if lines
-                else [], col=col, prefer=1 if x >= cam.cx else -1, red=m["part"] == "HEART", alpha=alpha, age=ah)
+                else [], col=col, prefer=1 if x >= cam.cx else -1, red=m["part"] == "HEART", age=ah, life=2.4)
 
 
 # ----------------------------------------------------------------------------
@@ -488,6 +521,13 @@ class You(Scene):
         k = min(max(k, 0), len(names) - 1)
         return names[k][0], names[k][1], k + 1, (t - edges[k]) / (edges[k + 1] - edges[k])
 
+    @staticmethod
+    def _cut(t):
+        """Show time of the last cut (the drop, then every change of view): what is NEW in a view is built from
+        there. The furniture that stays (title, columns, bottom band) is built once, at the drop."""
+        edges = [BAR0] + CUTS
+        return edges[max(int(np.searchsorted(edges, t, side="right")) - 1, 0)]
+
     def _cams(self, kind, t, u):
         """[(camera, clip rect, column for its tags, label)] - every view centred in a free bay."""
         P = self.P
@@ -542,8 +582,10 @@ class You(Scene):
             for cam, clip, col, label in self._cams(kind, t, u):
                 f.set_clip(*clip)
                 self._draw_world(f, cam, t, ages, kind, scan_y, col, clip, label)
-                if label:
-                    f.text("w", col[1] - 6, Y_BOT - 14, label, size=L.T_SMALL, alpha=0.7, anchor="rs")
+                if label:               # the name of the view, decoded when the view comes on
+                    since = t - self._cut(t) - (BAR if label == "SIDE" and P.side is None else 0.0)
+                    f.text("w", col[1] - 6, Y_BOT - 14, B.resolve(label, since, 40.0, 0.1, key=5, pad=True),
+                           size=L.T_SMALL, alpha=0.7, anchor="rs")
             f.set_clip()
         else:
             f.set_clip(*WALL)
@@ -603,15 +645,16 @@ class You(Scene):
             k = int(np.argmin(np.abs(b.levels - scan_y)))
             hot_lev[k] = 1.0
         b.draw(f, cam, hot_pts=hot_pts, hot_lev=hot_lev, top=top)
-        if top:                     # range rings around you
+        if top:                     # range rings around you: traced outwards from the centre when the view comes on
             o = cam.project(np.zeros((1, 3), np.float32))
             X, Y = float(o[0][0]), float(o[1][0])
             rr = [r for r in (0.25, 0.5, 0.75, 1.0) if cam.scale * r < 0.5 * width(col) + 10]
-            f.rings("w", [X] * len(rr), [Y] * len(rr), [cam.scale * r for r in rr], 0.32)
-            for r in rr:
-                f.text("w", X + cam.scale * r * 0.7071 + 6, Y + cam.scale * r * 0.7071 + 14, f"{r:.2f} M",
-                       size=L.T_MICRO, alpha=0.7)
-            f.segments("r", [clip[0], X], [Y, clip[1]], [clip[2], X], [Y, clip[3]], 0.3)
+            with f.build(t - self._cut(t), clip, flow="out", origin=(X, Y), wave=0.35, marks=False, key=31):
+                f.rings("w", [X] * len(rr), [Y] * len(rr), [cam.scale * r for r in rr], 0.32)
+                for r in rr:
+                    f.text("w", X + cam.scale * r * 0.7071 + 6, Y + cam.scale * r * 0.7071 + 14, f"{r:.2f} M",
+                           size=L.T_MICRO, alpha=0.7)
+                f.segments("r", [clip[0], X], [Y, clip[1]], [clip[2], X], [Y, clip[3]], 0.3)
         self._draw_rain(f, cam, t)
         for m, a in zip(self.mus, ages):
             if a < 0 or a > m["dur"] + (2.6 if m["hero"] else 0.9) or m is self.echo:
@@ -623,11 +666,12 @@ class You(Scene):
             a = t - self.echo["t"]
             if a >= 0:
                 self._draw_persistent(f, cam, self.echo, a, t, col, lines=not top and self.P.half >= 400.0)
-        if scan_y is not None:
+        if scan_y is not None:      # the scan slice: its line is drawn across the bay, its read-out made
             p = cam.project(np.array([[0.0, scan_y, 0.0]], np.float32))
             y = float(p[1][0])
-            f.segments("r", [clip[0]], [y], [clip[2]], [y], 0.8, width=1.5)
-            f.tag("r", col[0] + 6, y - 9, f"SLICE Y {scan_y:.3f} M", size=L.T_SMALL, pad=4)
+            with f.build(t - CUTS[0], (clip[0], y - 34.0, clip[2], y + 6.0), flow="lr", wave=0.25, marks=False, key=32):
+                f.segments("r", [clip[0]], [y], [clip[2]], [y], 0.8, width=1.5)
+                f.tag("r", col[0] + 6, y - 9, f"SLICE Y {scan_y:.3f} M", size=L.T_SMALL, pad=4)
 
     def _draw_rain(self, f, cam, t):
         r = self.rain
@@ -684,27 +728,39 @@ class You(Scene):
 
     # ------------------------------------------------------------------ HUD
     def _draw_build_hud(self, f, t):
-        """Before the drop: almost nothing. A line of status under the figure, typed on the roll."""
+        """Before the drop: almost nothing. A line of status under the figure and its bar, constructed on the
+        roll: the line is decoded, two pens trace the bar, one block opens on every 16th note."""
         a = t - self.t_you
         if a < 0:
             return
         P = self.P
-        k = int(a / STEP)
         y = Y_BOT - 8
         msg = fit_text(["ACQUIRING // SUBJECT 01 // 1.80 M", "ACQUIRING // SUBJECT 01", "ACQUIRING"], width(P.fcol),
                        L.T_LABEL)
-        f.text("w", P.fx, y, hud.typed(msg, a, cps=40), size=L.T_LABEL, alpha=0.85, anchor="ms")
+        f.text("w", P.fx, y, B.resolve(msg, a, 40.0, key=3, pad=True), size=L.T_LABEL, alpha=0.85, anchor="ms")
         n = 14
         pitch = min(26.0, (width(P.fcol) - 20) / n)
         x0 = P.fx - n * pitch / 2
         xs = x0 + np.arange(n) * pitch
-        f.rect("w", x0 - 6, y + 16, x0 + n * pitch - 2, y + 40, 0.6)
-        on = np.arange(n) <= k
-        f.rects("w", xs[on], y + 21, xs[on] + pitch - 8, y + 35, 0.95)
+        xa, xb, ya, yb = x0 - 6, x0 + n * pitch - 2, y + 16, y + 40
+        ym = 0.5 * (ya + yb)
+        pc, pe = B.lin(a, 0.0, 0.08), float(B.ease(B.lin(a, 0.06, 0.42)))      # its left end, then its two long sides
+        f.segments("w", [xa], [ym - 12 * pc], [xa], [ym + 12 * pc], 0.6)
+        xe = xa + (xb - xa) * pe
+        if pe > 0.0:
+            f.segments("w", [xa, xa], [ya, yb], [xe, xe], [ya, yb], 0.6)
+            if pe < 1.0:
+                f.dots("w", [xe, xe], [ya, yb], 3.0, 1.7)
+            else:
+                f.segments("w", [xb], [ya], [xb], [yb], 0.6)
+        g = B.spring((a - np.arange(n) * STEP) / 0.14)       # a block per 16th note: it opens from its middle line
+        on = (g > 0.02) & (xs + pitch - 8 <= xe)
+        f.rects("w", xs[on], ym - 7 * g[on], xs[on] + pitch - 8, ym + 7 * g[on], 0.95)
 
     def _draw_view_tag(self, f, kind, name, idx, t):
         P = self.P
         y0 = Y_TOP + 36
+        since = t - self._cut(t)                    # the tag of a view is made when the view comes on
         opts = [f"VIEW {idx:02d} // {name}"]
         for sep in (" / ", " // "):
             if sep in name:
@@ -713,48 +769,62 @@ class You(Scene):
         if kind in ("bone", "cells", "dna", "atoms", "track"):
             # the track leaves the top of the bay on the left of its centre: the tag goes on the right
             room = P.fcol[1] - (P.fx - 50)
-            f.tag("w", P.fcol[1] - 6, y0, fit_text(opts, room, L.T_LABEL), size=L.T_LABEL, pad=5, anchor="rs")
+            B.tag(f, "w", P.fcol[1] - 6, y0, fit_text(opts, room, L.T_LABEL), since, size=L.T_LABEL, pad=5, anchor="rs",
+                  cps=90.0, key=idx)
         else:
             room = width(P.fcol) if kind == "ortho" else (P.fx - 80) - P.fcol[0]
-            f.tag("w", P.fcol[0] + 6, y0, fit_text(opts, room, L.T_LABEL), size=L.T_LABEL, pad=5)
+            B.tag(f, "w", P.fcol[0] + 6, y0, fit_text(opts, room, L.T_LABEL), since, size=L.T_LABEL, pad=5, cps=90.0,
+                  key=idx)
             if kind == "ortho":
                 s = 455.0
                 x0 = P.fcol[0] + 6
                 if P.fx - 200 - x0 > 0.5 * s + 70:
-                    f.segments("w", [x0, x0, x0 + 0.5 * s], [y0 + 34, y0 + 26, y0 + 26],
-                               [x0 + 0.5 * s, x0, x0 + 0.5 * s], [y0 + 34, y0 + 42, y0 + 42], 0.9, width=L.LW)
-                    f.text("w", x0 + 0.5 * s + 12, y0 + 40, "0.5 M", size=L.T_SMALL, alpha=0.8)
-        # what the neighbouring bay is: the same rain, the same floor
+                    with f.build(since - 0.15, (x0 - 4, y0 + 20, x0 + 0.5 * s + 90, y0 + 50), flow="lr", wave=0.15,
+                                 marks=False, key=33):
+                        f.segments("w", [x0, x0, x0 + 0.5 * s], [y0 + 34, y0 + 26, y0 + 26],
+                                   [x0 + 0.5 * s, x0, x0 + 0.5 * s], [y0 + 34, y0 + 42, y0 + 42], 0.9, width=L.LW)
+                        f.text("w", x0 + 0.5 * s + 12, y0 + 40, "0.5 M", size=L.T_SMALL, alpha=0.8)
+        # what the neighbouring bay is: the same rain, the same floor (it stays through the three views of the
+        # figure: built once, at the drop)
         if P.side is not None and kind in ("persp", "ortho", "thorax"):
             info = fit_text(["YOU // MUON BLOOM // 1.80 M // EFFECTIVE AREA 0.38 M2", "YOU // 1.80 M // AREA 0.38 M2",
                              "YOU // 1.80 M"], width(P.side), L.T_SMALL)
             x1 = P.side[1] - 6
-            f.occlude(x1 - text_w(info, L.T_SMALL) - 10, y0 - 22, x1 + 6, y0 + 34)
-            f.text("w", x1, y0, info, size=L.T_SMALL, alpha=0.85, anchor="rs")
-            f.text("w", x1, y0 + 26, f"{sd.tc(t)}  //  1 MUON /CM2 /MIN", size=L.T_MICRO, alpha=0.6, anchor="rs")
+            box = (x1 - text_w(info, L.T_SMALL) - 10, y0 - 22, x1 + 6, y0 + 34)
+            plate(f, box, t - BAR0 - 0.1, flow="lr")
+            with f.build(t - BAR0 - 0.1, box, flow="lr", wave=0.25, marks=False, key=34):
+                f.text("w", x1, y0, info, size=L.T_SMALL, alpha=0.85, anchor="rs")
+                f.text("w", x1, y0 + 26, f"{sd.tc(t)}  //  1 MUON /CM2 /MIN", size=L.T_MICRO, alpha=0.6, anchor="rs")
 
     def _draw_title(self, f, t, ages, kind):
-        """YOU, the parameters of the view, the hit log (leftmost free column)."""
+        """YOU, the parameters of the view, the hit log (leftmost free column). Built at the drop: the title
+        tag is pushed out, the parameters are decoded (again at every change of medium), every line of the log
+        is decoded when its hit happens."""
         P = self.P
         if P.title is None:
             return
         x0, x1 = P.title
         w = x1 - x0
         y0 = Y_TOP + 10
+        since = t - BAR0
         ts = min(112.0, (w - 40) / (3 * 0.61))
-        f.tag("w", x0 + 10, y0 + 0.93 * ts, "YOU", size=ts, pad=10, bold=True)
+        B.tag(f, "w", x0 + 10, y0 + 0.93 * ts, "YOU", since, t0=0.05, size=ts, pad=10, bold=True, wipe=0.22, cps=14.0,
+              key=1)
         if kind in self.MEDIA:
-            rows_ = self.MEDIA[kind]
+            rows_, t_rows = self.MEDIA[kind], self._cut(t)
         else:
             rows_ = ["MU FLUX    1 /CM2/MIN", "THROUGH YOU   ~63 /S", "HEIGHT       1.800 M", "AREA_EFF     0.38 M2",
                      "DE/DX     2.0 MEV/CM"]
+            t_rows = BAR0 + 0.2
         yr = y0 + ts + 64
-        hud.rows(f, x0, yr, rows_, size=L.T_SMALL, lead=1.5)
+        with f.build(t - t_rows, (x0 - 6, yr - 24, x1, yr + 5 * 25.5), flow="tb", wave=0.25, marks=False, key=40):
+            hud.rows(f, x0, yr, rows_, size=L.T_SMALL, lead=1.5)
         yl = yr + 5 * 25.5 + 30
         full = w >= 300
-        f.tag("w", x0 + 4, yl, "HIT_LOG", size=L.T_MICRO, pad=3)
-        if full:
-            f.text("w", x0 + 96, yl, "PART   X     Y    Z     MEV", size=L.T_MICRO, alpha=0.5)
+        with f.build(since - 0.4, (x0, yl - 20, x1, yl + 8), flow="lr", wave=0.15, marks=False, key=39):
+            f.tag("w", x0 + 4, yl, "HIT_LOG", size=L.T_MICRO, pad=3)
+            if full:
+                f.text("w", x0 + 96, yl, "PART   X     Y    Z     MEV", size=L.T_MICRO, alpha=0.5)
         hits = [(a - m["dur"] * m["u_in"], m) for m, a in zip(self.mus, ages) if m["hit"] is not None]
         n_rows = int((Y_BOT - yl - 40) / 21)
         hits = sorted([h for h in hits if h[0] >= 0], key=lambda h: h[0])[:n_rows]
@@ -764,6 +834,8 @@ class You(Scene):
                 line = f"{m['part']:<7}{hp[0]:+.2f} {hp[1]:.2f} {hp[2]:+.2f} {m['dE'] * 1000:5.1f}"
             else:
                 line = f"{m['part']:<7} {hp[1]:.2f} M {m['dE'] * 1000:5.1f} MEV"
+            # a line is written when its muon hits (and the ones that were there at the drop, with the log)
+            line = B.resolve(line, min(ah, since - 0.5 - 0.03 * k), 140.0, key=int(m["t"] * 1000) & 0xFFFF)
             f.text("r" if m["part"] == "HEART" or k == 0 else "w", x0, yl + 32 + k * 21, line, size=L.T_MICRO,
                    alpha=0.95 if k < 3 else 0.65)
 
@@ -786,49 +858,59 @@ class You(Scene):
             return
         x0, x1 = P.data
         y = Y_TOP + 44
-        hud.panel_header(f, x0, x1, y, "ENERGY LEFT IN YOU // MEV")
-        dep = self._energy(ages)
-        bw = x1 - x0 - 92 - 74
-        for k, p in enumerate(self.PARTS):
-            yy = y + 30 + k * 36
-            v = dep.get(p, 0.0)
-            f.text("r" if p == "HEART" and v > 1 else "w", x0 + 2, yy + 16, f"{p:<7}", size=L.T_SMALL, alpha=0.85)
-            f.rects("r" if p == "HEART" else "w", x0 + 92, yy + 2, x0 + 92 + min(bw, v * bw / 260.0), yy + 17, 0.95)
-            f.text("w", x1, yy + 16, f"{v:5.1f}", size=L.T_SMALL, alpha=0.8, anchor="rs")
+        since = t - BAR0                            # the two panels of the column are constructed at the drop
+        with f.build(since - 0.15, (x0 - 8, y - 24, x1 + 8, y + 30 + len(self.PARTS) * 36 + 2), flow="tb", wave=0.45,
+                     key=41):
+            hud.panel_header(f, x0, x1, y, "ENERGY LEFT IN YOU // MEV")
+            dep = self._energy(ages)
+            bw = x1 - x0 - 92 - 74
+            for k, p in enumerate(self.PARTS):
+                yy = y + 30 + k * 36
+                v = dep.get(p, 0.0)
+                f.text("r" if p == "HEART" and v > 1 else "w", x0 + 2, yy + 16, f"{p:<7}", size=L.T_SMALL, alpha=0.85)
+                f.rects("r" if p == "HEART" else "w", x0 + 92, yy + 2, x0 + 92 + min(bw, v * bw / 260.0), yy + 17, 0.95)
+                f.text("w", x1, yy + 16, f"{v:5.1f}", size=L.T_SMALL, alpha=0.8, anchor="rs")
         y2 = y + 30 + len(self.PARTS) * 36 + 56
-        hud.panel_header(f, x0, x1, y2, "MEANWHILE // EVERY SQUARE METRE")
         s = min(64.0, (x1 - x0 - 10) / (6 * 0.61))
-        f.text("w", x0, y2 + 34 + s, "167 /S", size=s, alpha=0.97)
-        f.text("w", x0 + 2, y2 + 68 + s, "MUONS, DAY AND NIGHT", size=L.T_SMALL, alpha=0.8)
-        f.text("w", x0 + 2, y2 + 94 + s, "1 /CM2 /MIN AT THE GROUND", size=L.T_MICRO, alpha=0.6)
-        f.text("w", x0 + 2, y2 + 116 + s, "ROOFS AND WALLS DO NOT STOP THEM", size=L.T_MICRO, alpha=0.6)
+        with f.build(since - 0.5, (x0 - 8, y2 - 24, x1 + 8, y2 + 124 + s), flow="tb", wave=0.3, key=42):
+            hud.panel_header(f, x0, x1, y2, "MEANWHILE // EVERY SQUARE METRE")
+            f.text("w", x0, y2 + 34 + s, "167 /S", size=s, alpha=0.97)
+            f.text("w", x0 + 2, y2 + 68 + s, "MUONS, DAY AND NIGHT", size=L.T_SMALL, alpha=0.8)
+            f.text("w", x0 + 2, y2 + 94 + s, "1 /CM2 /MIN AT THE GROUND", size=L.T_MICRO, alpha=0.6)
+            f.text("w", x0 + 2, y2 + 116 + s, "ROOFS AND WALLS DO NOT STOP THEM", size=L.T_MICRO, alpha=0.6)
 
     def _draw_strip(self, f, t):
         ta, tb = t - 5.5, t + 2.0
+        age = t - BAR0                              # built at the drop: band and rules, then the hits from the left
         x0, y0, x1, y1, yb = hud.strip_base(f, title="HIT_TIMELINE // WHITE = MUON  RED = ENERGY LEFT IN YOU",
-                                            ticks=(ta - BAR0, tb - BAR0, STEP, BAR))
+                                            ticks=(ta - BAR0, tb - BAR0, STEP, BAR), age=age)
         X = lambda tt: x0 + (np.asarray(tt) - ta) / (tb - ta) * (x1 - x0)
         placed = []
-        for m in self.mus:
-            tt = m["t_hit"] if m["t_hit"] is not None else m["t"]
-            if not (ta - 0.2 <= tt <= tb + 0.2) or tt < T_IN:
-                continue
-            xe = float(X(tt))
-            key = int(m["t"] * 1000)
-            n = 2 + int(hash01(key, 2) * 6)
-            bx = xe + np.arange(n) * 4.0
-            ok = (bx > x0) & (bx < x1 - 3)
-            hh = (8 + 10 * math.log1p(m["E"])) * (0.3 + 0.7 * hash01(key, np.arange(n)))
-            f.rects("w", bx[ok], y0 + 1, bx[ok] + 2, y0 + 1 + hh[ok], 0.95 if tt <= t else 0.4)
-            if m["part"]:
-                hb = (6 + 60 * m["dE"]) * (0.3 + 0.7 * hash01(key, np.arange(n) + 9))
-                f.rects("r", bx[ok], y1 - hb[ok], bx[ok] + 2, y1 - 1, 0.9 if tt <= t else 0.4)
-                if m["hero"] and x0 + 10 < xe < x1 - 110:
-                    row = 1 if any(abs(p - xe) < 120 for p in placed) else 0
-                    placed.append(xe)
-                    f.tag("r" if tt <= t else "w", xe, yb + 26 + row * 24, m["part"], size=L.T_MICRO, pad=4,
-                          alpha=1.0 if tt <= t else 0.5)
-        hud.strip_cursor(f, float(X(t)), y0, y1, f"T {sd.tc(t)}")
+        with f.build(age - 0.3, L.STRIP, flow="lr", wave=0.5, marks=False, bars="centre", key=43):
+            for m in self.mus:
+                tt = m["t_hit"] if m["t_hit"] is not None else m["t"]
+                if not (ta - 0.2 <= tt <= tb + 0.2) or tt < T_IN:
+                    continue
+                xe = float(X(tt))
+                key = int(m["t"] * 1000)
+                n = 2 + int(hash01(key, 2) * 6)
+                bx = xe + np.arange(n) * 4.0
+                ok = (bx > x0) & (bx < x1 - 3)
+                hh = (8 + 10 * math.log1p(m["E"])) * (0.3 + 0.7 * hash01(key, np.arange(n)))
+                f.rects("w", bx[ok], y0 + 1, bx[ok] + 2, y0 + 1 + hh[ok], 0.95 if tt <= t else 0.4)
+                if m["part"]:
+                    hb = (6 + 60 * m["dE"]) * (0.3 + 0.7 * hash01(key, np.arange(n) + 9))
+                    f.rects("r", bx[ok], y1 - hb[ok], bx[ok] + 2, y1 - 1, 0.9 if tt <= t else 0.4)
+                    if m["hero"] and x0 + 10 < xe < x1 - 110:
+                        row = 1 if any(abs(p - xe) < 120 for p in placed) else 0
+                        placed.append(xe)
+                        # the tag of a hit is made when it enters the strip on the right, and taken apart
+                        # before it leaves on the left (the strip scrolls at `v` px / s)
+                        v = (x1 - x0) / (tb - ta)
+                        B.tag(f, "r" if tt <= t else "w", xe, yb + 26 + row * 24, m["part"],
+                              B.io(min((x1 - 110 - xe) / v, age - 0.5), (xe - x0 - 10) / v, out=0.25, span=0.3),
+                              size=L.T_MICRO, pad=4, alpha=1.0 if tt <= t else 0.5, cps=60.0, key=key & 0xFFF)
+            hud.strip_cursor(f, float(X(t)), y0, y1, f"T {sd.tc(t)}")
 
     SCALES = {"bone": -2.0, "cells": -4.7, "dna": -8.7, "atoms": -9.5, "track": -15.0}
     MARKS = [(0.26, "YOU 1.8 M"), (-2.0, "RIB 1 CM"), (-4.7, "CELL 20 UM"), (-8.7, "DNA 2 NM"), (-9.5, "H2O 0.3 NM"),
@@ -847,25 +929,37 @@ class You(Scene):
     }
 
     def _draw_scale_strip(self, f, t, kind, u):
+        """The scale strip replaces the hit timeline when we leave the body (first micro view): it is built
+        there. At every cut its cursor runs down the powers of ten to the new field (its read-out counts with
+        it) and drops the blocks of the comb as it passes."""
+        age = t - CUTS[2]
         x0, y0, x1, y1, yb = hud.strip_base(f, title="SCALE // POWERS OF TEN ALONG THE TRACK // METRES",
-                                            ticks=(1.0, -19.0, 0.2, 1.0))
+                                            ticks=(1.0, -19.0, 0.2, 1.0), age=age)
         X = lambda e: x0 + (1.0 - np.asarray(e, np.float64)) / 20.0 * (x1 - x0)
-        for e in range(0, -19, -3):
-            f.text("w", float(X(e)) + 5, y0 + 32, f"1E{e:+03d}", size=L.T_MICRO, alpha=0.75)
-        cur = self.SCALES[kind] - 0.1 * u
-        for e, word in self.MARKS:
-            xv = float(X(e))
-            last = e <= -17.5
-            red = last or abs(e - self.SCALES[kind]) < 0.3
-            f.segments("w", [xv], [yb - 12], [xv], [yb + 12], 0.9)
-            f.tag("r" if red else "w", xv - (text_w(word, L.T_MICRO) + 8 if last else -4),
-                  yb + (48 if e in (-9.5, -15.0) else 26), word, size=L.T_MICRO, pad=3,
-                  alpha=1.0 if e >= cur - 0.3 or last else 0.45)
-        # every decade we went through leaves a block on the top comb
+        order = list(self.SCALES)
+        k = order.index(kind)
+        prev = 0.26 if k == 0 else self.SCALES[order[k - 1]] - 0.1          # where the cursor was before this cut
+        run = float(B.ease(B.lin(t - self._cut(t), 0.35 if k == 0 else 0.0, 0.85 if k == 0 else 0.5)))
+        cur = prev + (self.SCALES[kind] - 0.1 * u - prev) * run
+        with f.build(age - 0.3, L.STRIP, flow="lr", wave=0.5, marks=False, bars="down", key=44):
+            for e in range(0, -19, -3):
+                f.text("w", float(X(e)) + 5, y0 + 32, f"1E{e:+03d}", size=L.T_MICRO, alpha=0.75)
+            for e, word in self.MARKS:
+                xv = float(X(e))
+                last = e <= -17.5
+                red = last or abs(e - self.SCALES[kind]) < 0.3
+                f.segments("w", [xv], [yb - 12], [xv], [yb + 12], 0.9)
+                f.tag("r" if red else "w", xv - (text_w(word, L.T_MICRO) + 8 if last else -4),
+                      yb + (48 if e in (-9.5, -15.0) else 26), word, size=L.T_MICRO, pad=3,
+                      alpha=1.0 if e >= cur - 0.3 or last else 0.45)
+        # every decade we went through leaves a block on the top comb (dropped by the cursor as it passes)
         dec = np.arange(0.0, cur, -0.2)
         xd = X(dec)
-        f.rects("w", xd, y0 + 1, xd + 3, y0 + 14 + 16 * hash01(np.arange(len(dec)), 4), 0.9)
-        hud.strip_cursor(f, float(X(cur)), y0, y1, f"FIELD 1E{cur:+06.2f} M")
+        hd = (13 + 16 * hash01(np.arange(len(dec)), 4)) * B.spring((dec - cur) / 0.5 + 0.25)
+        f.rects("w", xd, y0 + 1, xd + 3, y0 + 1 + hd, 0.9)
+        xc = float(X(cur))
+        with f.build(age - 0.3, (xc - 4.0, y0 - 4.0, xc + 220.0, y1 + 4.0), flow="tb", wave=0.1, marks=False, key=38):
+            hud.strip_cursor(f, xc, y0, y1, f"FIELD 1E{cur:+06.2f} M")
 
     def _draw_bottom(self, f, t, ages):
         """Counts on every time scale, hit barcode (+ energy if there was no column for it): the free
@@ -873,45 +967,52 @@ class You(Scene):
         P = self.P
         y0, y1 = P.py0, P.py1
         panels = [p for p in P.panels if width(p) >= 200.0]
+        since = t - BAR0                            # the panels are constructed at the drop, one after the other
+        block = lambda k: f.build(since - 0.2 - 0.15 * k, (panels[k][0] - 8, y0 - 24, panels[k][1] + 8, y1 + 8), wave=0.4,
+                                  key=45 + k)
         if panels:
             cx0, cx1 = panels[0]
-            hud.panel_header(f, cx0, cx1, y0, "MUONS THROUGH YOU")
-            cols = [("PER SECOND", "63"), ("PER MINUTE", "3 780"), ("PER DAY", "5.4 M"), ("IN A LIFE", "159 BN")]
-            n = int(min(4, max(1, (cx1 - cx0) // 180)))
-            cols = {4: cols, 3: [cols[0], cols[1], cols[3]], 2: [cols[0], cols[3]], 1: [cols[0]]}[n]
-            cw = (cx1 - cx0) / n
-            fs = min(52.0, (cw - 12) / (6 * 0.61))
-            for k, (lab, val) in enumerate(cols):
-                xx = cx0 + k * cw
-                f.text("w", xx + 4, y0 + 36, lab, size=L.T_MICRO, alpha=0.75)
-                f.text("r" if lab == "IN A LIFE" else "w", xx + 2, y0 + 100, val, size=fs, alpha=0.97)
+            with block(0):
+                hud.panel_header(f, cx0, cx1, y0, "MUONS THROUGH YOU")
+                cols = [("PER SECOND", "63"), ("PER MINUTE", "3 780"), ("PER DAY", "5.4 M"), ("IN A LIFE", "159 BN")]
+                n = int(min(4, max(1, (cx1 - cx0) // 180)))
+                cols = {4: cols, 3: [cols[0], cols[1], cols[3]], 2: [cols[0], cols[3]], 1: [cols[0]]}[n]
+                cw = (cx1 - cx0) / n
+                fs = min(52.0, (cw - 12) / (6 * 0.61))
+                for k, (lab, val) in enumerate(cols):
+                    xx = cx0 + k * cw
+                    f.text("w", xx + 4, y0 + 36, lab, size=L.T_MICRO, alpha=0.75)
+                    f.text("r" if lab == "IN A LIFE" else "w", xx + 2, y0 + 100, val, size=fs, alpha=0.97)
         if len(panels) > 1:
             bx0, bx1 = panels[1]
-            hud.panel_header(f, bx0, bx1, y0, "HIT_BARCODE")
-            n = int(np.clip((bx1 - bx0) / 3.9, 40, 200))
-            dt = 3.0 / n
-            kf = math.floor((t - 3.0) / dt)
-            kk = kf + np.arange(n)
-            tt = kk * dt
-            lo = np.searchsorted(self.hit_t, tt)
-            hi = np.searchsorted(self.hit_t, tt + dt * 3)
-            dens = np.where(tt >= self.t_you - 0.1, 0.05 + 0.9 * np.tanh((hi - lo) / 1.5), 0.0)
-            hud.barcode_lanes(f, bx0, bx1, y0 + 12, y1, dens, kk, lanes=3, seed=7)
+            with block(1):
+                hud.panel_header(f, bx0, bx1, y0, "HIT_BARCODE")
+                n = int(np.clip((bx1 - bx0) / 3.9, 40, 200))
+                dt = 3.0 / n
+                kf = math.floor((t - 3.0) / dt)
+                kk = kf + np.arange(n)
+                tt = kk * dt
+                lo = np.searchsorted(self.hit_t, tt)
+                hi = np.searchsorted(self.hit_t, tt + dt * 3)
+                dens = np.where(tt >= self.t_you - 0.1, 0.05 + 0.9 * np.tanh((hi - lo) / 1.5), 0.0)
+                hud.barcode_lanes(f, bx0, bx1, y0 + 12, y1, dens, kk, lanes=3, seed=7)
         if len(panels) > 2 and P.data is not None:
-            self._draw_sequence(f, panels[2], t)
+            with block(2):
+                self._draw_sequence(f, panels[2], t)
         if len(panels) > 2 and P.data is None and width(panels[2]) >= 330:
             ex0, ex1 = panels[2]
-            hud.panel_header(f, ex0, ex1, y0, "ENERGY LEFT IN YOU // MEV")
-            dep = self._energy(ages)
-            ncol = 2 if ex1 - ex0 >= 620 else 1
-            cw = (ex1 - ex0) / ncol
-            for k, p in enumerate(self.PARTS[: 5 * ncol]):
-                c, r = k // 5, k % 5
-                xx, yy = ex0 + c * cw, y0 + 20 + r * 22
-                v = dep.get(p, 0.0)
-                f.text("r" if p == "HEART" and v > 1 else "w", xx + 2, yy + 14, f"{p:<7}", size=L.T_MICRO, alpha=0.85)
-                f.rects("r" if p == "HEART" else "w", xx + 78, yy + 3, xx + 78 + min(cw - 150, v * 1.2), yy + 14, 0.95)
-                f.text("w", xx + cw - 14, yy + 14, f"{v:5.1f}", size=L.T_MICRO, alpha=0.8, anchor="rs")
+            with block(2):
+                hud.panel_header(f, ex0, ex1, y0, "ENERGY LEFT IN YOU // MEV")
+                dep = self._energy(ages)
+                ncol = 2 if ex1 - ex0 >= 620 else 1
+                cw = (ex1 - ex0) / ncol
+                for k, p in enumerate(self.PARTS[: 5 * ncol]):
+                    c, r = k // 5, k % 5
+                    xx, yy = ex0 + c * cw, y0 + 20 + r * 22
+                    v = dep.get(p, 0.0)
+                    f.text("r" if p == "HEART" and v > 1 else "w", xx + 2, yy + 14, f"{p:<7}", size=L.T_MICRO, alpha=0.85)
+                    f.rects("r" if p == "HEART" else "w", xx + 78, yy + 3, xx + 78 + min(cw - 150, v * 1.2), yy + 14, 0.95)
+                    f.text("w", xx + cw - 14, yy + 14, f"{v:5.1f}", size=L.T_MICRO, alpha=0.8, anchor="rs")
 
     SEQ = ["PERSP", "ORTHO", "THRX", "BONE", "CELL", "DNA", "H2O", "TRACK"]
 
@@ -958,7 +1059,8 @@ class You(Scene):
         return self.P.fx + math.sin(self.TILT) * s, Y_MID + math.cos(self.TILT) * s
 
     def _track(self, f, t, tick=None, gain=1.0, width_=2.2, layer="r"):
-        """The red line across the view, its ticks, and a pulse running down it on every beat."""
+        """The red line across the view, its ticks, and a pulse running down it on every beat. The line is the
+        muon (the image); its ticks are a scale: they are thrown out from the centre when the view comes on."""
         x0, y0 = self._track_pt(-560.0)
         x1, y1 = self._track_pt(560.0)
         f.segments(layer, [x0], [y0], [x1], [y1], 1.0 * gain, width=width_)
@@ -967,20 +1069,24 @@ class You(Scene):
             px, py = self._track_pt(s)
             nx, ny = math.cos(self.TILT), -math.sin(self.TILT)
             ln = np.where(np.arange(len(s)) % 5 == 0, 11.0, 6.0)
-            f.segments(layer, px - nx * ln, py - ny * ln, px + nx * ln, py + ny * ln, 0.85 * gain)
+            with f.build(t - self._cut(t), (self.P.fx - 300.0, Y_MID - 560.0, self.P.fx + 300.0, Y_MID + 560.0), flow="out",
+                         wave=0.4, marks=False, key=56):
+                f.segments(layer, px - nx * ln, py - ny * ln, px + nx * ln, py + ny * ln, 0.85 * gain)
         beat = BAR / 4
         ph = ((t - BAR0) % beat) / beat
         px, py = self._track_pt(-560.0 + 1120.0 * ph)
         f.dots("r", [px], [py], 5.0, 1.8 * gain)
         f.dots("w", [px], [py], 1.8, 1.2 * gain)
 
-    def _scale_bar(self, f, ppu, length, label):
-        """Bottom left of the focus bay (the track leaves it on the right)."""
+    def _scale_bar(self, f, ppu, length, label, since):
+        """Bottom left of the focus bay (the track leaves it on the right). Drawn when the view comes on."""
         x0, y = self.P.fcol[0] + 12 + text_w(label, L.T_SMALL) + 14, Y_BOT - 40
         x1 = x0 + length * ppu
-        f.occlude(self.P.fcol[0] + 4, y - 22, x1 + 14, y + 22)
-        f.segments("w", [x0, x0, x1], [y, y - 8, y - 8], [x1, x0, x1], [y, y + 8, y + 8], 0.95, width=L.LW)
-        f.text("w", x0 - 12, y + 6, label, size=L.T_SMALL, alpha=0.9, anchor="rs")
+        box = (self.P.fcol[0] + 4, y - 22, x1 + 14, y + 22)
+        plate(f, box, since - 0.2, flow="lr")
+        with f.build(since - 0.2, box, flow="lr", wave=0.15, marks=False, key=55):
+            f.segments("w", [x0, x0, x1], [y, y - 8, y - 8], [x1, x0, x1], [y, y + 8, y + 8], 0.95, width=L.LW)
+            f.text("w", x0 - 12, y + 6, label, size=L.T_SMALL, alpha=0.9, anchor="rs")
 
     def _lattice(self, f):
         """Faint measuring lattice over every micro view. Called once the field is drawn: it also lays the
@@ -992,7 +1098,9 @@ class You(Scene):
         self.P.plates(f)
 
     def _readouts(self, f, entries, y=None):
-        """Read-out list in the side column, on ONE outlined plate: entries = [(title, lines, red, age)]."""
+        """Read-out list in the side column, on ONE outlined plate: entries = [(title, lines, red, age)].
+        Constructed: the plate is traced when the first entry comes, then every entry is made at its own age
+        (tag pushed out, lines decoded)."""
         P = self.P
         if P.side is None:
             return
@@ -1002,13 +1110,17 @@ class You(Scene):
         cpl = int((x1 - x0 - 34) / (lsize * 0.61))
         hs = [size * 1.5 + len(ls) * lsize * 1.5 + 28 for _, ls, _, _ in entries]
         w = min(x1 - x0, max(text_w(ln[:cpl], lsize) for _, ls, _, _ in entries for ln in ls) + 44)
-        f.occlude(x0, y - 46, x0 + w, y - 46 + sum(hs) + 14)
-        f.rect("w", x0, y - 46, x0 + w, y - 46 + sum(hs) + 14, 0.4)
-        for (title, lines, red, age), h in zip(entries, hs):
-            f.tag("r" if red else "w", x0 + 18, y, title, size=size, pad=5)
-            for k, ln in enumerate(lines):
-                f.text("w", x0 + 14, y + size * 0.5 + (k + 1) * lsize * 1.5,
-                       hud.typed(ln[:cpl], max(age, 0.0), cps=160, delay=0.05 + 0.05 * k), size=lsize, alpha=0.9)
+        box = (x0, y - 46, x0 + w, y - 46 + sum(hs) + 14)
+        first = max(a for _, _, _, a in entries)
+        plate(f, box, first)
+        with f.build(first, box, flow="tb", wave=0.25, key=53):
+            f.rect("w", *box, 0.4)
+        for n, ((title, lines, red, age), h) in enumerate(zip(entries, hs)):
+            with f.build(age, (x0 + 8, y - size - 6, x0 + w, y + h - size - 12), flow="tb", wave=0.15, marks=False,
+                         key=60 + n):
+                f.tag("r" if red else "w", x0 + 18, y, title, size=size, pad=5)
+                for k, ln in enumerate(lines):
+                    f.text("w", x0 + 14, y + size * 0.5 + (k + 1) * lsize * 1.5, ln[:cpl], size=lsize, alpha=0.9)
             y += h
 
     # -- bone ------------------------------------------------------------------------
@@ -1090,20 +1202,22 @@ class You(Scene):
         # tissues on the track + their energy loss: rows at the height of each tissue, in the side column
         if P.side is not None:
             sx0, sx1 = P.side
-            f.tag("w", sx0 + 6, Y_TOP + 36, "ON THE TRACK // RHO G/CM3 // DE/DX MEV/CM", size=L.T_MICRO, pad=3)
             bw = max(60.0, sx1 - sx0 - 330.0)
-            for y_, name, rho, de in ((-1.18, "FAT", "0.95", 1.8), (-0.5, "MUSCLE", "1.05", 2.1), (ey, "BONE", "1.92", 3.4),
-                                      (1.3, "LUNG", "0.26", 0.5)):
-                yy = float(Y(y_))
-                if not (Y_TOP + 70 < yy < Y_BOT - 30):
-                    continue
-                f.occlude(sx0 - 10, yy - 24, sx0 + 266 + de / 3.4 * bw, yy + 24)
-                f.segments("w", [sx0 - 8], [yy], [sx0 + 10], [yy], 0.9, width=L.LW)
-                f.tag("r" if name == "BONE" else "w", sx0 + 20, yy + 8, name, size=L.T_LABEL, pad=4)
-                f.text("w", sx0 + 130, yy + 7, rho, size=L.T_SMALL, alpha=0.8)
-                f.rects("r" if name == "BONE" else "w", sx0 + 200, yy - 7, sx0 + 200 + de / 3.4 * bw, yy + 7, 0.95)
-                f.text("w", sx0 + 210 + de / 3.4 * bw, yy + 7, f"{de:.1f}", size=L.T_SMALL, alpha=0.85)
-        self._scale_bar(f, ppu, 1.0, "1 CM")
+            with f.build(age - 0.15, (sx0 - 10, Y_TOP + 16, sx1, Y_BOT), flow="tb", wave=0.45, marks=False, key=50) as blk:
+                f.tag("w", sx0 + 6, Y_TOP + 36, "ON THE TRACK // RHO G/CM3 // DE/DX MEV/CM", size=L.T_MICRO, pad=3)
+                for y_, name, rho, de in ((-1.18, "FAT", "0.95", 1.8), (-0.5, "MUSCLE", "1.05", 2.1),
+                                          (ey, "BONE", "1.92", 3.4), (1.3, "LUNG", "0.26", 0.5)):
+                    yy = float(Y(y_))
+                    if not (Y_TOP + 70 < yy < Y_BOT - 30):
+                        continue
+                    # its plate opens from the tick on the left when the wave gets to this row
+                    plate(f, (sx0 - 10, yy - 24, sx0 + 266 + de / 3.4 * bw, yy + 24), float(blk.la(sx0, yy)), 0.2, "lr")
+                    f.segments("w", [sx0 - 8], [yy], [sx0 + 10], [yy], 0.9, width=L.LW)
+                    f.tag("r" if name == "BONE" else "w", sx0 + 20, yy + 8, name, size=L.T_LABEL, pad=4)
+                    f.text("w", sx0 + 130, yy + 7, rho, size=L.T_SMALL, alpha=0.8)
+                    f.rects("r" if name == "BONE" else "w", sx0 + 200, yy - 7, sx0 + 200 + de / 3.4 * bw, yy + 7, 0.95)
+                    f.text("w", sx0 + 210 + de / 3.4 * bw, yy + 7, f"{de:.1f}", size=L.T_SMALL, alpha=0.85)
+        self._scale_bar(f, ppu, 1.0, "1 CM", t - self._cut(t))
 
     # -- cells -----------------------------------------------------------------------
     def _micro_cells(self, f, t, u):
@@ -1179,21 +1293,22 @@ class You(Scene):
             sx0, sx1 = P.side
             yt = Y_TOP + 96
             n_show = min(len(order), 22)
-            f.occlude(sx0, yt - 58, sx1, yt + n_show * 17 + 136)
-            f.rect("w", sx0, yt - 58, sx1, yt + n_show * 17 + 136, 0.4)
-            sx0, sx1 = sx0 + 16, sx1 - 16
-            f.tag("w", sx0 + 6, yt - 26, fit_text(["ION PAIRS PER CELL // IN THE ORDER IT MET THEM",
-                                                   "ION PAIRS PER CELL"], sx1 - sx0, L.T_MICRO), size=L.T_MICRO, pad=3)
-            bw = sx1 - sx0 - 60
-            for rank, n_ in enumerate(order[:n_show]):
-                v = path[n_] * 6.6
-                f.rects("r", sx0 + 44, yt + rank * 17, sx0 + 44 + min(bw, v * bw / 190.0), yt + rank * 17 + 10, 0.95)
-                f.text("w", sx0 + 34, yt + rank * 17 + 11, f"{rank + 1:02d}", size=L.T_MICRO, alpha=0.7, anchor="rs")
-            yn = yt + n_show * 17 + 44
-            for k, ln in enumerate([f"{len(order)} CELLS ON THE TRACK", f"{sum(path.values()) * 6.6:.0f} ION PAIRS",
-                                    "NO CELL NOTICED"]):
-                f.text("r" if k == 2 else "w", sx0 + 6, yn + k * 32, ln, size=L.T_TAG, alpha=0.92)
-        self._scale_bar(f, ppu, 50.0, "50 UM")
+            plate(f, (sx0, yt - 58, sx1, yt + n_show * 17 + 136), t - CUTS[3] - 0.15, 0.4)
+            with f.build(t - CUTS[3] - 0.15, (sx0, yt - 58, sx1, yt + n_show * 17 + 136), flow="tb", wave=0.5, key=51):
+                f.rect("w", sx0, yt - 58, sx1, yt + n_show * 17 + 136, 0.4)
+                sx0, sx1 = sx0 + 16, sx1 - 16
+                f.tag("w", sx0 + 6, yt - 26, fit_text(["ION PAIRS PER CELL // IN THE ORDER IT MET THEM",
+                                                       "ION PAIRS PER CELL"], sx1 - sx0, L.T_MICRO), size=L.T_MICRO, pad=3)
+                bw = sx1 - sx0 - 60
+                for rank, n_ in enumerate(order[:n_show]):
+                    v = path[n_] * 6.6
+                    f.rects("r", sx0 + 44, yt + rank * 17, sx0 + 44 + min(bw, v * bw / 190.0), yt + rank * 17 + 10, 0.95)
+                    f.text("w", sx0 + 34, yt + rank * 17 + 11, f"{rank + 1:02d}", size=L.T_MICRO, alpha=0.7, anchor="rs")
+                yn = yt + n_show * 17 + 44
+                for k, ln in enumerate([f"{len(order)} CELLS ON THE TRACK", f"{sum(path.values()) * 6.6:.0f} ION PAIRS",
+                                        "NO CELL NOTICED"]):
+                    f.text("r" if k == 2 else "w", sx0 + 6, yn + k * 32, ln, size=L.T_TAG, alpha=0.92)
+        self._scale_bar(f, ppu, 50.0, "50 UM", t - self._cut(t))
 
     # -- dna ---------------------------------------------------------------------------
     def _micro_dna(self, f, t, u):
@@ -1252,7 +1367,7 @@ class You(Scene):
             ("ION PAIR", ["ONE ELECTRON SET FREE // ~33 EV", "THE NEXT ONE: 148 NM FURTHER"], True, age - 0.3),
             ("MU-", ["PASSES BETWEEN THE TURNS", "MEAN FREE PATH ~150 NM", "THE HELIX DOES NOT NOTICE"], True,
              age - 0.6)])
-        self._scale_bar(f, ppu, 10.0, "10 NM")
+        self._scale_bar(f, ppu, 10.0, "10 NM", t - self._cut(t))
 
     # -- atoms -------------------------------------------------------------------------
     def _micro_atoms(self, f, t, u):
@@ -1308,7 +1423,7 @@ class You(Scene):
              tage - 0.3),
             ("MU-", ["NO SIZE EVER MEASURED", "< 1E-18 M // POINT-LIKE", "SMALLER THAN ANYTHING IT MEETS"], True,
              tage - 0.6)])
-        self._scale_bar(f, ppu, 1.0, "1 NM")
+        self._scale_bar(f, ppu, 1.0, "1 NM", t - self._cut(t))
 
     # -- the track alone -----------------------------------------------------------------
     def _micro_track(self, f, t, u):
@@ -1329,18 +1444,21 @@ class You(Scene):
         callout(f, x, y, "TRACK 0001", [], col=P.fcol, prefer=1, dy=-40.0, red=True, age=age)
         fs = float(np.clip((cw - 50) / (32 * 0.61), 15.0, 28.0))
         xl, yl = col[0] + 22, Y_TOP + 150
-        f.occlude(col[0], yl - 2.6 * fs, col[1], yl + (len(lines) + 5.4) * fs * 1.45)
-        f.rect("w", col[0], yl - 2.6 * fs, col[1], yl + (len(lines) + 5.4) * fs * 1.45, 0.4)
-        f.tag("r", xl, yl - fs * 1.2, "MEASURED ON THE TRACK", size=L.T_MICRO, pad=3)
-        for k, ln in enumerate(lines):
-            f.text("w", xl, yl + 8 + k * fs * 1.45, hud.typed(ln, age, cps=120, delay=0.07 * k), size=fs, alpha=0.92)
-        yn = yl + 8 + len(lines) * fs * 1.45 + 0.9 * fs
-        f.text("w", xl, yn, "NAME", size=fs, alpha=0.92)
-        blink = int(t * 4) % 2 == 0
-        f.rects("r", xl + 11 * fs * 0.61, yn - fs * 1.2, xl + 11 * fs * 0.61 + fs * (11 if blink else 10.2),
-                yn + fs * 0.3, 1.0)
-        note = ["DID NOT STOP //", "CONTINUES ~8 M INTO THE", "GROUND BELOW YOU"] if cw < 660 else \
-               ["DID NOT STOP //", "CONTINUES ~8 M INTO THE GROUND BELOW YOU"]
-        for k, ln in enumerate(note):
-            f.text("r", xl, yn + 2.6 * fs + k * 30, hud.typed(ln, age, cps=80, delay=0.5 + 0.2 * k), size=L.T_LABEL,
-                   alpha=0.9)
+        box = (col[0], yl - 2.6 * fs, col[1], yl + (len(lines) + 5.4) * fs * 1.45)
+        # the list of what was measured: its plate opens and is traced, its lines are decoded from the top
+        # (figures spinning); the name stays an open red block
+        plate(f, box, age - 0.1, 0.45)
+        with f.build(age - 0.1, box, flow="tb", wave=0.6, key=52):
+            f.rect("w", *box, 0.4)
+            f.tag("r", xl, yl - fs * 1.2, "MEASURED ON THE TRACK", size=L.T_MICRO, pad=3)
+            for k, ln in enumerate(lines):
+                f.text("w", xl, yl + 8 + k * fs * 1.45, ln, size=fs, alpha=0.92)
+            yn = yl + 8 + len(lines) * fs * 1.45 + 0.9 * fs
+            f.text("w", xl, yn, "NAME", size=fs, alpha=0.92)
+            blink = int(t * 4) % 2 == 0
+            f.rects("r", xl + 11 * fs * 0.61, yn - fs * 1.2, xl + 11 * fs * 0.61 + fs * (11 if blink else 10.2),
+                    yn + fs * 0.3, 1.0)
+            note = ["DID NOT STOP //", "CONTINUES ~8 M INTO THE", "GROUND BELOW YOU"] if cw < 660 else \
+                   ["DID NOT STOP //", "CONTINUES ~8 M INTO THE GROUND BELOW YOU"]
+            for k, ln in enumerate(note):
+                f.text("r", xl, yn + 2.6 * fs + k * 30, ln, size=L.T_LABEL, alpha=0.9)

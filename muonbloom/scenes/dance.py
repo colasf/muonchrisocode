@@ -22,6 +22,14 @@ Nothing has a fixed x: the mapping km <-> wall, the bays of the two elevations, 
 (an edge column of ctx.cols, on the side away from the shower when both are wide enough), the bottom
 panels (ctx.slots) and every label are derived from the tower rectangles; text that a tower would hide
 is moved or dropped (see the helpers in shower.py).
+
+Nothing that shows data fades in or pops in. The furniture (strip, particle column, bottom panels) is
+CONSTRUCTED during the pickup (05:22.0 - 05:22.83) and is there, complete, on the drop; it is not rebuilt
+afterwards. What a bar brings - its view tag, its rules, its front line, its plan marks, its comb - is
+constructed on the cut of that bar (short builds: a bar lasts 1.92 s); what a phrase brings - the title of
+the strip, the id lines, the shower number, the aim mark - on the downbeat of the phrase. The particle
+column is made again when a phrase moves it to the other side. Labels on events (first interaction, track
+ends, strikes) are made on the event and taken apart, never faded.
 """
 from __future__ import annotations
 
@@ -30,8 +38,10 @@ import zlib
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
+from .. import showdata as sd
 from ..engine import Camera, OrthoCamera, hash01
 from ..show import Scene
 from .shower import (K_RED, VIEW_Y0, VIEW_Y1, Stage, World, _free, altitude_rules, bottom_panels, chord, draw_info,
@@ -44,6 +54,7 @@ PHRASE = 4 * BAR
 N_PHRASES = 12                  # scene 6: 05:22.83 - 06:54.99
 N_BUILD = 17                    # ... and 5 more phrases for scene 7 (glitch), to 07:33
 T_END = T0 + N_PHRASES * PHRASE
+T_SCENE = next((s[2] for s in sd.SECTIONS if s[4] == "dance"), T0 - 0.826)     # 05:22.0: the pickup starts
 AIMS = [0, 1, None, 2, 1, 0, None, 2, 1, 0, 2, 1, None, 1, 0, 2, 1]        # detector index (L, C, R) or a bay
 BURSTS = {3, 5, 7, 8, 9, 10, 11, 13, 14, 15}                               # phrases closed by a barcode burst
 KINDS = ("persp", "side", "top", "front")
@@ -225,27 +236,11 @@ class Dance(Scene):
         return kind, [(cam, view)]
 
     # ------------------------------------------------------------------ draw
-    def draw(self, f, t, ctx, gain=1.0, hud_alpha=1.0, flash=True, bursts=True, hide=(), extended=False):
-        """`gain` scales the world, `hud_alpha` the HUD; `hide` = shower indices not drawn and `extended` =
-        keep the grid running after phrase 12 (both used by GLITCH)."""
-        w = self.world
-        if not extended:
-            t = min(t, T_END - 1e-3)
-        p, bar, u, rp = grid(t)
-        e = w.events[p]
-        a = t - e["t0"]
-        age, alive, env = w.state(t)
-        for k in hide:
-            alive[k] = False
+    def _bar(self, ctx, p, bar, u, t):
+        """(stage, kind of view, [(camera, clip)], info layout) of bar `bar` of phrase p."""
+        e = self.world.events[p]
         st = self.stage(p)
-        view = st.view
         kind, cams = self.cameras(p, bar, u, t, st)
-        kick = min(1.5, ctx.cues.kick(t))
-        level = min(1.0, p / (N_PHRASES - 1))
-        pick = t < T0                                     # the pickup before the drop: almost nothing yet
-        if pick:
-            gain, hud_alpha = gain * 0.45, hud_alpha * 0.4
-        burst = self.burst(p, rp) if bursts else None
         aim = AIMS[p]
         on = L.NAMES[L.ORDER[aim]] if aim is not None else None
         z_top, z_full = self.zones(ctx, st, p, kind)
@@ -257,6 +252,55 @@ class Dance(Scene):
                           [(f"AIR_SHOWER {p + 1:02d}/{N_PHRASES:02d}", 0.85), (f"E0 {e['E0'] * 3.2:.2f}E15 EV", 0.6),
                            (f"ZENITH {e['zen']:04.1f} DEG", 0.6), (f"ON {on}" if on else "BETWEEN DETECTORS", 0.6)],
                           z_top, z_full)
+        return st, kind, cams, lay
+
+    def _col_age(self, p, t):
+        """Seconds since the particle column appeared where it is: at the start of the scene, or on the
+        downbeat of the phrase that moved it to the other side of the wall."""
+        col = self.stage(p).col
+        q = p
+        while q > 0 and self.stage(q - 1).col == col:
+            q -= 1
+        return t - (T0 + q * PHRASE) if q > 0 else t - T_SCENE - 0.1
+
+    def draw(self, f, t, ctx, gain=1.0, hud_alpha=1.0, flash=True, bursts=True, hide=(), extended=False, hud_out=None):
+        """`gain` scales the world, `hud_alpha` dims the HUD (a steady level: nothing fades in or out through
+        it); `hide` = shower indices not drawn and `extended` = keep the grid running after phrase 12; `hud_out`
+        = show time from which the instrument is taken apart, piece by piece (all three used by GLITCH)."""
+        w = self.world
+        if not extended:
+            t = min(t, T_END - 1e-3)
+        p, bar, u, rp = grid(t)
+        e = w.events[p]
+        a = t - e["t0"]
+        age, alive, env = w.state(t)
+        for k in hide:
+            alive[k] = False
+        st, kind, cams, lay = self._bar(ctx, p, bar, u, t)
+        view = st.view
+        kick = min(1.5, ctx.cues.kick(t))
+        level = min(1.0, p / (N_PHRASES - 1))
+        pick = t < T0                                     # the pickup before the drop: almost nothing yet
+        if pick:
+            gain, hud_alpha = gain * 0.45, hud_alpha * 0.4
+        burst = self.burst(p, rp) if bursts else None
+
+        # -- when things are made (seconds since ...); nothing here fades in ---------------------------------
+        def leave(age_, k=0):                             # GLITCH: taken apart in turn, 0.5 s apart
+            return age_ if hud_out is None else B.io(age_, hud_out + 0.5 * k + 0.45 - t, out=0.45)
+
+        age0 = t - T_SCENE                                # ... the scene started: the furniture
+        first = pick or (p == 0 and bar == 0)
+        age_bar = age0 - 0.05 if first else rp - bar * BAR         # ... the cut of this bar: what the view brings
+        age_id = age0 - 0.15 if p == 0 else rp            # ... the shower changed: the id lines
+        if bar > 0 and self._bar(ctx, p, bar - 1, 1.0, t)[3]["b"] != lay["b"]:
+            age_id = age_bar                              # (this view had to move them: made again where they are)
+        age_bar, age_id = leave(age_bar), leave(age_id)
+        age_s = leave(age0, 2)
+        # level of what is written on the picture (rules, front line, marks, comb): it follows the world, except
+        # when the world is being faded out (GLITCH) - data do not fade, they are taken apart (hud_out)
+        ov = gain if hud_out is None else (0.45 if pick else 1.0)
+
         if kind == "front" and lay["a"] is not None:          # room for the legend of the comb, under the view tag
             for k, txt in enumerate(LEGEND):
                 box = tbox(lay["a"], lay["y0"] + 92, txt.format(n=0), L.T_SMALL)
@@ -274,17 +318,17 @@ class Dance(Scene):
                     f.set_clip(*view)
                     w.draw_ground(f, cam, kind, view, gain=gain * (1.0 + 0.45 * kick) * (2.6 if kind == "persp" else 1.0))
                     if kind in ("side", "front"):
-                        altitude_rules(f, ctx, st, cam, float(e["G"][0]), float(e["G"][2]), lay, gain=gain,
-                                       front=w.front(p, a) if kind == "side" else 0.0)
+                        altitude_rules(f, ctx, st, cam, float(e["G"][0]), float(e["G"][2]), lay, gain=ov,
+                                       front=w.front(p, a) if kind == "side" else 0.0, age=age_bar, wave=0.22)
                 f.set_clip(*clip)
                 g = gain * (1.0 + 0.16 * kick) * (1.7 if kind == "front" else 1.0)
                 w.draw_cascades(f, cam, age, alive, env, gain=g)
                 w.draw_hits(f, cam, age, alive, gain=gain)
                 w.draw_splash(f, cam, age, gain=gain)
-                self._overlay(f, ctx, st, lay, cam, kind, p, a, clip, j, gain)
+                self._overlay(f, ctx, st, lay, cam, kind, p, a, clip, j, ov, age_bar)
                 boxes = w.draw_interaction(f, cam, age, clip, ctx, tags=(j == 0), avoid=lay["boxes"])
                 if kind == "front":
-                    self._lateral(f, ctx, st, lay, cam, p, a, u, gain)
+                    self._lateral(f, ctx, st, lay, cam, p, a, u, ov, age_bar)
                 if kind in ("top", "front"):
                     self._crossings(f, cam, age, alive)
                 w.draw_labels(f, cam, age, alive, clip, avoid=avoid + boxes,
@@ -293,14 +337,15 @@ class Dance(Scene):
             if kind != "top":
                 self._strikes(f, t, ctx, st)
         if not pick and gain > 0.3:
-            self._aim_mark(f, ctx, st, p, t)
+            self._aim_mark(f, ctx, st, p, t, leave(rp))
         f.set_clip()
-        w.draw_column(f, p, a, st.col, alpha=hud_alpha)
+        w.draw_column(f, p, a, st.col, alpha=hud_alpha, age=leave(self._col_age(p, t), 1))
         w.draw_strip(f, p, a, label=f"LONGITUDINAL_PROFILE // SHOWER {p + 1:02d}/{N_PHRASES:02d} // 125.0 BPM",
-                     alpha=hud_alpha, pulse=kick)
-        self._panels(f, t, p, bar, a, ctx, kick, hud_alpha)
+                     alpha=hud_alpha, pulse=kick, age=age_s, title_age=min(age0 - 0.2 if p == 0 else rp, age_s))
+        self._panels(f, t, p, bar, a, ctx, kick, hud_alpha,
+                     (leave(age0 - 0.2, 3), leave(age0 - 0.3, 4), leave(age0 - 0.4, 5)), rp)
         if hud_alpha > 0.05 and burst is None:
-            draw_info(f, ctx, lay, alpha=hud_alpha)
+            draw_info(f, ctx, lay, alpha=hud_alpha, age=age_bar, age_id=age_id)
         inv = flash and t >= T0 and 0.0 <= rp < 0.05
         return {"invert": bool(inv), "invert_rect": view}
 
@@ -315,7 +360,10 @@ class Dance(Scene):
             return float(min(1.0, (rp - start) / (n * BEAT)))
         return None
 
-    def _overlay(self, f, ctx, st, lay, cam, kind, p, a, clip, j, gain):
+    def _overlay(self, f, ctx, st, lay, cam, kind, p, a, clip, j, gain, age=None):
+        """What a view writes on its picture: front line and its tag, names of the elevations, marks of the
+        plan, ground tag. age = seconds since the bar started (None = built): it is constructed on the cut -
+        lines drawn by a pen, rings traced, tags and labels made - and never fades in."""
         w = self.world
         view = st.view
         e = w.events[p]
@@ -327,36 +375,41 @@ class Dance(Scene):
                 _, py, _, _ = cam.project(P)
                 y = float(py[0])
                 f.set_clip(*view)
-                f.segments("r", [view[0]], [y], [view[2]], [y], 0.9 * gain, width=L.LW)
-                put_right(f, ctx, st, lay, "r", y - 9, f"FRONT {front:06.3f} KM", size=L.T_LABEL, pad=5, alpha=al)
+                with f.build(age, (view[0], y - 34.0, view[2], y + 8.0), flow="lr", wave=0.2, line=0.25, marks=False,
+                             key=54):
+                    f.segments("r", [view[0]], [y], [view[2]], [y], 0.9 * gain, width=L.LW)
+                    put_right(f, ctx, st, lay, "r", y - 9, f"FRONT {front:06.3f} KM", size=L.T_LABEL, pad=5, alpha=al)
                 f.set_clip(*clip)
             ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
-            f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5 * gain)
-            if self.elev(st)[1] is not None:
-                put_text(f, ctx, "w", float(ax[0]) + 14, min(float(ay[0]) - 12, view[3] - 30),
-                         "ELEVATION X" if j == 0 else "ELEVATION Z", size=L.T_SMALL, alpha=0.7 * al)
+            with f.build(age, clip, flow="bt", wave=0.15, marks=False, key=55 + j):
+                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5 * gain)
+                if self.elev(st)[1] is not None:
+                    put_text(f, ctx, "w", float(ax[0]) + 14, min(float(ay[0]) - 12, view[3] - 30),
+                             "ELEVATION X" if j == 0 else "ELEVATION Z", size=L.T_SMALL, alpha=0.7 * al)
         elif kind == "top":
             gx, gy, _, _ = cam.project(e["G"][None].astype(np.float32))
             X, Y = float(gx[0]), float(gy[0])
-            big = 1e5
-            f.segments("r", [X - big, X], [Y, Y - big], [X + big, X], [Y, Y + big], 0.45 * gain)
-            sc = cam.scale
-            f.rings("w", [X] * 4, [Y] * 4, [sc * r for r in (1, 2, 4, 8)], 0.25 * gain)
-            for r in (1, 2, 4, 8):
-                if view[0] + 30 < X + sc * r + 7 < st.tx1 - 60:
-                    put_text(f, ctx, "w", X + sc * r + 7, Y - 8, f"{r} KM", size=L.T_SMALL, alpha=0.6 * al)
-            aim = AIMS[p]
-            xr = X + 64 if aim is None else max(X + 64, ctx.towers[L.ORDER[aim]].x1 + 22)
-            xl = X - 64 if aim is None else min(X - 64, ctx.towers[L.ORDER[aim]].x0 - 22)
-            txt = f"CORE {float(e['G'][0]):+07.3f} {float(e['G'][2]):+07.3f}"
-            for x, anchor in ((xr, "ls"), (xl, "rs")):
-                if _free(ctx, st, tbox(x, Y + 150, txt, L.T_SMALL, anchor, 4), (), lay["boxes"], pad=4.0):
-                    f.tag("r", x, Y + 150, txt, size=L.T_SMALL, pad=4, alpha=al, anchor=anchor)
-                    break
+            with f.build(age, view, flow="out", origin=(X, Y), wave=0.25, marks=False, key=57):
+                f.segments("r", [X, X, X, X], [Y, Y, Y, Y], [view[0], view[2], X, X], [Y, Y, view[1], view[3]],
+                           0.45 * gain)
+                sc = cam.scale
+                f.rings("w", [X] * 4, [Y] * 4, [sc * r for r in (1, 2, 4, 8)], 0.25 * gain)
+                for r in (1, 2, 4, 8):
+                    if view[0] + 30 < X + sc * r + 7 < st.tx1 - 60:
+                        put_text(f, ctx, "w", X + sc * r + 7, Y - 8, f"{r} KM", size=L.T_SMALL, alpha=0.6 * al)
+                aim = AIMS[p]
+                xr = X + 64 if aim is None else max(X + 64, ctx.towers[L.ORDER[aim]].x1 + 22)
+                xl = X - 64 if aim is None else min(X - 64, ctx.towers[L.ORDER[aim]].x0 - 22)
+                txt = f"CORE {float(e['G'][0]):+07.3f} {float(e['G'][2]):+07.3f}"
+                for x, anchor in ((xr, "ls"), (xl, "rs")):
+                    if _free(ctx, st, tbox(x, Y + 150, txt, L.T_SMALL, anchor, 4), (), lay["boxes"], pad=4.0):
+                        f.tag("r", x, Y + 150, txt, size=L.T_SMALL, pad=4, alpha=al, anchor=anchor)
+                        break
         elif kind == "front":
             ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
-            f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1]], 0.4 * gain)
-            put_right(f, ctx, st, lay, "w", Y_GROUND - 9, "GROUND 00 KM", size=L.T_SMALL, pad=4, alpha=al)
+            with f.build(age, view, flow="bt", wave=0.15, marks=False, key=58):
+                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1]], 0.4 * gain)
+                put_right(f, ctx, st, lay, "w", Y_GROUND - 9, "GROUND 00 KM", size=L.T_SMALL, pad=4, alpha=al)
 
     def _arrivals(self, k):
         """Everything of shower k that reached the ground: (x in km, age at arrival, is a muon)."""
@@ -369,10 +422,12 @@ class Dance(Scene):
                             K_RED[w.SK[s0:s1][m]] == 1)
         return self._arr[k]
 
-    def _lateral(self, f, ctx, st, lay, cam, p, a, u, gain):
+    def _lateral(self, f, ctx, st, lay, cam, p, a, u, gain, age=None):
         """Bar 4: what reached the ground, as a comb standing on the ground line (count per 125 m, muons in
         red), read by a scan line that crosses the wall in one bar. When the shower fell on a tower, the comb
-        opens around it (the two halves start at the edges of the tower) so its peak is not hidden."""
+        opens around it (the two halves start at the edges of the tower) so its peak is not hidden.
+        age = seconds since the bar started: the comb rises in a wave that leaves the core (each tooth
+        overshoots, then settles), the scan line is drawn and its read-out is made - nothing fades in."""
         view = st.view
         gx, gt, mu = self._arrivals(p)
         S = cam.scale
@@ -386,26 +441,31 @@ class Dance(Scene):
         c_all, _ = np.histogram(gx[m] - core, edges)
         c_mu, _ = np.histogram(gx[m & mu] - core, edges)
         norm = max(int(c_all.max()), 1)
-        grow = 1.0 - (1.0 - min(1.0, u / 0.2)) ** 3
+        mid = edges[:-1] + bw / 2
+        far = np.abs(mid) / max(float(np.abs(mid).max()), 1e-6)
+        grow = 1.0 if age is None else B.spring((age - 0.3 * far) / 0.3)
         h = 330.0 * np.sqrt(c_all / norm) * grow
         hm = 330.0 * np.sqrt(c_mu / norm) * grow
-        mid = edges[:-1] + bw / 2
         xs = cam.cx + (core + edges[:-1]) * S + np.sign(mid) * shift
         w_ = bw * S
-        k = c_all > 0
+        k = (c_all > 0) & (h > 0.5)
         f.rects("w", xs[k] + 2, Y_GROUND - h[k], xs[k] + w_ - 3, Y_GROUND - hm[k] - 1, 0.62 * gain)
-        k = c_mu > 0
+        k = (c_mu > 0) & (hm > 0.5)
         f.rects("r", xs[k] + 2, Y_GROUND - hm[k], xs[k] + w_ - 3, Y_GROUND - 1, 0.95 * gain)
         xc = view[0] + u * (view[2] - view[0])
         i = int(np.argmin(np.abs(xs + w_ / 2 - xc)))
-        f.segments("r", [xc], [Y_GROUND - 372], [xc], [Y_GROUND], 0.9 * gain, width=L.LW)
+        with f.build(age, (xc - 6.0, Y_GROUND - 376.0, xc + 6.0, Y_GROUND + 2.0), flow="tb", wave=0.05, line=0.2,
+                     marks=False, key=59):
+            f.segments("r", [xc], [Y_GROUND - 372], [xc], [Y_GROUND], 0.9 * gain, width=L.LW)
         anchor = "ls" if xc < view[2] - 440 else "rs"
-        put_tag(f, ctx, "r", xc + (8 if anchor == "ls" else -8), Y_GROUND - 356,
-                f"R {mid[i]:+06.2f} KM  N {int(c_all[i]):04d}  MU {int(c_mu[i]):03d}", size=L.T_SMALL, pad=4,
-                anchor=anchor, alpha=min(1.0, gain))
+        txt = f"R {mid[i]:+06.2f} KM  N {int(c_all[i]):04d}  MU {int(c_mu[i]):03d}"
+        tx = xc + (8 if anchor == "ls" else -8)
+        with f.build(age, tbox(tx, Y_GROUND - 356, txt, L.T_SMALL, anchor, 4), wave=0.05, marks=False, key=60):
+            put_tag(f, ctx, "r", tx, Y_GROUND - 356, txt, size=L.T_SMALL, pad=4, anchor=anchor, alpha=min(1.0, gain))
         if "legend" in lay:                   # its legend, under the view tag
-            f.text("w", lay["a"], lay["y0"] + 92, LEGEND[lay["legend"]].format(n=int(m.sum())), size=L.T_SMALL,
-                   alpha=0.75 * min(1.0, gain))
+            txt = LEGEND[lay["legend"]].format(n=int(m.sum()))
+            with f.build(age, tbox(lay["a"], lay["y0"] + 92, txt, L.T_SMALL), wave=0.1, marks=False, key=61):
+                f.text("w", lay["a"], lay["y0"] + 92, txt, size=L.T_SMALL, alpha=0.75 * min(1.0, gain))
 
     def _crossings(self, f, cam, age, alive):
         """Muons of the showers (and of the beat rain) going through the head of a tower: a white tick."""
@@ -424,7 +484,8 @@ class Dance(Scene):
 
     def _strikes(self, f, t, ctx, st):
         """Every live hit of a detector is a muon: its track, straight down into the head of the tower (the
-        latest one carries its energy, on the side of the track where there is room)."""
+        latest one carries its energy, on the side of the track where there is room: a tag made on the hit
+        and taken apart half a second later)."""
         view = st.view
         for key in L.ORDER:
             if not ctx.det.online(key, t):
@@ -446,11 +507,13 @@ class Dance(Scene):
                     xm, ym = x1 + 0.3 * (x0 - x1), y1 - 0.3 * (y1 - y0)
                     for x, anchor in ((xm + 14, "ls"), (xm - 14, "rs")):
                         if _free(ctx, st, tbox(x, ym, txt, L.T_MICRO, anchor, 3), pad=4.0):
-                            f.tag("r", x, ym, txt, size=L.T_MICRO, pad=3, alpha=min(1.0, 2.5 * fade), anchor=anchor)
+                            B.tag(f, "r", x, ym, txt, B.io(a, 0.5 - a, out=0.12, span=0.14), size=L.T_MICRO, pad=3,
+                                  anchor=anchor, cps=120.0, key=int(th * 1000) % 9973)
                             break
 
-    def _aim_mark(self, f, ctx, st, p, t):
-        """Red corner brackets around the head of the tower the current shower falls on."""
+    def _aim_mark(self, f, ctx, st, p, t, age=None):
+        """Red corner brackets around the head of the tower the current shower falls on. age = seconds since
+        the downbeat of the phrase: the brackets are thrown out from the head and its label is decoded."""
         aim = AIMS[p]
         if aim is None:
             return
@@ -458,36 +521,43 @@ class Dance(Scene):
         cx, cy = tw.cx, tw.top + 0.5 * tw.det_h
         hw, hh, c = tw.w / 2 + 26, tw.det_h / 2 + 26, 22.0
         blink = 0.7 + 0.3 * math.sin(2 * math.pi * (t - T0) / BEAT)
-        for sx in (-1, 1):
-            for sy in (-1, 1):
-                x, y = cx + sx * hw, cy + sy * hh
-                f.segments("r", [x, x], [y, y], [x - sx * c, x], [y, y - sy * c], 0.95 * blink, width=L.LW_BOLD)
-        for x, anchor, label in ((cx + hw + 12, "ls", f"SHOWER {p + 1:02d} >>"),
-                                 (cx - hw - 12, "rs", f"<< SHOWER {p + 1:02d}")):
-            if _free(ctx, st, tbox(x, cy + hh + 6, label, L.T_SMALL, anchor), pad=4.0):
-                f.text("r", x, cy + hh + 6, label, size=L.T_SMALL, alpha=0.95, anchor=anchor)
-                break
+        with f.build(age, (cx - hw - 220.0, cy - hh - 8.0, cx + hw + 220.0, cy + hh + 30.0), flow="out", origin=(cx, cy),
+                     wave=0.15, marks=False, key=62):
+            for sx in (-1, 1):
+                for sy in (-1, 1):
+                    x, y = cx + sx * hw, cy + sy * hh
+                    f.segments("r", [x, x], [y, y], [x - sx * c, x], [y, y - sy * c], 0.95 * blink, width=L.LW_BOLD)
+            for x, anchor, label in ((cx + hw + 12, "ls", f"SHOWER {p + 1:02d} >>"),
+                                     (cx - hw - 12, "rs", f"<< SHOWER {p + 1:02d}")):
+                if _free(ctx, st, tbox(x, cy + hh + 6, label, L.T_SMALL, anchor), pad=4.0):
+                    f.text("r", x, cy + hh + 6, label, size=L.T_SMALL, alpha=0.95, anchor=anchor)
+                    break
 
-    def _panels(self, f, t, p, bar, a, ctx, kick, alpha):
-        """Bottom band: the blocks flow into the free panels between the scopes and the towers."""
+    def _panels(self, f, t, p, bar, a, ctx, kick, alpha, ages=(None, None, None), rp=9.0):
+        """Bottom band: the blocks flow into the free panels between the scopes and the towers.
+        ages = seconds since (the counters, the barcode, the shower panel) appeared: each is constructed, none
+        fades in; rp = seconds since the downbeat of the phrase (the shower number spins, then locks)."""
         if alpha <= 0.01:
             return
         w = self.world
         y0, y1 = ctx.slots["y0"], ctx.slots["y1"]
         place = flow(bottom_panels(ctx), PANEL_BLOCKS)
         if "count" in place:
-            w.draw_counters(f, p, a, place["count"][0], place["count"][1], y0, alpha=alpha)
+            w.draw_counters(f, p, a, place["count"][0], place["count"][1], y0, alpha=alpha, age=ages[0])
         if "bar" in place:
-            w.draw_barcode(f, t, place["bar"][0], place["bar"][1], y0, y1, boost=0.1 * kick, alpha=alpha)
+            w.draw_barcode(f, t, place["bar"][0], place["bar"][1], y0, y1, boost=0.1 * kick, alpha=alpha, age=ages[1])
         if "shower" in place:
             x0, x1 = place["shower"]
-            hud.panel_header(f, x0, x1, y0, "SHOWER", alpha=alpha)
-            f.text("r" if p >= N_PHRASES else "w", x0, y0 + 74, f"{p + 1:02d}/{N_PHRASES:02d}", size=44, alpha=alpha)
-            bw = (x1 - x0 - 3 * 6) / 4
-            for k in range(4):                    # the four bars of the phrase
-                bx = x0 + k * (bw + 6)
-                f.rect("w", bx, y0 + 92, bx + bw, y0 + 114, 0.7 * alpha)
-                if k == bar:
-                    f.rects("r", bx + 3, y0 + 95, bx + bw - 3, y0 + 111, 0.95 * alpha)
-                elif k < bar:
-                    f.rects("w", bx + 3, y0 + 95, bx + bw - 3, y0 + 111, 0.55 * alpha)
+            with f.build(ages[2], (x0 - 8, y0 - 24, x1 + 8, y1 + 8), wave=0.25, key=63):
+                hud.panel_header(f, x0, x1, y0, "SHOWER", alpha=alpha)
+                num = f"{p + 1:02d}"                   # the number of the shower spins on the downbeat, then locks
+                f.text("r" if p >= N_PHRASES else "w", x0, y0 + 74,
+                       (B.roll(num, rp, 0.35, key=p) if p > 0 else num) + f"/{N_PHRASES:02d}", size=44, alpha=alpha)
+                bw = (x1 - x0 - 3 * 6) / 4
+                for k in range(4):                    # the four bars of the phrase
+                    bx = x0 + k * (bw + 6)
+                    f.rect("w", bx, y0 + 92, bx + bw, y0 + 114, 0.7 * alpha)
+                    if k == bar:
+                        f.rects("r", bx + 3, y0 + 95, bx + bw - 3, y0 + 111, 0.95 * alpha)
+                    elif k < bar:
+                        f.rects("w", bx + 3, y0 + 95, bx + bw - 3, y0 + 111, 0.55 * alpha)

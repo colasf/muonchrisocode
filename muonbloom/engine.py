@@ -11,6 +11,10 @@ All coordinates are given in *design space* (2978 x 1400, the output that covers
 the wall); the frame rescales them when rendering smaller previews. A 2D view
 transform (zoom around a point) and a screen clip rectangle can be set for
 "zoom" cuts.
+
+`with frame.build(age, rect):` makes whatever is drawn inside construct itself
+(lines drawn by a pen, marks thrown out, bars growing, text decoded ...) instead
+of simply appearing - see build.py. Data never fades in.
 """
 from __future__ import annotations
 
@@ -20,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from . import build as _B
 
 DESIGN_W, DESIGN_H = 2978, 1400
 LAYERS = ("w", "r")
@@ -171,6 +177,7 @@ class Frame:
         self._occl = []
         self.post = []              # callables(base, frame) applied to the light layers before the bloom
         self.invert_rects = []      # design-space rects shown inverted (white field, black lines)
+        self._bld = None            # the block being constructed (see build()), or build.MUTE: draw nothing
         self.set_view()
         self.set_clip()
 
@@ -206,6 +213,20 @@ class Frame:
     def _in_clip(self, px, py):
         c = self.clip
         return (px >= c[0]) & (px <= c[2]) & (py >= c[1]) & (py <= c[3])
+
+    # -- construction ----------------------------------------------------------
+    def build(self, age, rect, **kw):
+        """Context manager: what is drawn inside constructs itself instead of simply appearing.
+            with f.build(t - t_appears, (x0, y0, x1, y1)):
+                ...the usual drawing calls...
+        age < 0: nothing is drawn (it is not there yet); None or large: drawn as usual. See build.Block for
+        the options (wave, flow, line, cps, bars, marks, commit, key) and build.io for blocks that leave."""
+        return _B.Block(self, age, rect, **kw)
+
+    @property
+    def muted(self):
+        """True inside a block that is not there yet (nothing is drawn)."""
+        return self._bld is _B.MUTE
 
     # -- low level ---------------------------------------------------------
     def points(self, layer, x, y, w):
@@ -246,6 +267,8 @@ class Frame:
 
     def scale_rect(self, layer, x0, y0, x1, y1, factor):
         """Multiply already-flushed light inside a rect (design space) - used to 'occlude'."""
+        if self._bld is _B.MUTE:
+            return
         self.flush()
         a = self.acc[layer].reshape(self.H, self.W)
         X0, X1 = int(self.tx(x0)), int(math.ceil(float(self.tx(x1))))
@@ -254,6 +277,8 @@ class Frame:
 
     def occlude(self, x0, y0, x1, y1):
         """Black out everything drawn so far under a rect (design space); later drawing stays."""
+        if self._bld is _B.MUTE:
+            return
         self.flush()
         X0, Y0 = max(int(self.tx(x0)), 0), max(int(self.ty(y0)), 0)
         X1, Y1 = int(math.ceil(float(self.tx(x1)))), int(math.ceil(float(self.ty(y1))))
@@ -264,7 +289,21 @@ class Frame:
 
     # -- primitives (design space) ------------------------------------------
     def segments(self, layer, x0, y0, x1, y1, i0, i1=None, width=1.0, spacing=0.5):
-        """Anti-aliased line segments. i0/i1 = intensity (per px of length) at each end."""
+        """Anti-aliased line segments. i0/i1 = intensity (per px of length) at each end.
+        Inside a block being built: long lines are drawn by a pen (bright head), short marks are thrown out."""
+        b = self._bld
+        if b is None:
+            return self._segments(layer, x0, y0, x1, y1, i0, i1, width, spacing)
+        if b is _B.MUTE:
+            return
+        out = b.segs(x0, y0, x1, y1, i0, i1, width)
+        if out is None:
+            return
+        self._segments(layer, *out[:7], spacing)
+        if len(out[7]):
+            self._dots("w", out[7], out[8], 3.0, 1.7)
+
+    def _segments(self, layer, x0, y0, x1, y1, i0, i1=None, width=1.0, spacing=0.5):
         s = self.s
         x0 = np.atleast_1d(self.tx(x0))
         y0 = np.atleast_1d(self.ty(y0))
@@ -335,9 +374,29 @@ class Frame:
         ia = np.broadcast_to(np.asarray(i, np.float32), (len(xs),))
         if i_end is not None:
             ia = np.linspace(i, i_end, len(xs)).astype(np.float32)
-        self.segments(layer, xs[:-1], ys[:-1], xs[1:], ys[1:], ia[:-1], ia[1:], width=width)
+        b = self._bld
+        if b is not None:                       # being built: the line is traced from its first point
+            if b is _B.MUTE:
+                return
+            p = b.prog(xs[0], ys[0], 1.25)
+            if p <= 0.0:
+                return
+            if p < 1.0:
+                cum = np.r_[0.0, np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))]
+                target = p * cum[-1]
+                k = int(np.clip(np.searchsorted(cum, target, side="right"), 1, len(xs) - 1))
+                fr = float((target - cum[k - 1]) / max(cum[k] - cum[k - 1], 1e-6))
+                xe, ye = xs[k - 1] + (xs[k] - xs[k - 1]) * fr, ys[k - 1] + (ys[k] - ys[k - 1]) * fr
+                xs, ys = np.r_[xs[:k], xe].astype(np.float32), np.r_[ys[:k], ye].astype(np.float32)
+                ia = np.r_[ia[:k], ia[k - 1] + (ia[k] - ia[k - 1]) * fr].astype(np.float32)
+                self._dots("w", [xe], [ye], 3.0, 1.7)
+        self._segments(layer, xs[:-1], ys[:-1], xs[1:], ys[1:], ia[:-1], ia[1:], width=width)
 
     def rect(self, layer, x0, y0, x1, y1, i, width=1.0):
+        if self._bld is not None:               # being built: two pens leave the top-left corner
+            self.polyline(layer, [x0, x1, x1], [y0, y0, y1], i, width=width)
+            self.polyline(layer, [x0, x0, x1], [y0, y1, y1], i, width=width)
+            return
         self.polyline(layer, [x0, x1, x1, x0], [y0, y0, y1, y1], i, width=width, closed=True)
 
     def crosses(self, layer, cx, cy, half, i, width=1.0):
@@ -348,6 +407,16 @@ class Frame:
 
     def dots(self, layer, x, y, r, i):
         """Filled anti-aliased discs; r in design px (scalar or array), i = brightness."""
+        b = self._bld
+        if b is None:
+            return self._dots(layer, x, y, r, i)
+        if b is _B.MUTE:
+            return
+        out = b.pops(x, y, r, i)
+        if out is not None:
+            self._dots(layer, *out)
+
+    def _dots(self, layer, x, y, r, i):
         s = self.s
         x = np.atleast_1d(self.tx(x))
         y = np.atleast_1d(self.ty(y))
@@ -369,6 +438,13 @@ class Frame:
 
     def pixels(self, layer, x, y, i, snap=False):
         """Single-pixel points (crisp dot lattices, point clouds)."""
+        b = self._bld
+        if b is not None:
+            if b is _B.MUTE:
+                return
+            x, y = np.atleast_1d(np.asarray(x, np.float32)), np.atleast_1d(np.asarray(y, np.float32))
+            m = b.there(x, y)
+            x, y, i = x[m], y[m], (np.broadcast_to(np.asarray(i, np.float32), x.shape)[m] if np.ndim(i) else i)
         x = np.atleast_1d(self.tx(x))
         y = np.atleast_1d(self.ty(y))
         if snap:
@@ -380,6 +456,16 @@ class Frame:
 
     def rects(self, layer, x0, y0, x1, y1, i):
         """Filled, pixel-snapped rectangles (barcodes, data blocks). Clipped to the clip rect."""
+        b = self._bld
+        if b is None:
+            return self._rects(layer, x0, y0, x1, y1, i)
+        if b is _B.MUTE:
+            return
+        out = b.grow(x0, y0, x1, y1, i)
+        if out is not None:
+            self._rects(layer, *out)
+
+    def _rects(self, layer, x0, y0, x1, y1, i):
         c = self.clip
         X0 = np.clip(np.round(np.atleast_1d(self.tx(x0))), max(c[0], 0), min(c[2], self.W))
         X1 = np.clip(np.round(np.atleast_1d(self.tx(x1))), max(c[0], 0), min(c[2], self.W))
@@ -407,16 +493,28 @@ class Frame:
         radius = np.broadcast_to(np.asarray(radius, np.float32), cx.shape)
         i = np.broadcast_to(np.asarray(i, np.float32), cx.shape)
         segs = np.maximum(24, (radius * self.s * self.vz * 0.5).astype(int))
-        xs0, ys0, xs1, ys1, ii = [], [], [], [], []
+        b = self._bld
+        if b is _B.MUTE:
+            return
+        xs0, ys0, xs1, ys1, ii, hx, hy = [], [], [], [], [], [], []
         for c_x, c_y, rr, nn, iv in zip(cx, cy, radius, segs, i):
             a = np.linspace(0, 2 * np.pi, nn + 1)
+            if b is not None:                   # being built: the circle is traced from its top
+                p = b.prog(c_x, c_y, 1.25)
+                if p <= 0.0:
+                    continue
+                if p < 1.0:
+                    a = -0.5 * np.pi + np.linspace(0, 2 * np.pi * p, max(2, int(nn * p) + 1))
+                    hx.append(c_x + rr * np.cos(a[-1])); hy.append(c_y + rr * np.sin(a[-1]))
             px = c_x + rr * np.cos(a)
             py = c_y + rr * np.sin(a)
             xs0.append(px[:-1]); ys0.append(py[:-1]); xs1.append(px[1:]); ys1.append(py[1:])
-            ii.append(np.full(nn, iv, np.float32))
+            ii.append(np.full(len(a) - 1, iv, np.float32))
         if xs0:
-            self.segments(layer, np.concatenate(xs0), np.concatenate(ys0), np.concatenate(xs1), np.concatenate(ys1),
-                          np.concatenate(ii), width=width, spacing=spacing)
+            self._segments(layer, np.concatenate(xs0), np.concatenate(ys0), np.concatenate(xs1), np.concatenate(ys1),
+                           np.concatenate(ii), width=width, spacing=spacing)
+        if hx and len(hx) <= _B.Block.HEADS:
+            self._dots("w", hx, hy, 3.0, 1.7)
 
     # -- text ----------------------------------------------------------------
     def _text_layer(self, layer):
@@ -426,6 +524,18 @@ class Frame:
         return self._txt[layer], self._txt_draw[layer]
 
     def text(self, layer, x, y, s, size=22, alpha=1.0, anchor="ls", bold=False):
+        """Text (Space Mono). Inside a block being built it is decoded out of noise."""
+        b = self._bld
+        if b is not None and s:
+            if b is _B.MUTE:
+                return
+            w = text_w(s, size)
+            s = b.text(s, x - (0.0 if anchor[0] == "l" else w if anchor[0] == "r" else 0.5 * w), y, anchor[0] != "l")
+            if not s.strip():
+                return
+        self._text(layer, x, y, s, size, alpha, anchor, bold)
+
+    def _text(self, layer, x, y, s, size=22, alpha=1.0, anchor="ls", bold=False):
         if alpha <= 0.004 or not s:
             return
         X, Y = float(self.tx(x)), float(self.ty(y))
@@ -441,6 +551,8 @@ class Frame:
 
     def dim(self, x0, y0, x1, y1, factor):
         """Multiply everything drawn so far (both layers and their text) inside a rect (design space)."""
+        if self._bld is _B.MUTE:
+            return
         self.flush()
         X0, Y0 = max(int(self.tx(x0)), 0), max(int(self.ty(y0)), 0)
         X1, Y1 = max(int(math.ceil(float(self.tx(x1)))), 0), max(int(math.ceil(float(self.ty(y1)))), 0)
@@ -455,7 +567,20 @@ class Frame:
         """Inverted label: solid box with the text cut out (Ikeda-style data tag).
         ref = the string that sizes the box (default: `s`): a tag being written keeps its final box while its
         letters change (`s` must then have the length of `ref`, or be left-anchored); wipe < 1 draws only
-        that fraction of the box, from the left. Returns the box (design px on screen), or None."""
+        that fraction of the box, from the left. Returns the box (design px on screen), or None.
+        Inside a block being built the box is pushed out and the letters are decoded behind its edge."""
+        b = self._bld
+        if b is not None and s and ref is None:
+            if b is _B.MUTE:
+                return None
+            w = text_w(s, size)
+            txt, wp = b.tag(s, x - (0.0 if anchor[0] == "l" else w if anchor[0] == "r" else 0.5 * w), y)
+            return self._tag(layer, x, y, txt, size, alpha, anchor, pad, bold, ref=s, wipe=min(wp, wipe))
+        if b is _B.MUTE:
+            return None
+        return self._tag(layer, x, y, s, size, alpha, anchor, pad, bold, ref, wipe)
+
+    def _tag(self, layer, x, y, s, size=18, alpha=1.0, anchor="ls", pad=5, bold=False, ref=None, wipe=1.0):
         if alpha <= 0.004 or not (s or ref) or wipe <= 0.0:
             return None
         X, Y = float(self.tx(x)), float(self.ty(y))
@@ -477,7 +602,12 @@ class Frame:
 
     def text_vertical(self, layer, x, y, s, size=22, alpha=1.0):
         """Text rotated 90 deg counter-clockwise, (x, y) = bottom-left corner of the rotated text."""
-        if alpha <= 0.004:
+        b = self._bld
+        if b is not None and s:
+            if b is _B.MUTE:
+                return
+            s = b.text(s, x, y, False)
+        if alpha <= 0.004 or not s.strip():
             return
         img, _ = self._text_layer(layer)
         sc = self.s

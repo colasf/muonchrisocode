@@ -11,6 +11,24 @@ choreography made of the same five moves, so the whole instrument switches on in
 
 Everything is a pure function of the AGE of the element (seconds since its build started): no state, so it
 ports to the realtime app as it is. A large age means 'built': every helper then draws the finished thing.
+
+Two ways to use it:
+
+  1. `with f.build(age, rect):` - the general way (engine.Frame.build -> Block below). Whatever is drawn
+     inside the block is constructed automatically, primitive by primitive, in a wave that crosses the rect:
+         long lines            are drawn by a pen with a bright head
+         short marks           (ticks, crosses, dashes) are thrown out long and fall back to their length
+         polylines, outlines, rings   are traced
+         filled rects          (bars, blocks, rules) grow from their base; the small ones overshoot
+         dots                  pop
+         text                  is decoded out of noise, its figures spin before they lock
+         tags                  are pushed out, their letters cut behind the edge
+     with registration brackets around the rect while it is being made. A negative age draws nothing at all
+     (the block is not there yet); a large age, or None, draws it as usual. io() gives the age of a block
+     that also leaves: it is then taken apart the way it was made.
+
+  2. The helpers of this module (pen, tag, open_box, decode, roll ...) - for a bespoke choreography, as in
+     the first seconds of the show.
 """
 from __future__ import annotations
 
@@ -56,6 +74,20 @@ def cascade(age, order, t0, wave, dur):
 def frame_no(age):
     """Index of the 1/30 s step the element is in (what the scramble and the blinks are keyed on)."""
     return max(int(math.floor(age * RATE + 1e-6)), 0)
+
+
+def io(age, left=None, out=0.35, span=1.3):
+    """Age to give Frame.build for an element that also LEAVES: `age` = seconds since it appeared, `left` =
+    seconds before it must be gone. While it is there the age simply runs; during its last `out` seconds it
+    runs backwards from `span` to 0, so the element is taken apart the way it was made, only faster.
+    Negative once it is gone: the block then draws nothing."""
+    if left is None:
+        return age
+    if left <= 0.0:
+        return -1.0
+    if left < out:
+        return min(age, span * left / out)
+    return age
 
 
 def rnd(n, key, frame):
@@ -151,6 +183,16 @@ def flash(f, rect, age, at, frames=2):
         f.invert_rects.append(tuple(rect))
 
 
+def tag_state(s, a, cps=60.0, wipe=0.1, lead=6, key=0):
+    """(letters, fraction of the box) of a tag `a` seconds after it started to be made: the box is `lead`
+    letters ahead of the writing, and takes at least `wipe` seconds."""
+    w = min(1.0, a / wipe, (a * cps + lead) / len(s))
+    txt = decode(s, a, cps=cps, key=key, pad=True)
+    if w < 1.0:                                          # only the letters that fit in the part of the box that is there
+        txt = txt[: int(w * len(s))].ljust(len(s))
+    return (txt if txt.strip() else ""), w
+
+
 def tag(f, layer, x, y, s, age, t0=0.0, size=18, pad=5, bold=False, anchor="ls", alpha=1.0, wipe=0.1, cps=60.0,
         key=0, commit=False, lead=6):
     """An inverted tag being made: its solid box is pushed out from the left, `lead` letters ahead of the
@@ -160,14 +202,8 @@ def tag(f, layer, x, y, s, age, t0=0.0, size=18, pad=5, bold=False, anchor="ls",
     a = age - t0
     if a < 0.0 or not s:
         return None
-    w = min(1.0, a / wipe, (a * cps + lead) / len(s))
-    if w >= 1.0:
-        txt = decode(s, a, cps=cps, key=key, pad=True)
-    else:
-        n = int(w * len(s))                              # letters that fit in the part of the box that is there
-        txt = decode(s, a, cps=cps, key=key, pad=True)[:n].ljust(len(s))
-    box = f.tag(layer, x, y, txt if txt.strip() else "", size=size, alpha=alpha, anchor=anchor, pad=pad, bold=bold,
-                ref=s, wipe=w)
+    txt, w = tag_state(s, a, cps=cps, wipe=wipe, lead=lead, key=key)
+    box = f._tag(layer, x, y, txt, size=size, alpha=alpha, anchor=anchor, pad=pad, bold=bold, ref=s, wipe=w)
     if commit:
         flash(f, box, a, (len(s) + 4) / cps)
     return box
@@ -184,9 +220,9 @@ def pen(f, layer, x0, y0, x1, y1, p, inten=0.9, width=L.LW, head=3.2):
     if p <= 0.0:
         return x0, y0
     xe, ye = x0 + (x1 - x0) * p, y0 + (y1 - y0) * p
-    f.segments(layer, [x0], [y0], [xe], [ye], inten, width=width)
+    f._segments(layer, [x0], [y0], [xe], [ye], inten, width=width)
     if p < 1.0 and head > 0.0:
-        f.dots("w", [xe], [ye], head, 1.7)
+        f._dots("w", [xe], [ye], head, 1.7)
     return xe, ye
 
 
@@ -201,7 +237,7 @@ def brackets(f, rect, size=14.0, inten=0.9, layer="w", width=L.LW):
             ay += [cy, cy]
             bx += [cx + sx * s, cx]
             by += [cy, cy + sy * s]
-    f.segments(layer, ax, ay, bx, by, inten, width=width)
+    f._segments(layer, ax, ay, bx, by, inten, width=width)
 
 
 def open_box(f, rect, age, t_line=(0.0, 0.2), t_open=(0.18, 0.42), from_right=False, inten=0.95, width=L.LW_FRAME):
@@ -216,11 +252,178 @@ def open_box(f, rect, age, t_line=(0.0, 0.2), t_open=(0.18, 0.42), from_right=Fa
         return False
     xa, xb = (x1 - (x1 - x0) * pl, x1) if from_right else (x0, x0 + (x1 - x0) * pl)
     if po <= 0.0:
-        f.segments("w", [xa], [yc], [xb], [yc], inten, width=width)
+        f._segments("w", [xa], [yc], [xb], [yc], inten, width=width)
         if pl < 1.0:
-            f.dots("w", [xa if from_right else xb], [yc], 3.6, 1.7)
+            f._dots("w", [xa if from_right else xb], [yc], 3.6, 1.7)
         return False
     hh = 0.5 * (y1 - y0) * po
     f.occlude(xa, yc - hh, xb, yc + hh)
-    f.rect("w", xa, yc - hh, xb, yc + hh, inten, width=width)
+    f._segments("w", [xa, xb, xb, xa], [yc - hh, yc - hh, yc + hh, yc + hh], [xb, xb, xa, xa],
+                [yc - hh, yc + hh, yc + hh, yc - hh], inten, width=width)
     return po >= 1.0
+
+
+# ----------------------------------------------------------------------------
+# the general way: a block of HUD that constructs itself (Frame.build)
+# ----------------------------------------------------------------------------
+
+MUTE = object()                               # Frame._bld while a block is not there yet: nothing is drawn
+
+
+class Block:
+    """A piece of the HUD being constructed. Made by Frame.build(age, rect, ...) and used as a context
+    manager; the primitives of the frame ask it what to draw while it is active.
+
+        age      seconds since the block started to build (< 0: not there, nothing is drawn; None or large:
+                 built, everything is drawn as usual). Use io() for a block that also leaves.
+        rect     the block on the wall (design px): the wave crosses it, the registration marks frame it
+        wave     seconds the wave takes to cross the rect; flow = its direction: 'diag' (from the top left),
+                 'lr', 'rl', 'tb', 'bt', or 'out' (away from `origin`, default the centre of the rect)
+        line     seconds a pen takes to draw a line once the wave has reached its start
+        cps      characters decoded per second
+        bars     'auto' (tall rects rise from their bottom, wide ones grow from their left), 'down' (tall
+                 rects hang from their top), 'centre' (every rect opens from its middle line)
+        marks    registration brackets around the rect while it is being made
+        commit   a two-frame inverted flash of the rect when the block is complete
+    """
+    LONG = 24.0                 # px: a longer line is drawn by a pen, a shorter one is a mark thrown out
+    HOLD = 1.7                  # s after the wave has crossed: the block is built, the frame draws as usual
+    HEADS = 6                   # more pens than this at work in one call: no heads (it is a grid, a texture)
+
+    def __init__(self, f, age, rect, key=0, wave=0.4, flow="diag", line=0.3, cps=110.0, marks=True, origin=None,
+                 bars="auto", commit=False):
+        self.f, self.age = f, age
+        self.rect = tuple(float(v) for v in rect)
+        self.key, self.wave, self.flow, self.line, self.cps = int(key), float(wave), flow, float(line), float(cps)
+        self.marks, self.bars, self.commit = marks, bars, commit
+        x0, y0, x1, y1 = self.rect
+        self.origin = origin if origin is not None else (0.5 * (x0 + x1), 0.5 * (y0 + y1))
+        self.rmax = max(max(math.hypot(x - self.origin[0], y - self.origin[1]) for x in (x0, x1) for y in (y0, y1)), 1.0)
+        self.prev = None
+
+    # -- context -----------------------------------------------------------------
+    def __enter__(self):
+        f = self.f
+        self.prev = f._bld
+        if self.age is None or self.prev is MUTE:        # no age: as the frame is; inside a muted block: muted
+            return self
+        if self.age < 0.0:
+            f._bld = MUTE
+        elif self.age < self.wave + self.HOLD:
+            f._bld = self
+            if self.marks and marks_on(self.age, self.wave + 0.45):
+                brackets(f, self.rect)
+            if self.commit:
+                flash(f, self.rect, self.age, self.wave + 0.85)
+        else:
+            f._bld = None
+        return self
+
+    def __exit__(self, *exc):
+        self.f._bld = self.prev
+        return False
+
+    # -- when the wave reaches a point ---------------------------------------------
+    def la(self, x, y):
+        """Local age at (x, y): the wave gets there `wave * u` seconds after the block started."""
+        x0, y0, x1, y1 = self.rect
+        w, h = max(x1 - x0, 1.0), max(y1 - y0, 1.0)
+        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+        fl = self.flow
+        if fl == "lr":
+            u = (x - x0) / w
+        elif fl == "rl":
+            u = (x1 - x) / w
+        elif fl == "tb":
+            u = (y - y0) / h
+        elif fl == "bt":
+            u = (y1 - y) / h
+        elif fl == "out":
+            u = np.hypot(x - self.origin[0], y - self.origin[1]) / self.rmax
+        else:
+            u = 0.65 * (x - x0) / w + 0.35 * (y - y0) / h
+        return self.age - self.wave * np.clip(u, 0.0, 1.0)
+
+    def prog(self, x, y, k=1.0):
+        """Progress 0..1 of a pen that starts at (x, y)."""
+        return float(ease(self.la(x, y) / (self.line * k)))
+
+    # -- primitives ------------------------------------------------------------------
+    def segs(self, x0, y0, x1, y1, i0, i1, width):
+        """Segments being made: (x0, y0, x1, y1, i0, i1, width, head x, head y), or None if none is there yet."""
+        x0, y0, x1, y1 = (np.atleast_1d(np.asarray(v, np.float32)) for v in (x0, y0, x1, y1))
+        shape = np.broadcast_shapes(x0.shape, y0.shape, x1.shape, y1.shape, np.shape(i0),
+                                    np.shape(i1) if i1 is not None else (), np.shape(width))
+        if len(shape) != 1 or shape[0] == 0:
+            return None
+        n = shape[0]
+        x0, y0, x1, y1 = (np.broadcast_to(a, (n,)) for a in (x0, y0, x1, y1))
+        i0 = np.broadcast_to(np.asarray(i0, np.float32), (n,))
+        i1 = i0 if i1 is None else np.broadcast_to(np.asarray(i1, np.float32), (n,))
+        width = np.broadcast_to(np.asarray(width, np.float32), (n,))
+        la = self.la(x0, y0)
+        long = np.hypot(x1 - x0, y1 - y0) > self.LONG
+        p = np.where(long, ease(la / self.line), np.where(la >= 0.0, 1.0 + 1.6 * np.exp(-np.maximum(la, 0.0) / 0.07), 0.0))
+        keep = p > 0.0
+        if not keep.any():
+            return None
+        p = p.astype(np.float32)
+        xe, ye = x0 + (x1 - x0) * p, y0 + (y1 - y0) * p
+        ie = i0 + (i1 - i0) * np.minimum(p, 1.0)
+        head = keep & long & (p < 1.0)
+        if head.sum() > self.HEADS:
+            head = np.zeros(n, bool)
+        return x0[keep], y0[keep], xe[keep], ye[keep], i0[keep], ie[keep], width[keep], xe[head], ye[head]
+
+    def grow(self, x0, y0, x1, y1, i):
+        """Filled rects being made: (x0, y0, x1, y1, i), or None."""
+        x0, y0, x1, y1 = (np.atleast_1d(np.asarray(v, np.float32)) for v in (x0, y0, x1, y1))
+        shape = np.broadcast_shapes(x0.shape, y0.shape, x1.shape, y1.shape, np.shape(i))
+        x0, y0, x1, y1 = (np.broadcast_to(a, shape).astype(np.float32) for a in (x0, y0, x1, y1))
+        i = np.broadcast_to(np.asarray(i, np.float32), shape)
+        w, h = x1 - x0, y1 - y0
+        la = self.la(x0, 0.5 * (y0 + y1))
+        keep = la > 0.0
+        if not keep.any():
+            return None
+        x = la / 0.3
+        tall = np.abs(h) > 1.15 * np.abs(w)
+        g = np.where(np.where(tall, np.abs(h), np.abs(w)) <= 70.0, spring(x), ease(x)).astype(np.float32)
+        if self.bars == "centre":
+            ym = 0.5 * (y0 + y1)
+            y0, y1 = ym - 0.5 * h * g, ym + 0.5 * h * g
+        elif self.bars == "down":
+            y1 = np.where(tall, y0 + h * g, y1)
+            x1 = np.where(tall, x1, x0 + w * g)
+        else:
+            y0 = np.where(tall, y1 - h * g, y0)
+            x1 = np.where(tall, x1, x0 + w * g)
+        return x0[keep], y0[keep], x1[keep], y1[keep], i[keep]
+
+    def pops(self, x, y, r, i):
+        """Dots being made: (x, y, r, i) - they pop, a little too large at first - or None."""
+        x, y = np.atleast_1d(np.asarray(x, np.float32)), np.atleast_1d(np.asarray(y, np.float32))
+        n = len(x)
+        r = np.broadcast_to(np.asarray(r, np.float32), (n,))
+        i = np.broadcast_to(np.asarray(i, np.float32), (n,))
+        la = self.la(x, y)
+        keep = la >= 0.0
+        if not keep.any():
+            return None
+        return x[keep], y[keep], (r * spring(la / 0.22))[keep].astype(np.float32), i[keep]
+
+    def there(self, x, y):
+        """Mask of the points the wave has reached (pixels)."""
+        return self.la(x, y) >= 0.0
+
+    def text(self, s, xl, y, pad):
+        """A string being decoded; xl = its left edge."""
+        return resolve(s, float(self.la(xl, y)), cps=self.cps, key=(int(xl) * 7919 + int(y) * 104729 + self.key) & 0xFFFFF,
+                       pad=pad)
+
+    def tag(self, s, xl, y):
+        """(letters, fraction of the box) of a tag being made; xl = its left edge."""
+        a = float(self.la(xl, y))
+        if a <= 0.0:
+            return "", 0.0
+        return tag_state(s, a, key=(int(xl) * 7919 + int(y) * 104729 + self.key) & 0xFFFFF)

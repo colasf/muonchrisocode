@@ -25,12 +25,12 @@ a column for the scene card, a column for the notes that point at the centre, th
 bottom band. Heroes (dot, star, bounce, the tagged ray) and every piece of text stay clear of the towers;
 rings, rays, the streak field and leader lines simply pass behind them.
 
-NO FADE-IN for anything that shows data (so far applied to 00:00 - 00:16 only): the loading block, the edge
-meters, the arrivals strip, the HERE note, the scale, the four panels, the card and the two counter cells are
-CONSTRUCTED, each by its own choreography of the moves in muonbloom/build.py (registration marks, lines
-drawn by a pen, marks arriving in a wave and overshooting, text decoded out of noise, figures spinning
-before they lock, a two-frame inverted flash when the element is complete). Check a build frame by frame
-with tools/filmstrip.py.
+NO FADE for anything that shows data: every strip, card, note, panel, counter and label is CONSTRUCTED when
+it appears and taken apart when it leaves. In the first 16 seconds each element has its own choreography
+(the helpers of muonbloom/build.py: registration marks, lines drawn by a pen, marks arriving in a wave and
+overshooting, text decoded out of noise, figures spinning before they lock, a two-frame inverted flash when
+the element is complete); from there on the general mechanism does it (`with f.build(age, rect):`, and
+B.io for what leaves). Check a build frame by frame with tools/filmstrip.py.
 """
 from __future__ import annotations
 
@@ -235,26 +235,29 @@ def _note_col(lay):
 
 
 def axis_note(f, lay, title, below=(), above=(), title2=None, age=9.0, age2=None, alpha=1.0, size=30, red=True,
-              build=False):
+              build=False, commit=True):
     """Read-out of the centre, set on the horizontal axis that runs through it (the axis is its leader and
     passes behind whatever tower stands in between): tag just above the axis at the near edge of the notes
     column, data lines above / below it, an optional second tag under the axis.
     build=True: constructed instead of typed - a pen draws the bold piece of axis, the plate opens from the
-    axis, each tag is made and flashes, the lines are decoded out of noise and their figures spin, then lock."""
+    axis, each tag is made and flashes (commit), the lines are decoded out of noise and their figures spin,
+    then lock. Give age=B.io(...) to have it taken apart when it leaves (commit=False then); a line given as
+    (text, age) is written from its own age (a line that comes later)."""
     col, side = _note_col(lay)
-    if col is None or alpha <= 0.01:
+    if col is None or alpha <= 0.01 or (build and age < 0.0):
         return
     cy = lay.C[1]
     xe = col[0] if side > 0 else col[1]
     tx = xe + side * 30.0
     anc = "ls" if side > 0 else "rs"
     width = col[1] - col[0] - 34.0
-    la = [s for s in above if text_w(s, L.T_SMALL) <= width]
-    lb = [s for s in below if text_w(s, L.T_SMALL) <= width]
+    own = lambda item: item if isinstance(item, tuple) else (item, None)
+    la = [own(s) for s in above if text_w(own(s)[0], L.T_SMALL) <= width]
+    lb = [own(s) for s in below if text_w(own(s)[0], L.T_SMALL) <= width]
     if text_w(title, size) + 14.0 > width:
         size = 22
     wmax = max([text_w(title, size) + 14.0] + ([text_w(title2, size) + 14.0] if title2 else [])
-               + [text_w(s, L.T_SMALL) for s in la + lb])
+               + [text_w(s, L.T_SMALL) for s, _ in la + lb])
     x0 = tx - 8.0 if side > 0 else tx - wmax - 8.0
     top = cy - 22.0 - size - 12.0 - 25.0 * len(la) - (8.0 if la else 0.0)
     a2 = age if age2 is None else age2
@@ -269,27 +272,29 @@ def axis_note(f, lay, title, below=(), above=(), title2=None, age=9.0, age2=None
         f.occlude(rect[0], cy - (cy - top) * po, rect[2], cy + 7.0 + (bot - cy - 7.0) * pl)
         lay.take(rect)
         B.tag(f, lay_r, tx, cy - 22.0, title, age, t0=0.12, size=size, pad=7, alpha=alpha, bold=True, anchor=anc,
-              cps=40.0, key=1, commit=True)
-        for k, s in enumerate(la):
-            f.text("w", tx, cy - 22.0 - size - 14.0 - 25.0 * k, B.resolve(s, age, 70.0, 0.35 + 0.2 * k, key=k, pad=pad,
-                                                                         spin=0.45),
-                   size=L.T_SMALL, alpha=(0.9 if k == 0 else 0.7) * alpha, anchor=anc)
+              cps=40.0, key=1, commit=commit)
+        for k, (s, mine) in enumerate(la):
+            txt = (B.resolve(s, age, 70.0, 0.35 + 0.2 * k, key=k, pad=pad, spin=0.45) if mine is None else
+                   B.resolve(s, mine, 70.0, key=k, pad=pad, spin=0.45))
+            f.text("w", tx, cy - 22.0 - size - 14.0 - 25.0 * k, txt, size=L.T_SMALL,
+                   alpha=(0.9 if k == 0 else 0.7) * alpha, anchor=anc)
         if low:
             yb = cy + 34.0
             if title2:
                 B.tag(f, lay_r, tx, cy + 14.0 + size, title2, a2, t0=0.05, size=size, pad=7, alpha=alpha, bold=True,
-                      anchor=anc, cps=40.0, key=2, commit=True)
+                      anchor=anc, cps=40.0, key=2, commit=commit)
                 yb = cy + 14.0 + size + 36.0
-            for k, s in enumerate(lb):
-                f.text("w", tx, yb + 25.0 * k, B.resolve(s, a2, 70.0, 0.3 + 0.2 * k, key=4 + k, pad=pad, spin=0.45),
-                       size=L.T_SMALL, alpha=(0.9 if k == 0 else 0.7) * alpha, anchor=anc)
+            for k, (s, mine) in enumerate(lb):
+                txt = (B.resolve(s, a2, 70.0, 0.3 + 0.2 * k, key=4 + k, pad=pad, spin=0.45) if mine is None else
+                       B.resolve(s, mine, 70.0, key=4 + k, pad=pad, spin=0.45))
+                f.text("w", tx, yb + 25.0 * k, txt, size=L.T_SMALL, alpha=(0.9 if k == 0 else 0.7) * alpha, anchor=anc)
         B.pen(f, lay_r, xe + side * 2.0, cy, xe + side * (wmax + 38.0), cy, B.ease(B.lin(age, 0.0, 0.25)),
               0.95 * alpha, width=L.LW_BOLD, head=3.8)
         return
     f.occlude(*rect)
     lay.take(rect)
     f.tag(lay_r, tx, cy - 22.0, title[: int(age * 22) + 1], size=size, pad=7, alpha=alpha, bold=True, anchor=anc)
-    for k, s in enumerate(la):
+    for k, (s, _) in enumerate(la):
         f.text("w", tx, cy - 22.0 - size - 14.0 - 25.0 * k, hud.typed(s, age, 60, 0.3 + 0.2 * k), size=L.T_SMALL,
                alpha=(0.9 if k == 0 else 0.7) * alpha, anchor=anc)
     if low:
@@ -298,20 +303,35 @@ def axis_note(f, lay, title, below=(), above=(), title2=None, age=9.0, age2=None
             f.tag(lay_r, tx, cy + 14.0 + size, title2[: int(a2 * 22) + 1], size=size, pad=7, alpha=alpha, bold=True,
                   anchor=anc)
             yb = cy + 14.0 + size + 36.0
-        for k, s in enumerate(lb):
+        for k, (s, _) in enumerate(lb):
             f.text("w", tx, yb + 25.0 * k, hud.typed(s, a2, 60, 0.3 + 0.2 * k), size=L.T_SMALL,
                    alpha=(0.9 if k == 0 else 0.7) * alpha, anchor=anc)
     f.segments(lay_r, [xe + side * 2.0], [cy], [xe + side * (wmax + 38.0)], [cy], 0.95 * alpha, width=L.LW_BOLD)
 
 
 def note(f, lay, y, title, lines=(), anchor=None, red=False, age=9.0, alpha=1.0, size=L.T_TAG, big=None,
-         big_size=46, big_red=False):
+         big_size=46, big_red=False, build=None):
     """A read-out in the notes column at height y (baseline of its tag): tag, an optional big figure, typed
     lines. With an anchor, a leader runs back to that point of the image: 45 degrees to the level of the tag,
-    then straight to the column (behind a tower if one is there)."""
+    then straight to the column (behind a tower if one is there).
+    build = seconds since the note appeared (B.io for one that also leaves): it is then constructed from its
+    anchor outwards - leader drawn by a pen, tag pushed out, figures and lines decoded - instead of typed.
+    Negative = not there. A note never fades in. A line given as (text, age) is decoded from its own age
+    (a line that is added later)."""
+    lines = [s if isinstance(s, str) else B.resolve(s[0], s[1], 70.0, key=k).ljust(len(s[0])) for k, s in enumerate(lines)]
     col, side = _note_col(lay)
     if col is None or alpha <= 0.01:
         return False
+    if build is not None:
+        if build < 0.0:
+            return True
+        xe = col[0] if side > 0 else col[1]
+        x_far = xe + side * (col[1] - col[0])
+        ys = [y - size - 16.0, y + (big_size + 26.0 if big else 0.0) + 22.0 + 25.0 * len(lines)] + ([anchor[1]] if anchor else [])
+        xs = [xe, x_far] + ([anchor[0]] if anchor else [])
+        with f.build(build, (min(xs) - 6.0, min(ys), max(xs) + 6.0, max(ys)), flow="out",
+                     origin=anchor if anchor else (xe, y), wave=0.35, line=0.22, marks=False, key=int(y)):
+            return note(f, lay, y, title, lines, anchor, red, 9.0, alpha, size, big, big_size, big_red)
     xe = col[0] if side > 0 else col[1]
     tx = xe + side * 46.0
     anc = "ls" if side > 0 else "rs"
@@ -615,16 +635,18 @@ class Nova:
         return x, y
 
 
-def hero_note(f, lay, tip, age, alpha=1.0):
-    """The tag of the ray that will reach us: in the notes column, a red leader to its tip."""
-    if tip is None or age <= 0 or alpha <= 0.01:
+def hero_note(f, lay, tip, age, left=None):
+    """The tag of the ray that will reach us: in the notes column, a red leader to its tip. It is constructed
+    from the tip of the ray (age = seconds since it appeared) and taken apart `left` seconds before it goes."""
+    age = B.io(age, left, out=0.4)
+    if tip is None or age <= 0:
         return
     ok = lay.note is not None and note(f, lay, lay.C[1] + 150.0, "P+ // THE ONE THAT WILL REACH US",
                                        ["PRIMARY COSMIC RAY // PROTON", "E 3.2E15 EV", "HEADING: HERE"],
-                                       anchor=(tip[0] + 12.0 * lay.note_side, tip[1] + 10.0), red=True, age=age, alpha=alpha)
+                                       anchor=(tip[0] + 12.0 * lay.note_side, tip[1] + 10.0), red=True, build=age)
     if not ok:                                       # no notes column: a small tag on the ray itself
         f.occlude(tip[0] + 20.0, tip[1] + 16.0, tip[0] + 70.0, tip[1] + 50.0)
-        f.tag("r", tip[0] + 26.0, tip[1] + 42.0, "P+", size=L.T_TAG, pad=5, alpha=alpha)
+        B.tag(f, "r", tip[0] + 26.0, tip[1] + 42.0, "P+", age, size=L.T_TAG, pad=5)
 
 
 # ----------------------------------------------------------------------------
@@ -675,12 +697,15 @@ class Origin(Scene):
             return self._nova(f, t, ctx)
         return {}
 
-    def _panels(self, f, fns, alpha=1.0):
-        """Bottom band: the panels, by priority, in the free slots between the towers (extra ones dropped)."""
+    def _panels(self, f, fns, alpha=1.0, age=None, lag=0.12):
+        """Bottom band: the panels, by priority, in the free slots between the towers (extra ones dropped).
+        age = seconds since they appeared: each panel then constructs itself (Frame.build), one after the
+        other; a panel never fades in."""
         y0, y1 = L.BOT[1], L.BOT[3]
-        for (x0, x1), fn in zip(self.lay.slots, fns):
-            f.occlude(x0 - 10.0, y0 - 26.0, x1 + 10.0, L.FY1 - 3.0)
-            fn(f, x0, x1, y0, y1, alpha)
+        for k, ((x0, x1), fn) in enumerate(zip(self.lay.slots, fns)):
+            with f.build(None if age is None else age - lag * k, (x0 - 8.0, y0 - 24.0, x1 + 8.0, y1 + 8.0), key=30 + k):
+                f.occlude(x0 - 10.0, y0 - 26.0, x1 + 10.0, L.FY1 - 3.0)
+                fn(f, x0, x1, y0, y1, alpha)
 
     def _panels_build(self, f, fns, age, lag=0.15):
         """The same panels, building up instead of fading in, one after the other (age = seconds since the
@@ -885,26 +910,27 @@ class Origin(Scene):
     def _notes(self, f, t, mini):
         """What the voice says about the dot, written on its axis in the notes column."""
         lay, C = self.lay, self.C
-        if T_HERE <= t < T_ALWAYS:
-            a = t - T_HERE
-            al = 1.0 - float(smoothstep(T_ALWAYS - 0.8, T_ALWAYS - 0.1, t))
+        if T_HERE <= t < T_ALWAYS:                  # each note is taken apart before the next one is made
+            left = T_ALWAYS - 0.1 - t
+            a = B.io(t - T_HERE, left, out=0.45)
             axis_note(f, lay, "HERE", above=["CINCINNATI // 147 M ASL", "39.103 N  084.512 W"], title2="RIGHT NOW",
-                      below=[f"T {sd.tc(t)}", "1 MUON EVERY 16 MS"], age=a, age2=a - 0.75, alpha=al, build=True)
+                      below=[f"T {sd.tc(t)}", "1 MUON EVERY 16 MS"], age=a, age2=a - 0.75, build=True, commit=left > 0.45)
         elif T_ALWAYS <= t < T_MINI:
-            al = 1.0 - float(smoothstep(T_MINI - 0.8, T_MINI - 0.1, t))
+            left = T_MINI - 0.1 - t
+            a = B.io(t - T_ALWAYS, left, out=0.45)
             axis_note(f, lay, "ALWAYS", above=["DAY AND NIGHT // INDOORS AND OUT"],
-                      below=["2E9 THROUGH YOU EVERY YEAR", "1.6E11 IN A LIFETIME", "NOT ONE OF THEM FELT"][: 2 + (t >= T_FEEL)],
-                      age=t - T_ALWAYS, alpha=al, red=False)
+                      below=["2E9 THROUGH YOU EVERY YEAR", "1.6E11 IN A LIFETIME", ("NOT ONE OF THEM FELT", min(a, t - T_FEEL))],
+                      age=a, red=False, build=True, commit=left > 0.45)
         if mini > 0:
             g = 150.0 - 118.0 * mini
             for sx in (-1, 1):
                 for sy in (-1, 1):
                     x, y = C[0] + sx * g, C[1] + sy * g
-                    f.segments("r", [x, x], [y, y], [x - sx * 26, x], [y, y - sy * 26], 1.0 * mini, width=L.LW_BOLD)
+                    f.segments("r", [x, x], [y, y], [x - sx * 26, x], [y, y - sy * 26], 1.0, width=L.LW_BOLD)
             a = t - T_MINI - 0.5
             if a > 0:
                 axis_note(f, lay, "MU // POINT-LIKE", below=["SIZE   < 1E-18 M", "MASS   1.88E-28 KG", "CHARGE -1 E",
-                                                           "NO STRUCTURE FOUND"], age=a)
+                                                           "NO STRUCTURE FOUND"], age=a, build=True)
 
     def _dial(self, f, t):
         """A fixed scale among the moving rings: light-time shells, 1 px = 1 cm on the wall.
@@ -1006,17 +1032,18 @@ class Origin(Scene):
                anchor="rs")
 
     def _p_felt(self, f, t, x0, x1, y0, y1, age):
-        b = float(smoothstep(T_FEEL, T_FEEL + 0.5, t))
+        b = t >= T_FEEL
         hud.panel_header(f, x0, x1, y0, title_fit(["FELT // WHAT YOUR NERVES REPORT", "FELT"], x1 - x0), age=age)
         ym = (y0 + y1) / 2 + 12
         B.pen(f, "w", x0, ym, x1, ym, B.ease(B.lin(age, 0.3, 0.62)), 0.9, width=L.LW)       # the flat trace
         if age > 0.4:
             hud.ruler(f, x0, x1, y1 - 4, 0, 6, 0.1, 1.0, down=False, inten=0.6, reveal=B.lin(age, 0.4, 0.85))
-        f.text("r" if b > 0 else "w", x1, y0 + 36, B.roll("0.000", age, 0.45, 0.55, key=2), size=28, anchor="rs")
-        if b > 0:
-            f.tag("r", x0 + 4, ym - 18, "NOTHING"[: int((t - T_FEEL) * 20) + 1], size=L.T_LABEL, pad=4, alpha=b, bold=True)
+        f.text("r" if b else "w", x1, y0 + 36, B.roll("0.000", age, 0.45, 0.55, key=2), size=28, anchor="rs")
+        if b:
+            B.tag(f, "r", x0 + 4, ym - 18, "NOTHING", t - T_FEEL, size=L.T_LABEL, pad=4, bold=True, cps=30.0, key=4,
+                  commit=True)
             s = title_fit(["ENERGY LEFT IN YOU  ~2 MEV/CM  //  6E-10 W", "~2 MEV/CM  //  6E-10 W", "6E-10 W"], x1 - x0 - 8)
-            f.text("w", x0 + 4, ym + 26, hud.typed(s, t - T_FEEL, 60, 0.4), size=L.T_MICRO, alpha=0.8)
+            f.text("w", x0 + 4, ym + 26, B.resolve(s, t - T_FEEL, 60.0, 0.4, key=5), size=L.T_MICRO, alpha=0.8)
 
     def _p_scale(self, f, t, x0, x1, y0, y1, age):
         m = t - T_MINI
@@ -1105,49 +1132,54 @@ class Origin(Scene):
                                     ("RADIUS    1 000 R_SUN", "R  1 000 R_SUN"), ("AGE       7.1E6 YR", "AGE 7.1E6 YR"),
                                     ("CORE      FE  1.4 M_SUN", "CORE FE 1.4 M_SUN"), ("T_CORE    5.0E9 K", "T_CORE 5.0E9 K"),
                                     ("RHO_CORE  1E10 G/CM3", None),
-                                    (f"COLLAPSE  T-{left:06.3f} S", f"T-{left:06.3f} S")], a, red_rows=(7,))
+                                    (f"COLLAPSE  T-{left:06.3f} S", f"T-{left:06.3f} S")], a, red_rows=(7,), build=True)
         self._star_notes(f, t, R, core, a, implode)
-        al = float(smoothstep(0.3, 1.0, a))
         self._panels(f, [lambda f, x0, x1, y0, y1, a_: self._p_core_mass(f, t, x0, x1, y0, y1, a_, a, implode),
                          lambda f, x0, x1, y0, y1, a_: self._p_shells(f, t, x0, x1, y0, y1, a_, a, implode),
                          lambda f, x0, x1, y0, y1, a_: self._p_pressure(f, t, ctx, x0, x1, y0, y1, a_),
-                         lambda f, x0, x1, y0, y1, a_: self._p_core_radius(f, t, x0, x1, y0, y1, a_, implode)], al)
-        cell_right(f, lay, "YEAR // BEFORE NOW", hud.typed(f"-{YEAR0:,.0f}".replace(",", " "), a, 40, 0.1),
-                   sub="LOOKING BACK", red=True, value_short=f"-{YEAR0:.1E}".replace("E+0", "E"))
+                         lambda f, x0, x1, y0, y1, a_: self._p_core_radius(f, t, x0, x1, y0, y1, a_, implode)],
+                     age=a - 0.3)
+        with f.build(a - 0.5, lay.cell_r, marks=False, key=41):         # the cell of the wall count is rewritten
+            cell_right(f, lay, "YEAR // BEFORE NOW", f"-{YEAR0:,.0f}".replace(",", " "), sub="LOOKING BACK", red=True,
+                       value_short=f"-{YEAR0:.1E}".replace("E+0", "E"))
 
     def _star_notes(self, f, t, R, core, a, implode):
-        """Three read-outs in the notes column with leaders to the star; the core sits on the axis."""
+        """Three read-outs in the notes column with leaders to the star; the core sits on the axis. Each one is
+        constructed from the star outwards; all are taken apart when the disc gives way."""
         lay, C = self.lay, self.C
-        if a < 1.2 or implode > 0.6 or _note_col(lay)[0] is None:
+        left = T_IMPLODE + 0.5 - t                  # seconds before they must be gone
+        if a < 1.2 or left <= 0.0 or _note_col(lay)[0] is None:
             return
-        al = 1.0 - implode / 0.6
         side = lay.note_side
         col, _ = _note_col(lay)
         xe = col[0] if side > 0 else col[1]
         wpl = min(col[1] - col[0] - 30.0, 400.0)
         xp = xe + 30.0 if side > 0 else xe - 30.0 - wpl
-        f.occlude(xp, C[1] - 290.0, xp + wpl, C[1] - 9.0)
-        if a > 2.6:
+        pp = float(B.ease(B.lin(B.io(a - 1.2, left, out=0.4), 0.0, 0.3)))         # their plate opens downwards
+        f.occlude(xp, C[1] - 290.0, xp + wpl, C[1] - 290.0 + 281.0 * pp)
+        ac = B.io(a - 2.6, left, out=0.4)
+        if ac > 0.0:
             # the axis from the core: a slit is cut through the disc so the red leader shows
             x_edge = C[0] + side * (R + 4.0)
+            pc = float(B.ease(B.lin(ac, 0.0, 0.3)))
+            xs = C[0] + side * (core + 4.0)
             f.occlude(min(C[0] + side * (core + 12.0), x_edge), C[1] - 3.5, max(C[0] + side * (core + 12.0), x_edge), C[1] + 3.5)
-            f.segments("r", [C[0] + side * (core + 4.0)], [C[1]], [xe], [C[1]], 0.95 * al, width=L.LW)
+            B.pen(f, "r", xs, C[1], xe, C[1], pc, 0.95, width=L.LW)
             axis_note(f, lay, "IRON CORE", below=["1.4 M_SUN  //  R 1 500 KM", "T 5.0E9 K", "NOTHING LEFT TO BURN"],
-                      age=a - 2.6, alpha=al)
+                      age=ac - 0.2, build=True, commit=left > 0.4)
         ang = math.radians(-50.0)
         note(f, lay, C[1] - 252.0, "PHOTOSPHERE", ["R 1 000 R_SUN  //  T 3 600 K"],
-             anchor=(C[0] + side * R * math.cos(ang), C[1] + R * math.sin(ang)), age=a - 1.2, alpha=al)
-        if a > 1.8:
-            ang = math.radians(-22.0)
-            note(f, lay, C[1] - 142.0, "HYDROGEN ENVELOPE", ["16 M_SUN  //  THE REST HAS BURNED"],
-                 anchor=(C[0] + side * (R + 40.0) * math.cos(ang), C[1] + (R + 40.0) * math.sin(ang)), age=a - 1.8,
-                 alpha=al)
+             anchor=(C[0] + side * R * math.cos(ang), C[1] + R * math.sin(ang)), build=B.io(a - 1.2, left, out=0.4))
+        ang = math.radians(-22.0)
+        note(f, lay, C[1] - 142.0, "HYDROGEN ENVELOPE", ["16 M_SUN  //  THE REST HAS BURNED"],
+             anchor=(C[0] + side * (R + 40.0) * math.cos(ang), C[1] + (R + 40.0) * math.sin(ang)),
+             build=B.io(a - 1.8, left, out=0.4))
 
     def _strip_star(self, f, t, ctx):
         x0, y0, x1, y1 = L.STRIP
         f.occlude(x0, y0, x1, y1)
         marks = [(T_STAR, "STAR"), (T_IMPLODE, "COLLAPSE"), (T_X, "BOUNCE"), (T_BLOOMED, "BLOOM")]
-        hud.show_strip(f, t, ctx, "STAR // THE LAST SECONDS", 30.0, 48.0, marks)
+        hud.show_strip(f, t, ctx, "STAR // THE LAST SECONDS", 30.0, 48.0, marks, age=t - T_STAR - 0.05)
         header_gap(f, ctx, t)
 
     # bottom panels of the star -------------------------------------------------------
@@ -1233,7 +1265,7 @@ class Origin(Scene):
                                                                     f"N_NU {nu:.1E}".replace("E+", "E")),
                                    ("SHOCK     10 000 KM/S", "10 000 KM/S"), ("REMNANT   NEUTRON STAR", "NEUTRON STAR"),
                                    ("EJECTA    P+ 89  HE 10  Z>2 1 %", None), ("FERMI ACCELERATION  ->  1E15 EV", "-> 1E15 EV")],
-             a, red_title=True, red_rows=(3,), cps=80.0)
+             a, red_title=True, red_rows=(3,), cps=80.0, build=True)
         hero_note(f, lay, tip, a - 1.2)
         f.set_clip(*FRAME_CLIP)
         self._ray_tags(f, cam, t)
@@ -1241,7 +1273,7 @@ class Origin(Scene):
         self._panels(f, [lambda f, x0, x1, y0, y1, a_: self._p_neutrino(f, t, x0, x1, y0, y1),
                          lambda f, x0, x1, y0, y1, a_: self._p_messengers(f, t, x0, x1, y0, y1, a),
                          lambda f, x0, x1, y0, y1, a_: self._p_light(f, t, x0, x1, y0, y1),
-                         lambda f, x0, x1, y0, y1, a_: self._p_ejecta(f, t, x0, x1, y0, y1, a)])
+                         lambda f, x0, x1, y0, y1, a_: self._p_ejecta(f, t, x0, x1, y0, y1, a)], age=a - 0.1)
         cell_right(f, lay, "YEAR // BEFORE NOW", f"-{YEAR0:,.0f}".replace(",", " "), sub="T+" + f"{a:05.2f} S", red=True,
                    value_short=f"-{YEAR0:.1E}".replace("E+0", "E"))
         return {"exposure": 1.0 + 0.5 * flash}
@@ -1263,12 +1295,13 @@ class Origin(Scene):
                 continue
             s = f"{nova.kind[k]} {0.3 * 10 ** (2 + 4 * hash01(k, 7)):.1E} GEV".replace("E+0", "E")
             rect = (x + 8.0, y - 34.0, x + 22.0 + text_w(s, L.T_SMALL), y - 4.0)
-            txt = hud.typed(s, t - T_X - nova.delay[k], 60, 0.4)
-            if not txt or not lay.free(*rect):
+            # decoded when its ray is out, taken apart when the ray leaves the picture (it does not fade)
+            txt = B.resolve(s, B.io(t - T_X - nova.delay[k] - 0.4, nova.fade_t[k] - 0.2 - t, out=0.3, span=0.6), 60.0, key=int(k))
+            if not txt.strip() or not lay.free(*rect):
                 continue
             lay.take(rect)
             f.occlude(*rect)
-            f.text("w", x + 14.0, y - 12.0, txt, size=L.T_SMALL, alpha=0.9 * float(fade[k]))
+            f.text("w", x + 14.0, y - 12.0, txt, size=L.T_SMALL, alpha=0.9)
             shown += 1
             if shown >= 5:
                 break

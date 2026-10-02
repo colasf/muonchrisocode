@@ -26,6 +26,15 @@ the identity card and the light / yield card take the usable columns OUTSIDE the
 left of the first tower and right of the last one), scaled to the width they get; if only one such
 column exists it gets the identity card (the voice strips it) and the yield card is dropped; the
 Bragg curve / barcode / level go to ctx.slots["panels"], widest first.
+
+Nothing that shows data fades in or pops in (build.py). The two cards, the bottom panels and the section
+tag are CONSTRUCTED when the scene starts; the level line and its read-outs when the centre column climbs
+above the bottom band; the ladders when the side columns are high enough; every log line, hit tag and
+rewritten value is decoded when it arrives. Losing things is the subject here, and it is never a fade
+either: what the voice strips is cut and eroded, the level is taken apart when the muon becomes light, and
+at the power-down each card, panel and ladder is taken apart with its tower (build.io: the construction
+runs backwards) while its text falls apart (hud.erode). The towers, the columns of light, the fan, the
+rays, the beam and the rain are the image: they keep their own intensities.
 """
 from __future__ import annotations
 
@@ -33,6 +42,7 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -117,6 +127,13 @@ class Rise(Scene):
         self.tab = dict(Tk=Tk, dedx=dedx, beta=beta, lR=np.log10(R))
         self.lR0, self.lR1 = float(np.log10(R[-1])), float(np.log10(R[0]))
         self._layout(ctx)
+        # when the level line and the two ladders come into view: the columns have to climb above the bottom
+        # band first (the crescendo is monotonic, so the level can be inverted to a time)
+        self._ts = np.arange(T0, PEAK + 1e-6, 1.0 / 60.0)
+        self._lv = np.maximum.accumulate(_level(self._ts))
+        hero = self.tw["C"]
+        self.t_lvl = self._t_when(hero, max(Y_LOW, L.HEAD_Y + 30.0), "C")
+        self.t_lad = {k: self._t_when(tw, Y_LOW - 90.0, k) for k, tw, _ in self.sides}
         self.cols = {k: self._column(rng, t, int((26000 if k == "C" else 10000) * float(np.clip(t.w / 95.0, 0.6, 2.2))))
                      for k, t in self.tw.items()}
         self._build_events(rng, ctx)
@@ -181,6 +198,15 @@ class Rise(Scene):
         rest = panels[1:] if self.pan_bragg else panels
         self.pan_bar = next((q for q in rest if q[1] - q[0] >= 220.0), None)
         self.pan_lvl = next((q for q in rest if q is not self.pan_bar and q[1] - q[0] >= 120.0), None)
+
+    def _t_when(self, tw, y, key):
+        """Show time at which the head of the column of light of a tower climbs past the height y."""
+        lv = (tw.bot - y) / max(tw.bot - self.head[key], 1.0)
+        if lv <= self._lv[0]:
+            return float(self._ts[0])
+        if lv >= self._lv[-1]:
+            return float(self._ts[-1])
+        return float(self._ts[int(np.searchsorted(self._lv, lv))])
 
     # ------------------------------------------------------------------ build
     @staticmethod
@@ -372,10 +398,14 @@ class Rise(Scene):
             anchor = "ls" if sgn > 0 else "rs"
             room = self.ray_room[k]
             ys = np.array([self._rung_y(i, yh[k]) for i in range(N_RUNG)])
-            f.segments("w", np.full(N_RUNG, edge), ys, np.full(N_RUNG, edge + sgn * 14), ys, 0.6 * pw[k], width=L.LW)
-            for i in range(0, N_RUNG, 2):
-                f.text("w", edge + sgn * 30, float(ys[i]) + 5, f"{i + 1:02d}", size=L.T_MICRO, alpha=0.4 * pw[k],
-                       anchor=anchor)
+            # the ladder itself is data: its rungs are thrown out from the bottom up when the column has climbed
+            # high enough, their numbers decoded; it is taken apart when its tower powers down (no fade)
+            xa, xb = sorted((edge - sgn * 2.0, edge + sgn * 50.0))
+            with f.build(B.io(t - self.t_lad[k], self.off[k] + 0.4 - t, out=0.4, span=0.9),
+                         (xa, float(yh[k]), xb, Y_LOW), flow="bt", wave=0.4, marks=False, key=60 + (k == "R")):
+                f.segments("w", np.full(N_RUNG, edge), ys, np.full(N_RUNG, edge + sgn * 14), ys, 0.6, width=L.LW)
+                for i in range(0, N_RUNG, 2):
+                    f.text("w", edge + sgn * 30, float(ys[i]) + 5, f"{i + 1:02d}", size=L.T_MICRO, alpha=0.4, anchor=anchor)
             for j, (tn, idx, vel) in enumerate(notes):      # the arps of the music, mirrored on both ladders
                 a = t - tn
                 y = ys[int(idx)]
@@ -398,9 +428,10 @@ class Rise(Scene):
                 f.segments("r", [edge + sgn * 64], [y], [xe], [y], 1.5 * e, 0.5 * e, width=L.LW_BOLD)
                 f.dots("r", [edge + sgn * 3], [y], 4.4, 1.8 * e)
                 f.rings("r", [xe], [y], [7.0 + 22.0 * (1 - e)], 0.9 * e)
-                if not echo:
-                    f.tag("r", edge + sgn * 66, y - 12, f"{L.NAMES[k]}  E {e_h:.3f}", size=L.T_MICRO, pad=3,
-                          alpha=min(1.0, 2.5 * e), anchor=anchor)
+                if not echo:                         # its energy: a tag made on the hit, taken apart after it
+                    B.tag(f, "r", edge + sgn * 66, y - 12, f"{L.NAMES[k]}  E {e_h:.3f}",
+                          B.io(a, min(1.6 - a, self.off[k] + 0.4 - t), out=0.3, span=0.4),
+                          size=L.T_MICRO, pad=3, anchor=anchor, cps=110.0, key=int(th * 10) & 0xFFF)
 
     def _draw_muons(self, f, t, st):
         """Every real hit: a muon enters the tower from the top of the wall and is caught."""
@@ -470,22 +501,24 @@ class Rise(Scene):
                                 1.3 * (1 - uj) ** 1.6, width=L.LW_BOLD)
                 f.dots("w", [x], [twc.top + 0.5 * twc.det_h], 5.0, 1.8 * math.exp(-a / 0.5))
             if amp >= 1.0 and a > 0.1:
-                al = 1.0 - float(smoothstep(4.0, 6.0, a))
+                # its read-out is constructed outwards from the crossing point (leader drawn by a pen, tag made,
+                # lines decoded) and would be taken apart, not faded, if the scene went on
                 tw = self.hero
                 y = tw.top + 0.5 * tw.det_h + 24.0
                 xx = x + (xe - x) * (y - y0) / (y1 - y0)
                 sg = self.know_side
                 ex = (tw.x1 + 60.0) if sg > 0 else (tw.x0 - 60.0)
                 anc = "ls" if sg > 0 else "rs"
-                f.segments("w", [xx, ex - sg * 34], [y, y - 60], [ex - sg * 34, ex], [y - 60, y - 60], 0.8 * al,
-                           width=L.LW)
-                f.dots("w", [xx], [y], 3.0, 1.4 * al)
-                f.tag("r", ex + sg * 8, y - 46, "MU-", size=44, pad=8, alpha=al, bold=True, anchor=anc)
                 rate = int(round(getattr(ctx, "RATE_YOU", 63.0)))
-                f.text("w", ex + sg * 8, y - 6, hud.erode(f"ONE OF {rate} /S THROUGH YOU", 1 - min(1.0, (a - 0.1) * 3), 7),
-                       size=L.T_LABEL, alpha=0.95 * al, anchor=anc)
-                f.text("w", ex + sg * 8, y + 22, hud.typed(f"SEEN BY DET_C AT {sd.tc(self.know)}", a, cps=60, delay=0.6),
-                       size=L.T_MICRO, alpha=0.7 * al, anchor=anc)
+                l1, l2 = f"ONE OF {rate} /S THROUGH YOU", f"SEEN BY DET_C AT {sd.tc(self.know)}"
+                xt = ex + sg * (8.0 + max(len(l1) * L.T_LABEL, len(l2) * L.T_MICRO, 3 * 44 + 26) * CHAR_W)
+                with f.build(B.io(a - 0.1, 6.0 - a, out=0.45, span=1.0), (min(xx, xt) - 8.0, y - 104.0, max(xx, xt) + 8.0, y + 34.0),
+                             flow="out", origin=(xx, y), wave=0.25, line=0.2, marks=False, key=95):
+                    f.segments("w", [xx, ex - sg * 34], [y, y - 60], [ex - sg * 34, ex], [y - 60, y - 60], 0.8, width=L.LW)
+                    f.dots("w", [xx], [y], 3.0, 1.4)
+                    f.tag("r", ex + sg * 8, y - 46, "MU-", size=44, pad=8, bold=True, anchor=anc)
+                    f.text("w", ex + sg * 8, y - 6, l1, size=L.T_LABEL, alpha=0.95, anchor=anc)
+                    f.text("w", ex + sg * 8, y + 22, l2, size=L.T_MICRO, alpha=0.7, anchor=anc)
         for (tm, key, e_h) in self.soft:           # the filtered hits of the break
             a = t - tm
             if 0 <= a < 2.5:
@@ -574,28 +607,32 @@ class Rise(Scene):
         f.segments("w", x, y, x + sgn * ln, y - 0.22 * ln, inten, inten * 0.2)
 
     def _draw_level(self, f, t, st):
-        pw = st["pw"]["C"] * (1.0 - st["beam"])
+        """The level the light has reached and what the muon gives away there. Data: constructed when the head
+        of the centre column climbs above the bottom band (the line is drawn outwards from the column, the
+        tags are made, the intensities decoded), taken apart when the muon becomes light."""
         yh = st["yh"]["C"]
         twc = self.tw["C"]
-        if pw < 0.01 or yh > twc.bot - 40:
+        age = B.io(t - self.t_lvl, self.cue_light + 0.3 - t, out=0.35, span=0.9)
+        y = max(yh, L.HEAD_Y + 30)
+        if age < 0.0 or y > Y_LOW:
             return
         mu = st["mu"]
         xl, xr = self.lvl
-        y = max(yh, L.HEAD_Y + 30)
-        if y > Y_LOW:
-            return
-        f.segments("r", [xl], [y], [xr], [y], 0.85 * pw, width=L.LW)
-        f.tag("r", xl + 40, y - 10, f"LEVEL {st['lv']:.3f}", size=L.T_MICRO, pad=3, alpha=pw)
-        f.tag("r", xr - 40, y - 10, f"DE/DX {mu['dedx']:07.3f} MEV/CM", size=L.T_MICRO, pad=3, alpha=pw, anchor="rs")
-        # intensity read off the column
-        x = twc.x1 + 30
-        f.text("w", x, y + 28, "INTENSITY: MAX", size=L.T_MICRO, alpha=0.8 * pw)
-        ys = np.arange(y + 54, min(twc.bot - 6, Y_LOW - 8), 24.0)
-        q = 1.0 - (ys - y) / max(twc.bot - y, 1.0)
-        v = np.clip(st["lv"] * (0.12 + 0.88 * q ** 2.4) * (1 + 0.5 * math.tanh(st["pulse"]))
-                    + 0.04 * hash01(np.arange(len(ys)), int(t * 12)), 0, 0.99)
-        for yy, vv in zip(ys, v):
-            f.text("w", x, float(yy), f"{vv:.2f}", size=L.T_MICRO, alpha=0.7 * pw)
+        bot = max(min(twc.bot - 6.0, Y_LOW - 8.0), y + 60.0)
+        with f.build(age, (xl, y - 30.0, xr, bot), flow="out", origin=(twc.cx, y), wave=0.3, line=0.35, marks=False, key=50):
+            f.segments("r", [twc.cx, twc.cx], [y, y], [xl, xr], [y, y], 0.85, width=L.LW)
+            f.tag("r", xl + 40, y - 10, f"LEVEL {st['lv']:.3f}", size=L.T_MICRO, pad=3)
+            f.tag("r", xr - 40, y - 10, f"DE/DX {mu['dedx']:07.3f} MEV/CM", size=L.T_MICRO, pad=3, anchor="rs")
+            # intensity read off the column: the list grows as the column climbs, every new value is decoded
+            x = twc.x1 + 30
+            f.text("w", x, y + 28, "INTENSITY: MAX", size=L.T_MICRO, alpha=0.8)
+            ys = np.arange(y + 54, min(twc.bot - 6, Y_LOW - 8), 24.0)
+            q = 1.0 - (ys - y) / max(twc.bot - y, 1.0)
+            v = np.clip(st["lv"] * (0.12 + 0.88 * q ** 2.4) * (1 + 0.5 * math.tanh(st["pulse"]))
+                        + 0.04 * hash01(np.arange(len(ys)), int(t * 12)), 0, 0.99)
+            for j, (yy, vv) in enumerate(zip(ys, v)):
+                t_in = self._t_when(twc, min(twc.bot - 6, Y_LOW - 8) - 54.0 - 24.0 * j, "C") if yh > L.HEAD_Y + 30 else T0
+                f.text("w", x, float(yy), B.resolve(f"{vv:.2f}", t - t_in, 60.0, key=j, spin=0.2), size=L.T_MICRO, alpha=0.7)
 
     # --- HUD ------------------------------------------------------------------------
     def _draw_header(self, f, t, st):
@@ -604,37 +641,41 @@ class Rise(Scene):
         if self.card:
             x0, x1 = self.card
             w = x1 - x0
-            f.tag("r" if k < 2 else "w", x0, 266, _fit([f"{code} // {name}", f"{code} // RISE", code], w, L.T_LABEL),
-                  size=L.T_LABEL, pad=4)
-            if t >= self.off["L"] + 0.6:        # the dark: what the voice says, typed where the card was
-                al = float(smoothstep(self.off["L"] + 0.6, self.off["L"] + 2.0, t))
+            # the section tag is made when its section starts
+            B.tag(f, "r" if k < 2 else "w", x0, 266, _fit([f"{code} // {name}", f"{code} // RISE", code], w, L.T_LABEL),
+                  t - s0 - (0.1 if k == 0 else 0.0), size=L.T_LABEL, pad=4, cps=70.0, key=1)
+            t_dark = self.off["L"] + 0.6
+            if t >= t_dark:                     # the dark: what the voice says, written where the card was
                 size = L.T_SMALL if w >= 300 else L.T_MICRO
                 if 49 * size * CHAR_W <= w:
                     head = ["DETECTORS OFFLINE // MU FLUX UNCHANGED 1 /CM2/MIN"]
                 else:
                     head = ["DETECTORS OFFLINE", _fit(["MU FLUX UNCHANGED 1 /CM2/MIN", "MU FLUX UNCHANGED"], w, size, 0)]
-                for j, ln in enumerate(head):
-                    f.text("w", x0, 306 + j * 24, ln, size=size, alpha=0.85 * al)
+                for j, ln in enumerate(head):   # decoded, not faded in
+                    f.text("w", x0, 306 + j * 24, B.resolve(ln, t - t_dark, 60.0, 0.3 * j, key=2 + j), size=size, alpha=0.85)
                 y = 306 + len(head) * 24 + 22
                 lines = [(self.cue_here, "HERE"), (self.cue_rush, "RUSHING THROUGH YOU"),
                          (self.cue_feel, "YOU STILL CANNOT FEEL IT"), (self.know, "NOW YOU KNOW")]
-                for j, (tv, word) in enumerate(lines):
-                    if t >= tv:
-                        f.tag("r" if j == 3 else "w", x0, y + j * 34, hud.typed(word, t - tv, cps=40), size=size,
-                              pad=4, alpha=al)
+                for j, (tv, word) in enumerate(lines):      # one tag per sentence of the voice, made on the word
+                    B.tag(f, "r" if j == 3 else "w", x0, y + j * 34, word, t - tv, size=size, pad=4, cps=40.0, key=6 + j,
+                          commit=(j == 3))
         if self.yld:
             x1 = self.yld[1]
-            f.text("w", x1, 266, _fit(["RISE // SCENE 09 // DE/DX -> LIGHT", "RISE // SCENE 09"], self.yld[1] - self.yld[0],
-                                     L.T_MICRO), size=L.T_MICRO, alpha=0.85, anchor="rs")
-            f.text("w", x1, 290, sd.tc(t), size=L.T_MICRO, alpha=0.6, anchor="rs")
+            with f.build(t - T0 - 0.3, (self.yld[0], 244.0, x1 + 6.0, 298.0), flow="lr", wave=0.25, marks=False, key=9):
+                f.text("w", x1, 266, _fit(["RISE // SCENE 09 // DE/DX -> LIGHT", "RISE // SCENE 09"], self.yld[1] - self.yld[0],
+                                         L.T_MICRO), size=L.T_MICRO, alpha=0.85, anchor="rs")
+                f.text("w", x1, 290, sd.tc(t), size=L.T_MICRO, alpha=0.6, anchor="rs")
 
     def _draw_card(self, f, t, st):
-        """Identity of the muon, stripped on the voice-over, rewritten as light."""
+        """Identity of the muon, stripped on the voice-over, rewritten as light. The card is constructed when
+        the scene starts and taken apart when the last tower powers down; nothing in it fades."""
         pw = st["pw"]["L"]
         if pw < 0.01 or self.card is None:
             return
         fr = int(t * 30)
-        gone = 1.0 - pw
+        gone = 1.0 - pw                           # its text falls apart with the power ...
+        left = self.off["L"] + 0.5 - t            # ... while the card is taken apart (seconds before it is gone)
+        sa = t - T0
         mu = st["mu"]
         x, x1 = self.card
         w = x1 - x
@@ -643,162 +684,176 @@ class Rise(Scene):
         vx = x + (92.0 if small else 124.0)
         y0 = 326.0
         light = t >= self.cue_light
-        f.tag("r" if light else "w", x, y0, hud.erode("LIGHT // IDENTITY" if light else "MU- // IDENTITY", gone, 1, fr),
-              size=L.T_LABEL, pad=4, alpha=pw)
-        # the big figure: its speed
-        if t < self.cue_speed:
-            big = f"{mu['beta']:.6f}"
-        elif not light:
-            big = hud.erode(f"{0.0:.6f}", (t - self.cue_speed) / 0.9, 3, fr)
-        else:
-            big = f"{1.0:.6f}"[: int((t - self.cue_light) * 30)]
-        bsz = float(np.clip((w - 6) / (8 * CHAR_W), 36.0, 76.0))
-        hud.big_number(f, x, 462, _fit(["SPEED // BETA = V/C", "SPEED"], w, L.T_MICRO), hud.erode(big, gone, 4, fr),
-                       size=bsz, layer="r" if light else "w", alpha=pw)
-        cs = self.cue_strip
-        room = int((x1 - vx) / (rs * CHAR_W))            # characters a value may take
-        origin = "15.21 KM // PI- DECAY" if room >= 21 else "15.21 KM"
-        rows = [("NAME", "MUON  MU-", self.cue_name, "LIGHT"), ("CLASS", "LEPTON // GEN 2", cs, None),
-                ("CHARGE", "-1 E", cs + 0.5, None),
-                ("MASS", "105.6583755 MEV/C2", self.cue_mass, "0.0000000 MEV/C2"),
-                ("SPEED", f"{mu['beta']:.6f} C", self.cue_speed, "1.000000 C"),
-                ("GAMMA", f"{mu['gam']:.4f}", cs + 1.0, None),
-                ("ENERGY", f"{(mu['Tk'] + M_MU) / 1000:.5f} GEV", cs + 1.5, None),
-                ("LIFETIME", "2.1969811 US", cs + 2.0, None),
-                ("ORIGIN", origin, cs + 2.5, None)]
-        yy = 520.0
-        for k, (lab, val, cue, after) in enumerate(rows):
-            y = yy + k * 30
-            a = t - cue
-            lab_al = 0.85 if a < 0.5 else 0.3
-            if light and after:
-                lab_al = 0.95
-                n = int(max(0.0, t - self.cue_light - 0.25 * k) * 34)
-                val_s, lay = after[:n], "r" if lab == "NAME" else "w"
-            elif a < 0:
-                val_s, lay = val, "w"
+        lay_c = "r" if light else "w"
+        rect = (x - 8.0, 300.0, x1 + 8.0, 790.0)
+        with f.build(B.io(sa - 0.2, left, out=0.5), rect, flow="tb", wave=0.45, key=10):
+            # the title: made again, in red, when the muon becomes light
+            with f.build(B.io(t - self.cue_light, left, out=0.5) if light else None, rect, wave=0.1, marks=False, key=11):
+                f.tag(lay_c, x, y0, "LIGHT // IDENTITY" if light else "MU- // IDENTITY", size=L.T_LABEL, pad=4)
+            # the big figure: its speed (stripped on "the speed", rewritten as 1 when it is light)
+            if t < self.cue_speed:
+                big = f"{mu['beta']:.6f}"
+            elif not light:
+                big = hud.erode(f"{0.0:.6f}", (t - self.cue_speed) / 0.9, 3, fr)
             else:
-                val_s, lay = hud.erode(val, (a - 0.15) / 0.9, 11 + k, fr), "w"
-                if a < 1.4:     # a red cut runs through the value first
-                    wv = len(val) * rs * CHAR_W * min(1.0, a / 0.3)
-                    f.segments("r", [vx - 4], [y - 6], [vx - 4 + wv], [y - 6], 1.2 * (1 - a / 1.4) * pw, width=L.LW)
-            f.text("w", x, y, hud.erode(lab, gone, 21 + k, fr), size=rs, alpha=lab_al * pw)
-            f.text(lay, vx, y, hud.erode(val_s, gone, 31 + k, fr), size=rs, alpha=0.95 * pw)
-        # hit stream: what the three detectors really caught
+                big = B.roll(f"{1.0:.6f}", t - self.cue_light, 0.5, key=5)
+            bsz = float(np.clip((w - 6) / (8 * CHAR_W), 36.0, 76.0))
+            f.tag(lay_c, x, 462 - bsz - 14, _fit(["SPEED // BETA = V/C", "SPEED"], w, L.T_MICRO), size=L.T_MICRO, pad=3)
+            f.text(lay_c, x - 2, 462, hud.erode(big, gone, 4, fr), size=bsz, alpha=0.97)
+            cs = self.cue_strip
+            room = int((x1 - vx) / (rs * CHAR_W))            # characters a value may take
+            origin = "15.21 KM // PI- DECAY" if room >= 21 else "15.21 KM"
+            rows = [("NAME", "MUON  MU-", self.cue_name, "LIGHT"), ("CLASS", "LEPTON // GEN 2", cs, None),
+                    ("CHARGE", "-1 E", cs + 0.5, None),
+                    ("MASS", "105.6583755 MEV/C2", self.cue_mass, "0.0000000 MEV/C2"),
+                    ("SPEED", f"{mu['beta']:.6f} C", self.cue_speed, "1.000000 C"),
+                    ("GAMMA", f"{mu['gam']:.4f}", cs + 1.0, None),
+                    ("ENERGY", f"{(mu['Tk'] + M_MU) / 1000:.5f} GEV", cs + 1.5, None),
+                    ("LIFETIME", "2.1969811 US", cs + 2.0, None),
+                    ("ORIGIN", origin, cs + 2.5, None)]
+            yy = 520.0
+            for k, (lab, val, cue, after) in enumerate(rows):
+                y = yy + k * 30
+                a = t - cue
+                lab_al = 0.85 if a < 0.5 else 0.3
+                if light and after:             # rewritten as light: decoded, its figures spin before they lock
+                    lab_al = 0.95
+                    val_s, lay = B.resolve(after, t - self.cue_light, 34.0, 0.25 * k, key=60 + k), "r" if lab == "NAME" else "w"
+                elif a < 0:
+                    val_s, lay = val, "w"
+                else:                           # stripped: a red cut runs through the value, which falls apart;
+                    val_s, lay = hud.erode(val, (a - 0.15) / 0.9, 11 + k, fr), "w"       # the cut leaves the way it came
+                    if a < 1.4:
+                        full = len(val) * rs * CHAR_W
+                        f.segments("r", [vx - 4 + full * B.lin(a, 0.9, 1.4)], [y - 6], [vx - 4 + full * min(1.0, a / 0.3)], [y - 6],
+                                   1.2, width=L.LW)
+                f.text("w", x, y, hud.erode(lab, gone, 21 + k, fr), size=rs, alpha=lab_al)
+                f.text(lay, vx, y, hud.erode(val_s, gone, 31 + k, fr), size=rs, alpha=0.95)
+        # hit stream: what the three detectors really caught - every line is decoded when the hit arrives
         y = 826.0
-        hud.panel_header(f, x, x1, y - 26, hud.erode(_fit(["HIT_STREAM // DET_L DET_C DET_R", "HIT_STREAM"], w, L.T_MICRO),
-                                                    gone, 41, fr), alpha=pw)
-        n_max = int(w / (L.T_MICRO * CHAR_W))
-        k = 0
-        for (th, key, e_h, echo, _, _) in reversed(self.hits):
-            if th > t:
-                continue
-            if k >= 15:
-                break
-            if n_max >= 29:
-                line = f"{sd.tc(th)} {L.NAMES[key]} E {e_h:.3f} {'ECHO' if echo else 'HIT'}"
-            elif n_max >= 21:
-                line = f"{sd.tc(th)} {L.NAMES[key]} {e_h:.3f}"
-            else:
-                line = f"{sd.tc(th)[:8]} {key} {e_h:.2f}"
-            f.text("r" if (k == 0 and t - th < 1.5) else "w", x, y + 30 + k * 21, hud.erode(line, gone, 50 + k, fr),
-                   size=L.T_MICRO, alpha=(0.95 if k < 2 else 0.6) * pw)
-            k += 1
+        with f.build(B.io(sa - 0.4, left, out=0.5), (x - 8.0, 794.0, x1 + 8.0, 1170.0), flow="tb", wave=0.4, key=12):
+            hud.panel_header(f, x, x1, y - 26, _fit(["HIT_STREAM // DET_L DET_C DET_R", "HIT_STREAM"], w, L.T_MICRO))
+            n_max = int(w / (L.T_MICRO * CHAR_W))
+            k = 0
+            for (th, key, e_h, echo, _, _) in reversed(self.hits):
+                if th > t:
+                    continue
+                if k >= 15:
+                    break
+                if n_max >= 29:
+                    line = f"{sd.tc(th)} {L.NAMES[key]} E {e_h:.3f} {'ECHO' if echo else 'HIT'}"
+                elif n_max >= 21:
+                    line = f"{sd.tc(th)} {L.NAMES[key]} {e_h:.3f}"
+                else:
+                    line = f"{sd.tc(th)[:8]} {key} {e_h:.2f}"
+                line = B.resolve(line, t - th, 170.0, key=int(th * 50) & 0xFFFF, spin=0.15)
+                f.text("r" if (k == 0 and t - th < 1.5) else "w", x, y + 30 + k * 21, hud.erode(line, gone, 50 + k, fr),
+                       size=L.T_MICRO, alpha=0.95 if k < 2 else 0.6)
+                k += 1
 
     def _draw_light(self, f, t, st):
-        """The light it becomes (second outer column, when there is one)."""
+        """The light it becomes (second outer column, when there is one): constructed when the scene starts,
+        taken apart when its tower powers down."""
         pw = st["pw"]["R"]
         if pw < 0.01 or self.yld is None:
             return
         fr = int(t * 30)
         gone = 1.0 - pw
+        left = self.off["R"] + 0.5 - t
+        sa = t - T0
         mu = st["mu"]
         x0, x1 = self.yld
         w = x1 - x0
         rs = L.T_MICRO if w < 330.0 else L.T_SMALL
-        f.tag("w", x0, 326, hud.erode("LIGHT // YIELD", gone, 61, fr), size=L.T_LABEL, pad=4, alpha=pw)
-        bsz = float(np.clip((w - 6) / (10 * CHAR_W), 36.0, 56.0))
-        hud.big_number(f, x0, 462, _fit(["SCINTILLATION PHOTONS", "PHOTONS"], w, L.T_MICRO),
-                       hud.erode(_thousands(st["n_gamma"]), gone, 62, fr), size=bsz, layer="w", alpha=pw)
-        v = {k: min(1.0, (0.2 + 0.8 * st["lv"]) * st["pw"][k]) for k in self.tw}
-        rows = ["YIELD     10 000 /MEV", f"E_DEP     {st['e_dep']:09.3f} MEV",
-                f"DE/DX     {mu['dedx']:07.3f} MEV/CM", f"RANGE     {mu['R']:09.4f} CM",
-                f"PMT_L     {v['L'] * 0.71:.3f} V", f"PMT_C     {v['C'] * (0.8 + 0.2 * math.tanh(st['pulse'])):.3f} V",
-                f"PMT_R     {v['R'] * 0.71:.3f} V", f"KICK      {st['pulse']:.3f}"]
-        for k, r in enumerate(rows):
-            f.text("w", x0, 520 + k * 30, hud.erode(r, gone, 70 + k, fr), size=rs, alpha=0.9 * pw)
+        with f.build(B.io(sa - 0.3, left, out=0.5), (x0 - 8.0, 300.0, x1 + 8.0, 790.0), flow="tb", wave=0.45, key=13):
+            f.tag("w", x0, 326, "LIGHT // YIELD", size=L.T_LABEL, pad=4)
+            bsz = float(np.clip((w - 6) / (10 * CHAR_W), 36.0, 56.0))
+            f.tag("w", x0, 462 - bsz - 14, _fit(["SCINTILLATION PHOTONS", "PHOTONS"], w, L.T_MICRO), size=L.T_MICRO, pad=3)
+            f.text("w", x0 - 2, 462, hud.erode(_thousands(st["n_gamma"]), gone, 62, fr), size=bsz, alpha=0.97)
+            v = {k: min(1.0, (0.2 + 0.8 * st["lv"]) * st["pw"][k]) for k in self.tw}
+            rows = ["YIELD     10 000 /MEV", f"E_DEP     {st['e_dep']:09.3f} MEV",
+                    f"DE/DX     {mu['dedx']:07.3f} MEV/CM", f"RANGE     {mu['R']:09.4f} CM",
+                    f"PMT_L     {v['L'] * 0.71:.3f} V", f"PMT_C     {v['C'] * (0.8 + 0.2 * math.tanh(st['pulse'])):.3f} V",
+                    f"PMT_R     {v['R'] * 0.71:.3f} V", f"KICK      {st['pulse']:.3f}"]
+            for k, r in enumerate(rows):
+                f.text("w", x0, 520 + k * 30, hud.erode(r, gone, 70 + k, fr), size=rs, alpha=0.9)
         y = 826.0
-        hud.panel_header(f, x0, x1, y - 26, hud.erode(_fit(["ARP_STREAM // L+R LADDERS", "ARP_STREAM"], w, L.T_MICRO),
-                                                     gone, 81, fr), alpha=pw)
-        if len(self.notes):
-            n = self.notes[self.notes[:, 0] <= t][-15:][::-1]
-            for k, (tn, idx, vel) in enumerate(n):
-                line = f"{sd.tc(tn)} RUNG {int(idx) + 1:02d} VEL {vel:.2f}"
-                f.text("r" if k == 0 else "w", x0, y + 30 + k * 21, hud.erode(line, gone, 90 + k, fr),
-                       size=L.T_MICRO, alpha=(0.95 if k < 2 else 0.6) * pw)
+        with f.build(B.io(sa - 0.5, left, out=0.5), (x0 - 8.0, 794.0, x1 + 8.0, 1170.0), flow="tb", wave=0.4, key=14):
+            hud.panel_header(f, x0, x1, y - 26, _fit(["ARP_STREAM // L+R LADDERS", "ARP_STREAM"], w, L.T_MICRO))
+            if len(self.notes):
+                n = self.notes[self.notes[:, 0] <= t][-15:][::-1]
+                for k, (tn, idx, vel) in enumerate(n):      # every note is a line, decoded as it arrives
+                    line = B.resolve(f"{sd.tc(tn)} RUNG {int(idx) + 1:02d} VEL {vel:.2f}", t - tn, 220.0,
+                                     key=int(tn * 50) & 0xFFFF, spin=0.12)
+                    f.text("r" if k == 0 else "w", x0, y + 30 + k * 21, hud.erode(line, gone, 90 + k, fr),
+                           size=L.T_MICRO, alpha=0.95 if k < 2 else 0.6)
 
     def _draw_bottom(self, f, t, st, ctx):
+        """Bragg curve, PMT barcode, level: constructed one after the other when the scene starts, taken apart
+        with their tower at the power-down (the centre one for the first two, the right one for the level)."""
         y0, y1 = ctx.slots["y0"], ctx.slots["y1"]
-        pwc = float(st["pw"]["C"])
-        fr = int(t * 30)
-        if self.pan_bragg and pwc > 0.01:
+        sa = t - T0
+        left_c = self.off["C"] + 0.5 - t
+        box = lambda a, b: (a - 8.0, y0 - 24.0, b + 8.0, y1 + 8.0)
+        age = B.io(sa - 0.5, left_c, out=0.5)
+        if self.pan_bragg and age >= 0.0:
             # Bragg rise: dE/dx against residual range, log-log, the stopping point on the right
             g0, g1 = self.pan_bragg
-            p = pwc
-            hud.panel_header(f, g0, g1, y0, hud.erode(_fit(["BRAGG // DE/DX VS RESIDUAL RANGE", "BRAGG // DE/DX"],
-                                                           g1 - g0, L.T_MICRO), 1 - p, 120, fr), alpha=p)
-            px0, px1, py0, py1 = g0 + 16, g1 - 168, y0 + 26, y1 - 22
-            tb = self.tab
-            d0, d1 = math.log10(1.5), math.log10(float(tb["dedx"][0]) * 1.1)
+            with f.build(age, box(g0, g1), key=20):
+                hud.panel_header(f, g0, g1, y0, _fit(["BRAGG // DE/DX VS RESIDUAL RANGE", "BRAGG // DE/DX"], g1 - g0, L.T_MICRO))
+                px0, px1, py0, py1 = g0 + 16, g1 - 168, y0 + 26, y1 - 22
+                tb = self.tab
+                d0, d1 = math.log10(1.5), math.log10(float(tb["dedx"][0]) * 1.1)
 
-            def PX(lr):
-                return px0 + (self.lR0 - np.asarray(lr)) / (self.lR0 - self.lR1) * (px1 - px0)
+                def PX(lr):
+                    return px0 + (self.lR0 - np.asarray(lr)) / (self.lR0 - self.lR1) * (px1 - px0)
 
-            def PY(d):
-                return py1 - (np.log10(d) - d0) / (d1 - d0) * (py1 - py0)
+                def PY(d):
+                    return py1 - (np.log10(d) - d0) / (d1 - d0) * (py1 - py0)
 
-            f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.6 * p)
-            decs = list(range(math.ceil(self.lR1), math.floor(self.lR0) + 1))
-            every = 1 if (px1 - px0) / max(len(decs), 1) >= 46 else 2
-            for j, dec in enumerate(decs):
-                xx = float(PX(dec))
-                f.segments("w", [xx], [py1], [xx], [py1 + 6], 0.7 * p)
-                if j % every == 0:
-                    f.text("w", xx + 3, py1 + 20, f"1E{dec:+d}", size=L.T_MICRO, alpha=0.6 * p)
-            sel = slice(None, None, 8)
-            f.dots("w", PX(tb["lR"][sel]), PY(tb["dedx"][sel]), 1.0, 0.35 * p)
-            mu = st["mu"]
-            m = tb["lR"] >= mu["lR"]
-            if m.sum() > 1:
-                f.polyline("w", PX(tb["lR"][m][::-1]), PY(tb["dedx"][m][::-1]), 1.0 * p, width=L.LW)
-            mx, my = float(PX(mu["lR"])), float(PY(mu["dedx"]))
-            f.segments("r", [mx, px0], [py0 - 4, my], [mx, px1], [py1, my], 0.45 * p)
-            f.dots("r", [mx], [my], 4.4, 1.6 * p)
-            lab = "STOPPED" if t >= PEAK else f"{mu['dedx']:07.3f} MEV/CM"
-            f.text("r", g1 - 4, y0 + 36, hud.erode(lab, 1 - p, 121, fr), size=L.T_SMALL, anchor="rs", alpha=p)
-            f.text("w", g1 - 4, y0 + 62, hud.erode(f"BETA {mu['beta']:.4f}", 1 - p, 122, fr), size=L.T_MICRO,
-                   anchor="rs", alpha=0.8 * p)
-            f.text("w", g1 - 4, y0 + 84, hud.erode(f"R {mu['R']:.3f} CM", 1 - p, 123, fr), size=L.T_MICRO,
-                   anchor="rs", alpha=0.8 * p)
-        if self.pan_bar and pwc > 0.01:
+                f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.6)
+                decs = list(range(math.ceil(self.lR1), math.floor(self.lR0) + 1))
+                every = 1 if (px1 - px0) / max(len(decs), 1) >= 46 else 2
+                for j, dec in enumerate(decs):
+                    xx = float(PX(dec))
+                    f.segments("w", [xx], [py1], [xx], [py1 + 6], 0.7)
+                    if j % every == 0:
+                        f.text("w", xx + 3, py1 + 20, f"1E{dec:+d}", size=L.T_MICRO, alpha=0.6)
+                sel = slice(None, None, 8)
+                f.dots("w", PX(tb["lR"][sel]), PY(tb["dedx"][sel]), 1.0, 0.35)
+                mu = st["mu"]
+                m = tb["lR"] >= mu["lR"]
+                if m.sum() > 1:
+                    f.polyline("w", PX(tb["lR"][m][::-1]), PY(tb["dedx"][m][::-1]), 1.0, width=L.LW)
+                mx, my = float(PX(mu["lR"])), float(PY(mu["dedx"]))
+                f.segments("r", [mx, px0], [py0 - 4, my], [mx, px1], [py1, my], 0.45)
+                f.dots("r", [mx], [my], 4.4, 1.6)
+                lab = B.resolve("STOPPED", t - PEAK, 40.0, key=21, pad=True) if t >= PEAK else f"{mu['dedx']:07.3f} MEV/CM"
+                f.text("r", g1 - 4, y0 + 36, lab, size=L.T_SMALL, anchor="rs")
+                f.text("w", g1 - 4, y0 + 62, f"BETA {mu['beta']:.4f}", size=L.T_MICRO, anchor="rs", alpha=0.8)
+                f.text("w", g1 - 4, y0 + 84, f"R {mu['R']:.3f} CM", size=L.T_MICRO, anchor="rs", alpha=0.8)
+        age = B.io(sa - 0.65, left_c, out=0.5)
+        if self.pan_bar and age >= 0.0:
             # centre tower: photomultiplier signal >> barcode
             g0, g1 = self.pan_bar
-            hud.panel_header(f, g0, g1, y0, hud.erode("PMT_C >> BARCODE", 1 - pwc, 130, fr), alpha=pwc)
-            cols = int(np.clip((g1 - g0) / 3.2, 45, 150)) // 3 * 3
-            dt = 3.0 / cols
-            kf = math.floor((t - 3.0) / dt)
-            kk = kf + np.arange(cols)
-            ts = kk * dt
-            pulse = np.array([ctx.cues.kick(float(v), tau=0.2) for v in ts[::3]]).repeat(3)[:cols]
-            dens = (0.05 + 0.5 * _level(ts) + 0.42 * np.tanh(0.8 * pulse)) * np.array(
-                [float(self._power("C", float(v))) for v in ts])
-            hud.barcode_lanes(f, g0, g1, y0 + 12, y1, dens, kk, lanes=3, seed=9)
-        if self.pan_lvl:
+            with f.build(age, box(g0, g1), key=22):
+                hud.panel_header(f, g0, g1, y0, "PMT_C >> BARCODE")
+                cols = int(np.clip((g1 - g0) / 3.2, 45, 150)) // 3 * 3
+                dt = 3.0 / cols
+                kf = math.floor((t - 3.0) / dt)
+                kk = kf + np.arange(cols)
+                ts = kk * dt
+                pulse = np.array([ctx.cues.kick(float(v), tau=0.2) for v in ts[::3]]).repeat(3)[:cols]
+                dens = (0.05 + 0.5 * _level(ts) + 0.42 * np.tanh(0.8 * pulse)) * np.array(
+                    [float(self._power("C", float(v))) for v in ts])
+                hud.barcode_lanes(f, g0, g1, y0 + 12, y1, dens, kk, lanes=3, seed=9)
+        age = B.io(sa - 0.8, self.off["R"] + 0.5 - t, out=0.5)
+        if self.pan_lvl and age >= 0.0:
             g0, g1 = self.pan_lvl
-            p = float(st["pw"]["R"])
-            if p > 0.01:
-                hud.panel_header(f, g0, g1, y0, hud.erode("LEVEL", 1 - p, 140, fr), alpha=p)
-                f.text("r" if st["beam"] > 0.5 else "w", g0, y0 + 84, hud.erode(f"{st['lv']:.3f}", 1 - p, 141, fr),
-                       size=44, alpha=p)
-                f.text("w", g0 + 2, y0 + 114, hud.erode("LIGHT" if st["beam"] > 0.5 else "RISING" if t < PEAK else "STOPPED",
-                                                        1 - p, 142, fr), size=L.T_MICRO, alpha=0.8 * p)
+            lit = st["beam"] > 0.5
+            with f.build(age, box(g0, g1), key=23):
+                hud.panel_header(f, g0, g1, y0, "LEVEL")
+                f.text("r" if lit else "w", g0, y0 + 84, f"{st['lv']:.3f}", size=44)
+                # its state changes on the peak and on the light: the new word is decoded
+                word, t_w = ("LIGHT", self.cue_light + 0.2) if lit else ("RISING", T0) if t < PEAK else ("STOPPED", PEAK)
+                f.text("w", g0 + 2, y0 + 114, B.resolve(word, t - t_w, 40.0, key=24), size=L.T_MICRO, alpha=0.8)

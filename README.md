@@ -32,6 +32,7 @@ python preview.py still 2:53 --towers data/towers_alt2_example.json --tag _ALT2
 python tools/analyze_audio.py                   # rebuild data/cues.npz when the audio changes
 python tools/check_frames.py                    # every look: identical across processes? errors?
 python tools/check_frames.py --sweep 5          # one low-res frame every 5 s over the show, errors only
+python tools/filmstrip.py 12.0 13.4 --crop 620,1180,2340,1354   # frame-by-frame sheet of a region -> previews/strips
 ```
 
 A full-resolution frame takes 2 to 6 s; the board uses all the cores. The first dance / glitch
@@ -45,6 +46,7 @@ muonbloom/
   engine.py      additive line renderer: white layer + red layer, bloom, tonemap
   layout.py      frame, header, subtitle box, bottom band; towers -> bays, columns, focus point
   showdata.py    sheet timeline (SECTIONS), subtitles, audio cues, detector streams
+  build.py       build-up animations: how every data element is constructed and taken apart
   hud.py         frame, subtitles, edge ticks, strips, rulers, tags, barcodes, callouts
   towers.py      tower faces, blooms, strings, scopes, the incoming muon
   show.py        time -> look -> scene.draw() + towers + frame + subtitles
@@ -67,6 +69,24 @@ height are not known yet, so nothing is placed with fixed coordinates:
 * Rule for every scene: nothing important behind or right against a tower. Textures and
   long lines may pass behind.
 * A tower that is not lit is drawn as a dark band (before "These detectors" at 01:44).
+
+### Nothing fades: everything that shows data builds up
+
+A strip, panel, card, note, counter, label or tag never fades in and never just appears: it is
+constructed, and taken apart when it leaves. Only the image itself (3D views, fields, rings,
+blooms, the light of the towers) keeps intensity ramps.
+
+* `with f.build(age, rect):` around the drawing calls of a block does it (`engine.Frame.build`,
+  `build.Block`): lines are drawn by a pen with a bright head, short marks are thrown out and
+  fall back, outlines and curves are traced, bars grow, text is decoded out of random glyphs
+  and its figures spin before they lock, tags are pushed out; registration brackets frame the
+  block while it is made. `age` is the time since the block appeared: negative draws nothing,
+  large draws as usual. `build.io(age, left)` gives the age of a block that also leaves.
+* The first 16 seconds use hand-made choreographies built from the helpers of `build.py`
+  (`pen`, `tag`, `open_box`, `decode`, `roll`, `flash` ...).
+* Everything is a pure function of that age, so it ports to the realtime app unchanged.
+* A build can only be judged in motion: `tools/filmstrip.py` tiles consecutive frames of a
+  region on one sheet.
 
 ### The detectors
 

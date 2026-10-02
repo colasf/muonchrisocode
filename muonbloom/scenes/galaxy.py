@@ -24,6 +24,12 @@ The towers stand in front of the wall and nobody knows yet where: no fixed x her
 the centre detector, the two data columns are the outermost free columns of ctx.cols (dropped or
 shortened when the towers leave no room), the world dissolves towards them, the floating numbers
 and the tags keep clear of every tower. Only trails, rings and the floor pass behind the towers.
+
+NOTHING THAT SHOWS DATA FADES IN OR POPS IN (muonbloom/build.py). At the cut (03:00) the two data columns
+and the bottom panels construct themselves, block after block; the label of a range ring is decoded as
+its ring draws itself; a floating number is decoded when it lands on its trail and taken apart when it
+leaves; the TRACE tag of a detection is constructed on its tower and taken apart; a new line of the trace
+log is decoded as it comes in. The galaxy itself (floor, trails, rings, bursts, flashes) is the image.
 """
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -53,9 +60,13 @@ STRONG = 0.65                   # a hit at least this strong makes the core answ
 GEN_LIFE = (14.0, 20.0)
 RED_LIFE = (26.0, 34.0)
 N_BINS = 60
+RINGS = (4, 8, 12, 16)          # range rings (kpc); ring k switches on 0.4 + 1.6 k seconds after the cut
 
 
 COL_W = 403.0                   # width a data column takes when the bay gives it
+EDGE = 60.0                     # px / s: the red number of a detection is decoded as it gets clear of an obstacle
+LAB_PERIOD = 6.0                # a floating number rides its trail for one turn of this length (s)
+LAB_BACK, LAB_AHEAD = 20, 14    # frames looked back / ahead to know when a floating number came on / will go
 
 
 def omega(r):
@@ -65,6 +76,14 @@ def omega(r):
 def fit(size, n_chars, width):
     """Largest type size <= size that sets n_chars inside width."""
     return max(10.0, min(float(size), width / (max(n_chars, 1) * CHAR_W)))
+
+
+def _gap(box, boxes):
+    """Smallest gap (px) between a box and the boxes already placed (<= 0: it touches one of them)."""
+    g = 1e9
+    for o in boxes:
+        g = min(g, max(o[0] - box[2], box[0] - o[2], o[1] - box[3], box[1] - o[3]))
+    return g
 
 
 def _cum(w):
@@ -221,6 +240,18 @@ class Galaxy(Scene):
                 self.col_r = (max(a, b - COL_W), b)
         self.x_lo = self.col_l[1] if self.col_l else L.FX0      # the world dissolves towards the columns
         self.x_hi = self.col_r[0] if self.col_r else L.FX1
+        # where the label of each range ring goes: on the near side, wherever no tower stands (None: nowhere)
+        self._ring_xy = []
+        for rk in RINGS:
+            xy = None
+            for a_lab in (1.12, 0.62, 2.0, 2.52, 0.3, 2.84):
+                lab = np.array([[rk / KPC * math.cos(a_lab), 0.0, rk / KPC * math.sin(a_lab)]], np.float32)
+                lx, ly, _, _ = self.cam.project(lab)
+                x, y = float(lx[0]), float(ly[0])
+                if y < Y_CLIP - 30 and self._clear(x - 4, x + 90):
+                    xy = (x, y)
+                    break
+            self._ring_xy.append(xy)
 
     def _clear(self, xa, xb, pad=16.0):
         """Is the x-interval between the data columns and clear of every tower?"""
@@ -249,6 +280,8 @@ class Galaxy(Scene):
         self.lab_val = 0.0004 + 0.02 * rng.random(len(self.lab)) ** 2
         self.lab_dig = rng.integers(8, 11, len(self.lab))
         self.lab_ph = rng.uniform(0, 6.0, len(self.lab))
+        self.lab_str = [f"{v:.{int(d)}f}" for v, d in zip(self.lab_val, self.lab_dig)]
+        self.lab_r, self.lab_th = m.r[self.lab], m.th[self.lab]      # their tables (read some thirty times a frame)
         self.track = np.sort(rng.choice(cand, size=min(90, len(cand)), replace=False))
 
     def _unproject(self, sx, sy):
@@ -315,7 +348,7 @@ class Galaxy(Scene):
     def _floor(self, f, t):
         cam = self.cam
         t0 = self.span[0]
-        self._ring_labels = []
+        self._ring_labels = self._ring_labels_at(t)
         ax, ay, az, aok = cam.project(self.fa)
         bx, by, bz, bok = cam.project(self.fb)
         ok = aok & bok
@@ -326,7 +359,7 @@ class Galaxy(Scene):
         m = ok & self.f_axis
         f.segments("r", ax[m], ay[m], bx[m], by[m], 0.7 * fog[m], width=L.LW)
         # range rings every 4 kpc, dotted, labelled on the near side: each one switches on as the galaxy reaches it
-        for k, rk in enumerate((4, 8, 12, 16)):
+        for k, rk in enumerate(RINGS):
             age = t - (t0 + 0.4 + 1.6 * k)
             if age <= 0:
                 continue
@@ -338,14 +371,13 @@ class Galaxy(Scene):
             sx, sy, sz, ok = cam.project(P)
             ok = ok & show
             f.dots("w", sx[ok], sy[ok], 1.4, 0.55 * (0.12 + 0.88 * self._fade(sx[ok], sy[ok])))
-            for a_lab in (1.12, 0.62, 2.0, 2.52, 0.3, 2.84):      # on the near side, wherever no tower stands
-                lab = np.array([[rr * math.cos(a_lab), 0.0, rr * math.sin(a_lab)]], np.float32)
-                lx, ly, _, _ = cam.project(lab)
-                x, y = float(lx[0]), float(ly[0])
-                if y < Y_CLIP - 30 and self._clear(x - 4, x + 90):
-                    self._ring_labels.append((x, y))
-                    f.text("w", x + 10, y + 22, hud.typed(f"{rk:02d} KPC", age, cps=20), size=L.T_SMALL, alpha=0.75)
-                    break
+            if self._ring_xy[k] is not None:                      # its label is decoded while it draws itself
+                x, y = self._ring_xy[k]
+                f.text("w", x + 10, y + 22, B.resolve(f"{rk:02d} KPC", age, 30.0, 0.1, key=k), size=L.T_SMALL, alpha=0.75)
+
+    def _ring_labels_at(self, t):
+        """Places of the range-ring labels that are on at time t."""
+        return [xy for k, xy in enumerate(self._ring_xy) if xy is not None and t - (self.span[0] + 0.4 + 1.6 * k) > 0]
 
     def _particles(self, f, t, ctx):
         cam = self.cam
@@ -463,58 +495,98 @@ class Galaxy(Scene):
             f.segments("w", cx + 14 * np.cos(an), cy + 7 * np.sin(an), cx + (14 + ln) * np.cos(an),
                        cy + (14 + ln) * np.sin(an) * 0.5, 0.95 * (1 - u) ** 2, 0.0, width=L.LW)
 
-    def _safe(self, x, y):
-        """Is a floating label at (x, y) clear of the columns, the bottom band, the core, the towers and
-        their tags, the range-ring labels?"""
-        if not (self.x_lo + 65 < x < self.x_hi - 280 and L.FY0 + 40 < y < Y_CLIP - 60):
-            return False
+    def _margin(self, x, y, rings=None):
+        """How far (px) a floating label at (x, y) is inside the free part of the wall: clear of the columns,
+        the bottom band, the core, the towers and their tags, the range-ring labels (`rings`, default: the
+        ones on now). <= 0: it is not free. Scalars or arrays."""
+        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+        m = np.minimum(np.minimum(x - (self.x_lo + 65), (self.x_hi - 280) - x),
+                       np.minimum(y - (L.FY0 + 40), (Y_CLIP - 60) - y))
         cx, cy = self.core
-        if abs(x - cx + 90) < 330 and abs(y - cy) < 130:
-            return False
+        m = np.minimum(m, np.maximum(np.abs(x - cx + 90) - 330, np.abs(y - cy) - 130))
         for tw in self.ctx.towers.values():
-            if tw.x0 - 250 < x < tw.x1 + 12 and y > tw.top - 30:
-                return False
-            if tw.x0 - 480 < x < tw.x1 + 260 and tw.top - 40 < y < tw.top + tw.det_h + 150:
-                return False
-        for bx, by in self._ring_labels:
-            if bx - 240 < x < bx + 110 and by - 30 < y < by + 40:
-                return False
-        return True
+            m = np.minimum(m, np.maximum(np.maximum(tw.x0 - 250 - x, x - (tw.x1 + 12)), (tw.top - 30) - y))
+            m = np.minimum(m, np.maximum(np.maximum(tw.x0 - 480 - x, x - (tw.x1 + 260)),
+                                         np.maximum((tw.top - 40) - y, y - (tw.top + tw.det_h + 150))))
+        for bx, by in (self._ring_labels if rings is None else rings):
+            m = np.minimum(m, np.maximum(np.maximum(bx - 240 - x, x - (bx + 110)), np.maximum(by - 30 - y, y - (by + 40))))
+        return m
 
-    def _labels(self, f, t):
-        """The floating numbers of the TouchDesigner scene, riding on particle heads."""
-        idx, hx, hy, hok, age = self._heads[:5]
-        self._boxes = boxes = []
-        if not len(idx):
-            return
-        m = self.model
-        pos = {int(k): j for j, k in enumerate(idx)}
-        period = 6.0
-        for q, k in enumerate(self.lab):
-            j = pos.get(int(k))
-            if j is None or not hok[j] or not (2.0 < age[j] < m.f0[k] - 1.0):
-                continue
-            ph = (t + self.lab_ph[q]) / period
-            if hash01(q, int(ph)) > 0.4:
-                continue
-            u = ph - int(ph)
-            alpha = float(smoothstep(0.0, 0.08, u) * (1 - smoothstep(0.86, 1.0, u)))
-            x, y = float(hx[j]), float(hy[j])
-            if not self._safe(x, y):
-                continue
-            s = f"{self.lab_val[q]:.{int(self.lab_dig[q])}f}"
-            bx = (x - 6, y - 26, x + 26 + 11 * len(s), y + 12)
-            if any(bx[0] < o[2] and o[0] < bx[2] and bx[1] < o[3] and o[1] < bx[3] for o in boxes):
+    def _label_heads(self, t):
+        """Head of every labelled trail at time t: (screen x, screen y, age of the particle, alive and in view)."""
+        m, k = self.model, self.lab
+        a = t - m.tb[k]
+        ok = (a > 0.0) & (a < m.f1[k])
+        age = np.maximum(a, 0.0)[:, None]
+        r = m._interp(self.lab_r, age)[:, 0]
+        th = m._interp(self.lab_th, age)[:, 0]
+        r = r * (1.0 + m.ecc[k] * np.cos(2 * (th - m.eph[k])))
+        P = np.stack([r * np.cos(th), m.h[k] * np.minimum(r / 0.4, 1.0), r * np.sin(th)], -1).astype(np.float32)
+        sx, sy, _, pok = self.cam.project(P)
+        return sx.astype(np.float64), sy.astype(np.float64), a, ok & pok
+
+    def _label_set(self, t):
+        """The floating numbers that are on at time t -> ({label: (x, y)}, their boxes). A number rides the head
+        of its trail for one turn out of 2.5 (LAB_PERIOD each), once its particle has settled, while it is
+        clear of the towers, the core, the columns and the ring labels, and of the numbers placed before it;
+        twelve at most."""
+        x, y, age, ok = self._label_heads(t)
+        k = self.lab
+        ph = np.floor((t + self.lab_ph) / LAB_PERIOD).astype(np.int64)
+        on = ok & (age > 2.0) & (age < self.model.f0[k] - 1.0) & (hash01(np.arange(len(k)), ph) <= 0.4)
+        on[on] = self._margin(x[on], y[on], self._ring_labels_at(t)) > 0
+        out, boxes = {}, []
+        for q in np.nonzero(on)[0]:
+            xq, yq = float(x[q]), float(y[q])
+            bx = (xq - 6, yq - 26, xq + 26 + 11 * len(self.lab_str[q]), yq + 12)
+            if _gap(bx, boxes) <= 0:
                 continue
             boxes.append(bx)
-            f.dots("w", [x], [y], 2.8, 1.3 * alpha)
-            f.text("w", x + 12, y + 6, s, size=L.T_LABEL, alpha=0.88 * alpha)
+            out[int(q)] = (xq, yq)
             if len(boxes) >= 12:
                 break
+        return out, boxes
+
+    def _labels(self, f, t):
+        """The floating numbers of the TouchDesigner scene, riding on particle heads. They never pop in or
+        out: a number is decoded when it comes on (its turn starts, its trail carries it clear of a tower or
+        of another number ...) and taken apart before it goes. When that happens is found by applying the
+        rules a little back and ahead in time: the model is closed-form, so this stays a pure function of t
+        (the realtime app would simply keep a timer per number)."""
+        now, self._boxes = self._label_set(t)
+        if not now:
+            return
+        dt = 1.0 / 30.0
+        since, left = {}, {}
+        pend = set(now)
+        for n in range(1, LAB_BACK + 1):                # when did each one come on?
+            if not pend:
+                break
+            prev = self._label_set(t - n * dt)[0]
+            for q in [q for q in pend if q not in prev]:
+                since[q] = (n - 1) * dt
+                pend.discard(q)
+        pend = set(now)
+        for n in range(1, LAB_AHEAD + 1):               # when will it go?
+            if not pend:
+                break
+            nxt = self._label_set(t + n * dt)[0]
+            for q in [q for q in pend if q not in nxt]:
+                left[q] = n * dt
+                pend.discard(q)
+        cps = 55.0
+        for q, (x, y) in now.items():
+            s = self.lab_str[q]
+            a = B.io(since.get(q, 9.0), left.get(q), out=0.45, span=len(s) / cps + 0.35)
+            if a <= 0.0:
+                continue
+            f.dots("w", [x], [y], 2.8 * float(B.spring(a / 0.22)), 1.3)
+            f.text("w", x + 12, y + 6, B.resolve(s, a, cps, 0.06, key=q), size=L.T_LABEL, alpha=0.88)
 
     def _events(self, f, t):
         """Each detection traced back: a ring on the floor where the trails leave and a red number riding
-        the leading trail."""
+        the leading trail (decoded when it lands on it, taken apart before it leaves it, and as it comes up to
+        an obstacle or to another number: see EDGE)."""
         m = self.model
         ridx, rx, ry, rok, rage = self._rheads[:5]
         pos = {int(k): j for j, k in enumerate(ridx)}
@@ -538,44 +610,57 @@ class Galaxy(Scene):
                         continue
                     x, y = float(rx[j]), float(ry[j])
                     bx = (x - 6, y - 26, x + 150, y + 12)
-                    free = not any(bx[0] < o[2] and o[0] < bx[2] and bx[1] < o[3] and o[1] < bx[3]
-                                   for o in self._boxes)
-                    if free and self._safe(x, y):
+                    mg, gap = float(self._margin(x, y)), _gap(bx, self._boxes)
+                    if mg > 0 and gap > 0:
                         self._boxes.append(bx)
-                        alpha = float(1 - smoothstep(3.3, 4.5, a))
                         s = f"{ev['e'] * 0.01 + 0.0001 * hash01(int(ev['t'] * 100), jj):.10f}"
-                        f.text("r", x + 12, y + 6, hud.typed(s, a, cps=40, delay=0.25), size=L.T_LABEL, alpha=alpha)
+                        ab = B.io(a - 0.25, 4.5 - a, out=0.5, span=len(s) / 45.0 + 0.35)
+                        ab = min(ab, mg / EDGE, gap / EDGE)
+                        f.text("r", x + 12, y + 6, B.resolve(s, ab, 45.0, key=40 + jj), size=L.T_LABEL)
 
     def _trace_tag(self, f, t, ctx):
-        """Tag on the tower whose detection is being traced back right now."""
-        ev = [e for e in self.model.events if not e["echo"] and 0.0 <= t - e["t"] < (4.0 if e["stage"] else 2.6)]
-        if not ev:
-            return
-        e = ev[-1]
-        a = t - e["t"]
-        hold = 4.0 if e["stage"] else 2.6
-        alpha = float(1 - smoothstep(hold - 0.6, hold, a))
-        tw = ctx.towers[e["key"]]
-        n = sum(1 for x in self.model.events if x["t"] <= e["t"] and not x["echo"])
+        """Tag on every tower whose detection is being traced back right now. It never fades: its black
+        plate opens, the TRACE tag is made, the three lines are decoded; a new detection of the same tower
+        while the tag is up is decoded in place; when its time is over the whole thing is taken apart."""
+        up = {}                                     # tower -> (when its tag came up, event shown, its number, end)
+        count = 0
+        for e in self.model.events:
+            if e["echo"] or e["t"] > t:
+                continue
+            count += 1
+            prev = up.get(e["key"])
+            start = prev[0] if prev and prev[3] > e["t"] else e["t"]
+            up[e["key"]] = (start, e, count, e["t"] + (4.0 if e["stage"] else 2.6))
         tws = sorted(ctx.towers.values(), key=lambda v: v.x0)
-        i = tws.index(tw)
-        room_r = (tws[i + 1].x0 if i + 1 < len(tws) else self.x_hi) - tw.x1
-        room_l = tw.x0 - (tws[i - 1].x1 if i > 0 else self.x_lo)
-        if max(room_r, room_l) < 290:
-            return                          # no room beside this tower: the trace log has it anyway
-        side = 1 if room_r >= 330 or room_r >= room_l else -1
-        x = tw.x1 + 30 if side > 0 else tw.x0 - 30
-        y = tw.top + tw.det_h + 44          # beside the tower body, clear of the bloom at its head
-        anchor = "ls" if side > 0 else "rs"
-        f.tag("r", x, y, f"TRACE {n:03d}", size=L.T_TAG, pad=5, alpha=alpha, anchor=anchor)
-        lines = [f"{L.NAMES[e['key']]}  E {e['e']:.3f}", f"GL {e['gl']:05.1f}  GB {e['gb']:+05.1f}",
-                 f"D {e['d']:05.2f} KPC"]
-        w = max(len(s) for s in lines) * L.T_SMALL * 0.61
-        bx0 = x - 6 if side > 0 else x - w - 6
-        f.occlude(bx0, y + 12, bx0 + w + 12, y + 16 + len(lines) * 25)
-        for k, ln in enumerate(lines):
-            f.text("w", x, y + 36 + k * 25, hud.typed(ln, a, cps=70, delay=0.08 * k), size=L.T_SMALL,
-                   alpha=0.92 * alpha, anchor=anchor)
+        for key, (start, e, n, end) in up.items():
+            if t >= end:
+                continue
+            tw = ctx.towers[key]
+            i = tws.index(tw)
+            room_r = (tws[i + 1].x0 if i + 1 < len(tws) else self.x_hi) - tw.x1
+            room_l = tw.x0 - (tws[i - 1].x1 if i > 0 else self.x_lo)
+            if max(room_r, room_l) < 290:
+                continue                        # no room beside this tower: the trace log has it anyway
+            side = 1 if room_r >= 330 or room_r >= room_l else -1
+            x = tw.x1 + 30 if side > 0 else tw.x0 - 30
+            y = tw.top + tw.det_h + 44          # beside the tower body, clear of the bloom at its head
+            anchor = "ls" if side > 0 else "rs"
+            lines = [f"{L.NAMES[key]}  E {e['e']:.3f}", f"GL {e['gl']:05.1f}  GB {e['gb']:+05.1f}",
+                     f"D {e['d']:05.2f} KPC"]
+            w = max(len(s) for s in lines) * L.T_SMALL * 0.61
+            bx0 = x - 6 if side > 0 else x - w - 6
+            ab = B.io(t - start, end - t, out=0.4, span=0.9)
+            a = min(ab, t - e["t"])                 # a new detection of this tower is decoded in place
+            f.occlude(bx0, y + 12, bx0 + w + 12, y + 12 + (4 + len(lines) * 25) * float(B.ease(B.lin(ab, 0.0, 0.2))))
+            title = f"TRACE {n:03d}"
+            if a < ab:                              # ... its number is decoded in the tag, which stays
+                f.tag("r", x, y, B.decode(title, a, cps=60.0, key=130, pad=True), size=L.T_TAG, pad=5, anchor=anchor,
+                      ref=title)
+            else:
+                B.tag(f, "r", x, y, title, a, size=L.T_TAG, pad=5, anchor=anchor, cps=60.0, key=130)
+            for k, ln in enumerate(lines):
+                f.text("w", x, y + 36 + k * 25, B.resolve(ln, a, 90.0, 0.1 + 0.08 * k, key=131 + k, pad=side < 0),
+                       size=L.T_SMALL, alpha=0.92, anchor=anchor)
 
     # ------------------------------------------------------------------ HUD
     def _left(self, f, t, ctx, n_alive):
@@ -585,11 +670,13 @@ class Galaxy(Scene):
         w = x1 - x0
         _, sec, _ = sd.section_at(t)
         head = f"{sec[0]} // {sec[1]}"
-        f.tag("w", x0, 272, head, size=fit(L.T_SMALL, len(head), w - 10), pad=4)
+        age = t - self.span[0]                    # the column is constructed at the cut, block after block
         ts = fit(76, 6, w - 30)
-        f.tag("w", x0 + 4, 296 + ts, "GALAXY", size=ts, pad=ts * 0.13)
-        sub = "COSMIC RAY SOURCE MAP // MILKY WAY" if w >= 360 else "COSMIC RAY SOURCE MAP"
-        f.text("w", x0, 348 + ts, sub, size=fit(L.T_SMALL, len(sub), w), alpha=0.8)
+        with f.build(age - 0.1, (x0 - 8, 246, x1 + 4, 360 + ts), key=140, wave=0.35):
+            f.tag("w", x0, 272, head, size=fit(L.T_SMALL, len(head), w - 10), pad=4)
+            f.tag("w", x0 + 4, 296 + ts, "GALAXY", size=ts, pad=ts * 0.13)
+            sub = "COSMIC RAY SOURCE MAP // MILKY WAY" if w >= 360 else "COSMIC RAY SOURCE MAP"
+            f.text("w", x0, 348 + ts, sub, size=fit(L.T_SMALL, len(sub), w), alpha=0.8)
         m = self.model
         n_tr = sum(1 for e in m.events if e["t"] <= t)
         lines = [f"EXPOSURE  {t - self.span[0]:06.2f} S",
@@ -601,81 +688,94 @@ class Galaxy(Scene):
                  "RESIDENCE 15 MYR",
                  "V_ROT     220 KM/S",
                  f"INCL      {90 - math.degrees(ELEV):.0f} DEG"]
-        hud.rows(f, x0, 398 + ts, lines, size=L.T_SMALL, lead=1.5, red=(2,))
+        with f.build(age - 0.3, (x0 - 8, 376 + ts, x1 + 4, 398 + ts + 8 * 25.5 + 12), flow="tb", wave=0.6, key=141):
+            hud.rows(f, x0, 398 + ts, lines, size=L.T_SMALL, lead=1.5, red=(2,))
         full = w >= 345
         y = 652.0 + ts
-        f.tag("w", x0, y, "TRACE_LOG // DETECTION -> SOURCE" if w >= 290 else "TRACE_LOG", size=L.T_MICRO, pad=3)
-        f.text("w", x0, y + 30, "T        DET   E     GL    GB    D_KPC" if full else "T        DET   E",
-               size=L.T_MICRO, alpha=0.55)
         ev = [e for e in m.events if e["t"] <= t][::-1]
         n_rows = 7
-        for k, e in enumerate(ev[:n_rows]):
-            line = f"{sd.tc(e['t'])[:8]} DET_{e['key']} {e['e']:.3f}"
-            if full:
-                line += f" {e['gl']:05.1f} {e['gb']:+05.1f} {e['d']:05.2f}"
-            fresh = t - e["t"] < 2.5
-            f.text("r" if fresh else "w", x0, y + 54 + k * 21, line, size=L.T_MICRO,
-                   alpha=(0.95 if k < 2 else 0.62) * (0.6 if e["echo"] else 1.0))
-        if not ev:
-            f.tag("r", x0, y + 60, "DATA ON // WAITING FOR A MUON" if w >= 265 else "WAITING FOR A MUON",
-                  size=L.T_MICRO, pad=3, alpha=0.5 + 0.5 * math.sin(t * 9) ** 2)
+        with f.build(age - 0.55, (x0 - 8, y - 22, x1 + 4, y + 54 + n_rows * 21), flow="tb", wave=0.4, key=142):
+            f.tag("w", x0, y, "TRACE_LOG // DETECTION -> SOURCE" if w >= 290 else "TRACE_LOG", size=L.T_MICRO, pad=3)
+            f.text("w", x0, y + 30, "T        DET   E     GL    GB    D_KPC" if full else "T        DET   E",
+                   size=L.T_MICRO, alpha=0.55)
+            for k, e in enumerate(ev[:n_rows]):
+                line = f"{sd.tc(e['t'])[:8]} DET_{e['key']} {e['e']:.3f}"
+                if full:
+                    line += f" {e['gl']:05.1f} {e['gb']:+05.1f} {e['d']:05.2f}"
+                if k == 0:                  # the detection that just came in is decoded on top of the log
+                    line = B.resolve(line, t - e["t"], 120.0, 0.15 if len(ev) == 1 else 0.0, key=143)
+                fresh = t - e["t"] < 2.5
+                f.text("r" if fresh else "w", x0, y + 54 + k * 21, line, size=L.T_MICRO,
+                       alpha=(0.95 if k < 2 else 0.62) * (0.6 if e["echo"] else 1.0))
+            wait = "DATA ON // WAITING FOR A MUON" if w >= 265 else "WAITING FOR A MUON"
+            if not ev:
+                f.tag("r", x0, y + 60, wait, size=L.T_MICRO, pad=3, alpha=0.5 + 0.5 * math.sin(t * 9) ** 2)
+            elif t - ev[-1]["t"] < 0.15:    # the first muon: the tag is wiped away, the log starts under it
+                f.tag("r", x0, y + 60, "", size=L.T_MICRO, pad=3, ref=wait, wipe=1.0 - B.lin(t - ev[-1]["t"], 0.0, 0.15))
         # orbit log: a few tracked primaries, their numbers changing as they turn
         y2 = y + 54 + n_rows * 21 + 30
-        idx, _, _, _, age, r_head, th_head = self._heads
+        idx, _, _, _, p_age, r_head, th_head = self._heads
         full = w >= 300
-        f.tag("w", x0, y2, "ORBIT_LOG // TRACKED PRIMARIES" if w >= 275 else "ORBIT_LOG", size=L.T_MICRO, pad=3)
-        f.text("w", x0, y2 + 30, "ID    R_KPC  AZ_DEG  V_KM/S  AGE_S" if full else "ID    R_KPC  AZ_DEG",
-               size=L.T_MICRO, alpha=0.55)
-        if len(idx):
-            pos = np.searchsorted(idx, self.track)
-            okk = (pos < len(idx)) & (idx[np.minimum(pos, len(idx) - 1)] == self.track)
-            sel = pos[okk]
-            sel = sel[age[sel] > 2.0]
-            sel = sel[np.argsort(age[sel])][:8]                      # the latest to settle first: a slow ticker
-            for k, j in enumerate(sel):
-                r = float(r_head[j])
-                line = f"{int(idx[j]):04d}  {r * KPC:05.2f}  {math.degrees(float(th_head[j])) % 360:06.2f}"
-                if full:
-                    line += f"  {220.0 * r / (r + RC):06.2f}  {float(age[j]):05.2f}"
-                f.text("w", x0, y2 + 54 + k * 21, line, size=L.T_MICRO, alpha=0.9 if k < 2 else 0.6)
+        with f.build(age - 0.8, (x0 - 8, y2 - 22, x1 + 4, y2 + 54 + 8 * 21), flow="tb", wave=0.4, key=144):
+            f.tag("w", x0, y2, "ORBIT_LOG // TRACKED PRIMARIES" if w >= 275 else "ORBIT_LOG", size=L.T_MICRO, pad=3)
+            f.text("w", x0, y2 + 30, "ID    R_KPC  AZ_DEG  V_KM/S  AGE_S" if full else "ID    R_KPC  AZ_DEG",
+                   size=L.T_MICRO, alpha=0.55)
+            if len(idx):
+                pos = np.searchsorted(idx, self.track)
+                okk = (pos < len(idx)) & (idx[np.minimum(pos, len(idx) - 1)] == self.track)
+                sel = pos[okk]
+                sel = sel[p_age[sel] > 2.0]
+                sel = sel[np.argsort(p_age[sel])][:8]                # the latest to settle first: a slow ticker
+                for k, j in enumerate(sel):
+                    r = float(r_head[j])
+                    line = f"{int(idx[j]):04d}  {r * KPC:05.2f}  {math.degrees(float(th_head[j])) % 360:06.2f}"
+                    if full:
+                        line += f"  {220.0 * r / (r + RC):06.2f}  {float(p_age[j]):05.2f}"
+                    if k == 0:              # a primary that has just settled into its orbit enters the log
+                        line = B.resolve(line, float(p_age[j]) - 2.0, 120.0, key=145)
+                    f.text("w", x0, y2 + 54 + k * 21, line, size=L.T_MICRO, alpha=0.9 if k < 2 else 0.6)
 
     def _right(self, f, t, ctx, hist, hot):
         if self.col_r is None:
             return
         x0, x1 = self.col_r
         w = x1 - x0
-        f.tag("w", x0, 272, f"ARM_DENSITY // {N_BINS} BINS // AZIMUTH" if w >= 300 else "ARM_DENSITY",
-              size=L.T_MICRO, pad=3)
+        age = t - self.span[0]                    # the column is constructed at the cut: histogram, then curve
         top, bot = 300.0, 828.0
         ys = top + np.arange(N_BINS) * (bot - top) / N_BINS
         xl = x0 + 58
         wmax = x1 - xl - 6
         v = hist / max(hist.max(), 1.0)
         hm = hot > 0.3 * np.maximum(hist, 1.0)
-        f.rects("w", xl, ys[~hm], xl + wmax * v[~hm], ys[~hm] + 4, 0.9)
-        f.rects("r", xl, ys[hm], xl + wmax * v[hm], ys[hm] + 4, 1.0)
-        f.segments("w", [xl - 6], [top - 4], [xl - 6], [bot + 2], 0.6)
-        for k in range(0, N_BINS, N_BINS // 6):
-            f.segments("w", [xl - 13], [ys[k] + 2], [xl - 6], [ys[k] + 2], 0.8)
-            f.text("w", x0, ys[k] + 8, f"{k * 360 // N_BINS:03d}", size=L.T_MICRO, alpha=0.7)
+        with f.build(age - 0.4, (x0 - 8, 248, x1 + 4, bot + 10), flow="tb", wave=0.7, key=150):
+            f.tag("w", x0, 272, f"ARM_DENSITY // {N_BINS} BINS // AZIMUTH" if w >= 300 else "ARM_DENSITY",
+                  size=L.T_MICRO, pad=3)
+            f.rects("w", xl, ys[~hm], xl + wmax * v[~hm], ys[~hm] + 4, 0.9)
+            f.rects("r", xl, ys[hm], xl + wmax * v[hm], ys[hm] + 4, 1.0)
+            f.segments("w", [xl - 6], [top - 4], [xl - 6], [bot + 2], 0.6)
+            for k in range(0, N_BINS, N_BINS // 6):
+                f.segments("w", [xl - 13], [ys[k] + 2], [xl - 6], [ys[k] + 2], 0.8)
+                f.text("w", x0, ys[k] + 8, f"{k * 360 // N_BINS:03d}", size=L.T_MICRO, alpha=0.7)
         # rotation curve: speed against radius; the ring of every strong hit travels along it
         y0, y1 = 902.0, 1150.0
-        f.tag("w", x0, y0 - 16, "ROTATION_CURVE // V(R)", size=L.T_MICRO, pad=3)
         px0, px1, py0, py1 = x0 + 8, x1 - 8, y0 + 14, y1 - 30
-        f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.7)
-        hud.ruler(f, px0, px1, py1, 0.0, 24.0, 1.0, 4.0 if w >= 300 else 8.0, fmt=lambda vv: f"{vv:.0f}", inten=0.6,
-                  lab_dy=26)
-        r = np.linspace(0.0, 1.5, 90)
-        vr = omega(r) * r / V0
-        f.polyline("w", px0 + r / 1.5 * (px1 - px0), py1 - vr * (py1 - py0) * 0.9, 0.95, width=L.LW)
-        f.text("w", px1, py0 + 6, "220 KM/S", size=L.T_MICRO, alpha=0.7, anchor="rs")
-        f.text("w", px1, y1 + 6, "KPC", size=L.T_MICRO, alpha=0.6, anchor="rs")
+        with f.build(age - 0.9, (x0 - 8, y0 - 40, x1 + 4, y1 + 14), key=151, wave=0.4):
+            f.tag("w", x0, y0 - 16, "ROTATION_CURVE // V(R)", size=L.T_MICRO, pad=3)
+            f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.7)
+            hud.ruler(f, px0, px1, py1, 0.0, 24.0, 1.0, 4.0 if w >= 300 else 8.0, fmt=lambda vv: f"{vv:.0f}", inten=0.6,
+                      lab_dy=26)
+            r = np.linspace(0.0, 1.5, 90)
+            vr = omega(r) * r / V0
+            f.polyline("w", px0 + r / 1.5 * (px1 - px0), py1 - vr * (py1 - py0) * 0.9, 0.95, width=L.LW)
+            f.text("w", px1, py0 + 6, "220 KM/S", size=L.T_MICRO, alpha=0.7, anchor="rs")
+            f.text("w", px1, y1 + 6, "KPC", size=L.T_MICRO, alpha=0.6, anchor="rs")
         for tg, key, e in self.model.strong:
             a = t - tg
-            if 0 <= a < 2.6:
+            if 0 <= a < 2.6:            # the marker of a strong hit: a line that is drawn, travels, and is withdrawn
                 rw = 1.25 * (0.4 + e) * (1 - (1 - a / 2.6) ** 2.4)
                 xx = px0 + min(rw, 1.5) / 1.5 * (px1 - px0)
-                f.segments("r", [xx], [py0], [xx], [py1], 1.2 * (1 - a / 2.6), width=L.LW)
+                B.pen(f, "r", xx, py1, xx, py0, min(B.lin(a, 0.0, 0.15), 1.0 - B.lin(a, 2.25, 2.6)), 1.1, width=L.LW,
+                      head=0.0)
 
     def _bottom(self, f, t, ctx, n_alive):
         """Bottom band: the free panels between the scopes and the towers, taken by need (they change with
@@ -686,39 +786,43 @@ class Galaxy(Scene):
         rest = [q for q in panels if q is not main]
         code = next((q for q in rest if q[1] - q[0] >= 200.0), None)
         expo = next((q for q in rest if q is not code and q[1] - q[0] >= 125.0), None)
+        a_in = t - self.span[0]                  # the panels are constructed at the cut, one after the other
         if main:
             x0, x1 = main
             w = x1 - x0
-            hud.panel_header(f, x0, x1, y0, "PRIMARIES IN FLIGHT")
-            size = fit(58, 5, min(w * 0.5, 250.0) - 24)
-            f.text("w", x0, y0 + 96, f"{n_alive:,}".replace(",", " "), size=size)
-            xm = x0 + min(250.0, w * 0.55)
-            f.text("w", xm, y0 + 44, "TRACED BACK", size=L.T_MICRO, alpha=0.75)
-            n_tr = sum(1 for e in self.model.events if e["t"] <= t)
-            f.text("r", xm, y0 + 96, f"{n_tr:03d}", size=size)
-            cap = "EACH TRAIL = ONE COSMIC RAY IN THE GALACTIC FIELD" if w >= 415 else "ONE TRAIL = ONE COSMIC RAY"
-            f.text("w", x0, y0 + 122, cap, size=L.T_MICRO, alpha=0.6)
+            with f.build(a_in - 0.2, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), key=160):
+                hud.panel_header(f, x0, x1, y0, "PRIMARIES IN FLIGHT")
+                size = fit(58, 5, min(w * 0.5, 250.0) - 24)
+                f.text("w", x0, y0 + 96, f"{n_alive:,}".replace(",", " "), size=size)
+                xm = x0 + min(250.0, w * 0.55)
+                f.text("w", xm, y0 + 44, "TRACED BACK", size=L.T_MICRO, alpha=0.75)
+                n_tr = sum(1 for e in self.model.events if e["t"] <= t)
+                f.text("r", xm, y0 + 96, f"{n_tr:03d}", size=size)
+                cap = "EACH TRAIL = ONE COSMIC RAY IN THE GALACTIC FIELD" if w >= 415 else "ONE TRAIL = ONE COSMIC RAY"
+                f.text("w", x0, y0 + 122, cap, size=L.T_MICRO, alpha=0.6)
         if code:                          # data on: the three detector streams of the last seconds, as a barcode
             x0, x1 = code
             w = x1 - x0
-            hud.panel_header(f, x0, x1, y0, "DATA ON // DETECTOR STREAMS >> BARCODE" if w >= 335 else
-                             "DETECTOR STREAMS")
-            cols = max(40, int((w - 34) / 4.0))
-            dt = 6.0 / 110
-            kk = math.floor(t / dt) - cols + np.arange(cols) + 1
-            ts = kk * dt
-            bx0 = x0 + 34
-            cw = (x1 - bx0) / cols
-            xs = bx0 + np.arange(cols) * cw
-            lane = (y1 - y0 - 14) / 3
-            for i, key in enumerate(L.ORDER):
-                v = ctx.det.value(key, ts)
-                on = hash01(kk, i + 3) < 0.04 + 1.7 * v
-                ya = y0 + 14 + i * lane
-                f.rects("w", xs[on], ya, xs[on] + cw, ya + lane - 4, 0.95)
-                age, _ = ctx.det.last(key, t, echoes=True)
-                f.text("r" if age < 1.0 else "w", x0, ya + lane - 10, key, size=L.T_LABEL, alpha=0.9)
+            with f.build(a_in - 0.4, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), key=161, flow="lr", wave=0.5):
+                hud.panel_header(f, x0, x1, y0, "DATA ON // DETECTOR STREAMS >> BARCODE" if w >= 335 else
+                                 "DETECTOR STREAMS")
+                cols = max(40, int((w - 34) / 4.0))
+                dt = 6.0 / 110
+                kk = math.floor(t / dt) - cols + np.arange(cols) + 1
+                ts = kk * dt
+                bx0 = x0 + 34
+                cw = (x1 - bx0) / cols
+                xs = bx0 + np.arange(cols) * cw
+                lane = (y1 - y0 - 14) / 3
+                for i, key in enumerate(L.ORDER):
+                    v = ctx.det.value(key, ts)
+                    on = hash01(kk, i + 3) < 0.04 + 1.7 * v
+                    ya = y0 + 14 + i * lane
+                    f.rects("w", xs[on], ya, xs[on] + cw, ya + lane - 4, 0.95)
+                    age, _ = ctx.det.last(key, t, echoes=True)
+                    f.text("r" if age < 1.0 else "w", x0, ya + lane - 10, key, size=L.T_LABEL, alpha=0.9)
         if expo:
             x0, x1 = expo
-            hud.panel_header(f, x0, x1, y0, "EXPOSURE")
-            f.text("w", x0, y0 + 96, f"{t - self.span[0]:04.1f}", size=fit(50, 4, x1 - x0))
+            with f.build(a_in - 0.6, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), key=162):
+                hud.panel_header(f, x0, x1, y0, "EXPOSURE")
+                f.text("w", x0, y0 + 96, f"{t - self.span[0]:04.1f}", size=fit(50, 4, x1 - x0))

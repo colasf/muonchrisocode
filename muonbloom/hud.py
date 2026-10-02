@@ -18,6 +18,7 @@ from .engine import CHAR_W, hash01, smoothstep, text_w
 BLOOM = (0.3, 0.26, 0.2, 0.16, 0.13, 0.1, 0.08, 0.06)
 _GLYPHS = "0123456789ABCDEF#%/*+-=<>"
 SUB_CPS = 46.0                        # typing speed of the subtitles (chars / s)
+SUB_OUT = 0.3                         # seconds a subtitle line takes to be un-typed when it leaves
 HERO_MAX = 16                         # single-cue paragraphs this short are set as a tag (YOU, A bloom, ...)
 
 
@@ -68,7 +69,9 @@ def _is_hero(cue):
 
 
 def subtitle_box_alpha(t):
-    """The box is there while somebody speaks (and across short pauses inside a paragraph)."""
+    """The box is there while somebody speaks (and across short pauses inside a paragraph).
+    0..1 = how far it is open: it slides open from the right edge of the frame before the first word and
+    closes again after the last one (it does not fade)."""
     cues = [c for c in sd.subtitles() if not _is_hero(c)]         # the single words are set as tags, no box
     a = 0.0
     for k, c in enumerate(cues):
@@ -82,7 +85,9 @@ def subtitle_box_alpha(t):
 
 
 def subtitle(f, t, rect=None):
-    """Voice-over text in the box at the top right, typed on. Clears whatever is behind the box."""
+    """Voice-over text in the box at the top right, typed on. Clears whatever is behind the box.
+    Nothing fades: the box opens from the right edge of the frame and closes back to it, the single words
+    set as a tag are made (box pushed out, letters decoded) and taken apart, a line that leaves is un-typed."""
     box_a = subtitle_box_alpha(t)
     x0, y0, x1, y1 = rect or L.SUB
     cue, age = sd.subtitle_at(t)
@@ -91,18 +96,21 @@ def subtitle(f, t, rect=None):
     if cue is not None and _is_hero(cue):
         # a single word: no box, just the tag in the corner (so a bloom on the centre tower stays whole)
         s = cue.text.strip(". ").upper()
-        n = int(age * SUB_CPS) + 1
-        fade = float(1 - smoothstep(cue.end - 0.25, cue.end, t))
         size = 86
         w = len(s) * size * CHAR_W
         f.occlude(x1 - 44 - w - 18, y0 + 14, x1 - 12, y0 + 156)
-        f.tag("w", x1 - 44 - w, y0 + 118, s[:n], size=size, pad=14, alpha=fade, bold=True)
+        cps = 40.0
+        B.tag(f, "w", x1 - 44 - w, y0 + 118, s, B.io(age, cue.end - t, out=0.25, span=(len(s) + 4) / cps), size=size,
+              pad=14, bold=True, cps=cps, key=7)
         return
     if box_a <= 0.01:
         return
-    f.occlude(x0, y0, x1, y1)
-    f.rect("w", x0, y0, x1, y1, 0.95 * box_a, width=L.LW_FRAME)
-    if cue is None:
+    xa = x1 - (x1 - x0) * float(B.ease(box_a))            # the plate slides open from the frame edge
+    f.occlude(xa, y0, x1, y1)
+    f.rect("w", xa, y0, x1, y1, 0.95, width=L.LW_FRAME)
+    if box_a < 1.0:
+        f.dots("w", [xa], [y1], 3.6, 1.7)
+    if cue is None or box_a < 1.0:
         return
     size = L.T_SUB
     cols = int((x1 - x0 - 44) / (size * CHAR_W))
@@ -111,16 +119,19 @@ def subtitle(f, t, rect=None):
         size = int(size * 2 / len(lines) * 0.98)
         lines = wrap(cue.text, int((x1 - x0 - 44) / (size * CHAR_W)))
     n = int(age * SUB_CPS) + 1
-    fade = float(1 - smoothstep(cue.end - 0.25, cue.end, t)) if cue.end - cue.t > 1.0 else 1.0
+    left = cue.end - t
+    out = cue.end - cue.t > 1.0 and left < SUB_OUT       # the line leaves the way it came: un-typed from its end
+    if out:
+        n = min(n, int(sum(len(ln) + 1 for ln in lines) * max(left, 0.0) / SUB_OUT))
     tx = x0 + 22
     typed = 0
     for k, ln in enumerate(lines):
         m = max(0, min(len(ln), n - typed))
         yb = y0 + 64 + k * 80 if len(lines) > 1 else y0 + 64
-        f.text("w", tx, yb, ln[:m], size=size, alpha=fade)
-        if 0 < n - typed <= len(ln) + 1 and int(t * 6) % 2 == 0:       # block cursor while typing
+        f.text("w", tx, yb, ln[:m], size=size)
+        if 0 < n - typed <= len(ln) + 1 and (out or int(t * 6) % 2 == 0):  # block cursor while typing / un-typing
             cx = tx + text_w(ln[:m], size) + 4
-            f.rects("w", cx, yb - size * 0.62, cx + size * 0.5, yb + size * 0.1, 0.9 * fade)
+            f.rects("w", cx, yb - size * 0.62, cx + size * 0.5, yb + size * 0.1, 0.9)
         typed += len(ln) + 1
 
 
@@ -184,6 +195,8 @@ def ruler(f, x0, x1, y, v0, v1, minor, major, fmt=None, down=True, inten=0.8, si
     half = (ks % max(1, per // 2)) == 0
     ln = np.where(big, 13.0, np.where(half, 8.0, 4.0))
     if reveal is not None and reveal < 1.0:
+        if reveal <= 0.0:
+            return
         pos = np.abs(xs - x0) / max(abs(x1 - x0), 1e-6)
         head = reveal * 1.25
         m = pos <= head
@@ -290,6 +303,7 @@ def erode(s, amount, key=0, frame=0):
         return ""
     h = hash01(np.arange(len(s)), key)
     band = 0.12 * min(1.0, amount / 0.1)          # the flickering fringe grows from nothing
+    g = B.rnd(len(s), key, frame)                 # (hash01 would give the same glyph at every frame)
     out = []
     for k, (c, hv) in enumerate(zip(s, h)):
         if c == " " or hv >= amount + band:
@@ -297,7 +311,7 @@ def erode(s, amount, key=0, frame=0):
         elif hv < amount:
             out.append(" ")
         else:
-            out.append(_GLYPHS[int(hash01(k, key, frame) * len(_GLYPHS))])
+            out.append(_GLYPHS[int(g[k] * len(_GLYPHS))])
     return "".join(out)
 
 
@@ -343,13 +357,23 @@ def starfield(f, rect, n=260, seed=1, t=0.0, drift=(0.0, 0.0), inten=0.6):
 
 
 def callout(f, x, y, dx, dy, title, lines=(), red=False, alpha=1.0, age=9.0, size=L.T_TAG, lsize=L.T_SMALL,
-            side=None):
-    """Leader from a point to an inverted tag + typed data lines. (dx, dy) = offset of the elbow."""
+            side=None, build=None):
+    """Leader from a point to an inverted tag + typed data lines. (dx, dy) = offset of the elbow.
+    build = seconds since the callout appeared (see build.io for one that also leaves): it is then
+    constructed outwards from its point - leader drawn by a pen, tag pushed out, lines decoded - instead of
+    typed; negative = not there. Prefer it to an alpha: a callout never fades in."""
     if alpha <= 0.01:
         return
     side = side or (1 if dx >= 0 else -1)
     ex, ey = x + dx, y + dy
     hx = ex + side * 34
+    if build is not None:
+        w = max([text_w(title, size) + 12] + [text_w(ln, lsize) for ln in lines])
+        xt = hx + side * (10 + w)
+        rect = (min(x, xt) - 6, min(y, ey - size) - 6, max(x, xt) + 6, max(y, ey + size * 0.36 + len(lines) * lsize * 1.45 + 8) + 6)
+        with f.build(build, rect, flow="out", origin=(x, y), wave=0.22, line=0.16, marks=False, key=int(x) + 3 * int(y)):
+            callout(f, x, y, dx, dy, title, lines, red, alpha, 9.0, size, lsize, side)
+        return
     f.segments("w", [x, ex], [y, ey], [ex, hx], [ey, ey], 0.75 * alpha, width=L.LW)
     f.dots("w", [x], [y], 2.6, 1.3 * alpha)
     anchor = "ls" if side > 0 else "rs"
@@ -462,10 +486,17 @@ def strip_cursor(f, x, y0, y1, label=None, alpha=1.0):
         f.tag("r", x + 6, y1 - 4, label, size=L.T_MICRO, pad=3, alpha=alpha)
 
 
-def show_strip(f, t, ctx, title, t0, t1, marks=(), alpha=1.0):
+def show_strip(f, t, ctx, title, t0, t1, marks=(), alpha=1.0, age=None):
     """Score strip of a linear scene: its span on one ruler, the loudness of the music as a comb on top,
-    the detector hits as a comb at the bottom, the cues as tags on the red band, a time cursor."""
-    x0, y0, x1, y1, yb = strip_base(f, title=title, alpha=alpha, ticks=(t0, t1, 1.0, 10.0))
+    the detector hits as a comb at the bottom, the cues as tags on the red band, a time cursor.
+    age = seconds since the strip appeared (None = built): the band and the rules are drawn (strip_base),
+    then the combs, the cue tags and the cursor are constructed from left to right."""
+    x0, y0, x1, y1, yb = strip_base(f, title=title, alpha=alpha, ticks=(t0, t1, 1.0, 10.0), age=age)
+    with f.build(None if age is None else age - 0.3, L.STRIP, flow="lr", wave=0.5, marks=False, bars="centre", key=11):
+        return _show_strip_body(f, t, ctx, t0, t1, marks, alpha, x0, y0, x1, y1, yb)
+
+
+def _show_strip_body(f, t, ctx, t0, t1, marks, alpha, x0, y0, x1, y1, yb):
     X = lambda tt: x0 + (np.asarray(tt, np.float64) - t0) / (t1 - t0) * (x1 - x0)
     n = int((x1 - x0) / 5)
     lv = ctx.cues.loud_curve(t0, t1, n)

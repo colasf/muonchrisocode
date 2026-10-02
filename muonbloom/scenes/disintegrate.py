@@ -15,6 +15,21 @@ Everything is a closed-form function of t: the release time of every vertex / st
 fixed at start-up from the hit list (the realtime app does the same from the live stream).
 The layout is the one of the sphere scene (sphere.Lay): every block is dealt out from the columns
 the towers leave free, nothing has a fixed x.
+
+NOTHING THAT SHOWS DATA FADES, in or out. The picture comes back with a cut, and its furniture is
+constructed in the first two seconds like at any scene start (sphere.BLK, Sphere._blk). The loss is
+then shown without a single alpha ramp:
+  - the lettering erodes (sphere.er: characters flicker through random glyphs and drop out);
+  - the tags break up with their text (sphere.etag): the characters that are gone leave holes in the
+    box, what is left is a row of fragments, then nothing;
+  - the picture thins out (hash masks on the lattice, the contour, the voxels, the bars);
+  - the rules - header rules, frames, axes, ticks, the strip - are taken apart the way they were made,
+    in slow motion, while their lettering erodes (Disintegrate._age: the build of the block is run
+    backwards: pens retreat, ticks stretch and let go);
+  - the estimate and the core of the tomogram, the red circle of the core, the labels of the halo are
+    taken apart when the tracks that carried them have decayed; the tag of the last decay is made on the
+    hit and taken apart four seconds later (or when the next hit comes); the labels of a star are made
+    with it and taken apart.
 """
 from __future__ import annotations
 
@@ -22,19 +37,21 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
 from ..engine import hash01, smoothstep
 from ..show import Scene
-from .sphere import (BUS_Y, HOT, N_BINS, R_FAR, Y_BASE, Y_LOW, Body, Lay, Sphere, er, fade, ring_values,
-                     sphere_tracks, unit)
+from .sphere import (BLK, BUS_Y, HOT, N_BINS, R_FAR, Y_BASE, Y_LOW, Body, Lay, Sphere, draw_leader, er, fade, one_tag,
+                     pop, ring_values, sphere_tracks, unit)
 
 T0, T1 = 606.0, 652.0
 TAU = 16.0                        # s: decay constant of the body
 EDGE_LIFE, STRUT_LIFE, DOT_TAU = 1.6, 2.2, 3.4
 G = 760.0                         # px / s2: the halo sticks fall
 KEEP = 7                          # vertices that never go: "almost" nothing
+UNMAKE = 0.4                      # s of build a line / a rule needs once the wave of its block has reached it
 
 
 def remaining(t):
@@ -46,6 +63,23 @@ def remaining(t):
 def michel(x):
     """Energy spectrum of the electron of a muon decay (x = E / 52.8 MeV)."""
     return x * x * (3.0 - 2.0 * x)
+
+
+def e_text(t):
+    """How far the lettering of the HUD has eroded at t (0..1)."""
+    return float(smoothstep(628.0, 651.0, t)) ** 1.2
+
+
+def e_picture(t):
+    """How far the tomogram has lost its picture at t (0..1)."""
+    return float(np.clip(1.0 - float(remaining(t)) ** 0.6, 0.0, 1.0))
+
+
+def _when(fn, level, n=2760):
+    """First time of the scene at which fn reaches `level` (T1 if it never does)."""
+    ts = np.linspace(T0, T1, n + 1)
+    hit = np.nonzero(np.array([fn(float(v)) for v in ts]) >= level)[0]
+    return float(ts[hit[0]]) if len(hit) else T1
 
 
 class Disintegrate(Sphere):
@@ -77,6 +111,37 @@ class Disintegrate(Sphere):
             tr["star"] = self._star_dirs(rng)
             tr["ee"] = float(self._michel_sample(rng))
         self._schedule(ctx, np.random.default_rng(2020))
+        # the hits that get the tag of the bottom-right corner and the labels of their star
+        self.prim = [ch for ch in self.chunks if not ch["echo"]]
+        self.prim_t = np.array([ch["t"] for ch in self.prim])
+        for ch, nxt in zip(self.prim, list(self.prim_t[1:]) + [1e9]):
+            ch["next"] = float(nxt)
+        # when things of the HUD have to go (they are taken apart just before): the labels of the halo with
+        # its first stick; the estimate and the dotted core of the tomogram, the red circle of the core and
+        # its cross when too few scattered tracks are left to give them (or the picture is too far gone);
+        # the staircase of the integrity panel with the last of its lettering
+        self.t_drop0 = float(np.min(self.drop))
+        dec = sorted(tr["decay"] for tr in self.old if tr["through"])
+        self.t_est_gone = min(dec[-2] if len(dec) >= 2 else T0, _when(e_picture, 0.9))
+        self.t_ring_gone = dec[-3] if len(dec) >= 3 else T0
+        self.t_core_gone = min(self.t_ring_gone, _when(e_picture, 0.6))
+
+        def conf(t):                    # confidence of the core, as Sphere._core computes it in this scene
+            n = sum(1 for d in dec if d > t)
+            return (min(1.0, n / 7.0) if n >= 3 else 0.0) * max(0.0, min(1.0, float(remaining(t)) * 3.0))
+        self.t_cross_gone = _when(lambda t: 0.6 - conf(t), 0.0)
+        self.t_line_gone = _when(e_text, 0.97)
+
+    T_BUILD = T0                      # the furniture is constructed when the picture comes back
+
+    def _age(self, name, t, erode=0.0):
+        """The boxes and rules of a block of furniture (see Sphere._age): constructed when the scene starts,
+        like everything; then, while the lettering erodes, taken apart the way they were made - the build of
+        the block run backwards, in slow motion (it lasts as long as the erosion). Nothing fades: the
+        instrument is unmade. The strip outlasts the panels a little."""
+        a = self._age0(name, t)
+        left = float(1.0 - smoothstep(0.5, 0.96, erode)) if name == "strip" else fade(erode)
+        return a if left >= 1.0 else min(a, (BLK[name]["wave"] + UNMAKE) * left - 0.02)
 
     # ------------------------------------------------------------------ build
     @staticmethod
@@ -198,7 +263,7 @@ class Disintegrate(Sphere):
     def draw(self, f, t, ctx):
         lay = self.lay
         cam, yaw = self._cam(t)
-        e_txt = float(smoothstep(628.0, 651.0, t)) ** 1.2
+        e_txt = e_text(t)
         frac = float(remaining(t))
         alive = [tr for tr in self.old if tr["decay"] > t]
         thr = [tr for tr in alive if tr["through"]]
@@ -207,7 +272,8 @@ class Disintegrate(Sphere):
         f.set_clip(*lay.clip)
         self._lattice(f)
         self._eroding_body(f, cam, t)
-        self._ring(f, phi, v, 1.0, alive=self.drop > t, gain=1.0)
+        self._ring(f, phi, v, 1.0, alive=self.drop > t, gain=1.0,          # its labels go with its first stick
+                   label_age=B.io(t - T0 - 0.4, self.t_drop0 - t, out=0.3, span=0.45))
         self._falling_sticks(f, phi, v, t)
         for tr in self.old:                               # the old picture, decaying
             a = t - tr["decay"]
@@ -216,14 +282,19 @@ class Disintegrate(Sphere):
             elif a < 0.6:
                 self._draw_track(f, cam, tr, 60.0, ctx, persist=tr["ghost"] * (1.0 - a / 0.6), leader=False)
             if 0 <= a < (1.6 if tr["echo"] else 3.2):
-                self._star(f, cam, tr["K"], tr["star"], a, tr["e"], big=not tr["echo"], label=False)
+                self._star(f, cam, tr["K"], tr["star"], a, tr["e"], big=not tr["echo"])
         f.set_clip()
-        self._core(f, cam, t, thr, gain=max(0.0, min(1.0, frac * 3.0)))
+        self._core(f, cam, t, thr, gain=max(0.0, min(1.0, frac * 3.0)),
+                   ring_age=B.io(60.0, self.t_ring_gone - t, out=0.5, span=0.5),
+                   cross_age=B.io(60.0, self.t_cross_gone - t, out=0.3, span=0.3))
         self._impacts(f, cam, t, ctx)
         self._callouts_d(f, t, e_txt, frac, yaw)
-        e_tomo = float(np.clip(1.0 - frac ** 0.6, 0.0, 1.0))
+        e_tomo = e_picture(t)
+        a_tomo = self._age0("tomo", t)
         self._tomogram(f, t, alive, thr, yaw, erode=e_tomo, alive=hash01(np.arange(200), 21) > e_tomo,
-                       title="TOMOGRAM // TOP VIEW // LOSING THE PICTURE", erode_txt=e_txt)
+                       title="TOMOGRAM // TOP VIEW // LOSING THE PICTURE", erode_txt=e_txt,
+                       est_age=B.io(a_tomo - 0.45, self.t_est_gone - t, out=0.4),
+                       core_age=B.io(a_tomo - 0.6, self.t_core_gone - t, out=0.5, span=0.5))
         self._integrity(f, t, ctx, e_txt)
         self._left_d(f, t, e_txt)
         self._right(f, t, ctx, alive, title="DECAY", erode=e_txt)
@@ -295,8 +366,10 @@ class Disintegrate(Sphere):
                            width=L.LW)
                 f.dots(layer, (mx + hx)[sel], (my + hy)[sel], 3.2, 1.4 * fd[sel])
 
-    def _star(self, f, cam, pos, dirs, a, e, big=True, label=False):
-        """mu -> e + nu + nu at `pos`: a solid prong (the electron) and two dotted ones (the neutrinos)."""
+    def _star(self, f, cam, pos, dirs, a, e, big=True, label_left=None):
+        """mu -> e + nu + nu at `pos`: a solid prong (the electron) and two dotted ones (the neutrinos).
+        label_left = seconds its prong labels still have (None = no labels): they are made with the star and
+        taken apart - they do not fade with it."""
         if a < 0 or a > 3.2:
             return
         grow = 1.0 - math.exp(-a / 0.16)
@@ -316,24 +389,23 @@ class Disintegrate(Sphere):
         f.dots("r", px[0:1], py[0:1], 3.4 if big else 2.0, (1.6 if big else 1.2) * fd)
         if big:
             f.rings("r", px[0:1], py[0:1], [8 + 54 * (1 - math.exp(-a / 0.5))], 0.9 * math.exp(-a / 0.45), width=L.LW)
-        if label and a < 2.2:               # prong labels, only where they stay whole inside the body column
-            al = min(1.0, 3 * fd)
+        if label_left is not None and label_left > 0.0:     # prong labels, only where they stay whole inside the body column
             x0, x1 = self.lay.body
             for k, (word, g) in enumerate((("E-", 1.0), ("NU", 0.7), ("NU", 0.7)), start=1):
-                if x0 <= float(px[k]) + 8 <= x1 - 20:
-                    f.text("w", float(px[k]) + 8, float(py[k]) + 5, word, size=L.T_MICRO, alpha=g * al)
+                x, y = float(px[k]) + 8, float(py[k]) + 5
+                if x0 <= x <= x1 - 20:
+                    with f.build(B.io(a - 0.08, label_left, out=0.2, span=0.12), (x - 2.0, y - 14.0, x + 24.0, y + 4.0),
+                                 wave=0.03, marks=False, cps=30.0, key=k):
+                        f.text("w", x, y, word, size=L.T_MICRO, alpha=g)
 
     def _impacts(self, f, cam, t, ctx):
         """The muons of this scene: leader from the detector, a red track that stops on the body, a star."""
         b = self.body
         clip = self.lay.clip
-        last_prim = None
         for ch in self.chunks:
             a = t - ch["t"]
             if a < 0:
                 break
-            if not ch["echo"]:
-                last_prim = ch
             if a > 3.2:
                 continue
             S = (ch["c"] * b.rho(ch["c"][None], t)[0]).astype(np.float32)
@@ -349,34 +421,36 @@ class Disintegrate(Sphere):
             fl = math.exp(-a / 0.5)
             f.set_clip(*clip)
             f.segments("r", [px[0]], [py[0]], [px[1]], [py[1]], 1.3 * g * fl + 0.1 * g, width=2.6 if ch["key"] == "C" else 1.5)
-            self._star(f, cam, S, ch["star"], a, ch["e"], big=not ch["echo"], label=not ch["echo"] and ch is last_prim)
+            # the labels of the star of a hit: 2.2 s, less when the next hit comes (then they are taken apart)
+            self._star(f, cam, S, ch["star"], a, ch["e"], big=not ch["echo"],
+                       label_left=None if ch["echo"] else min(2.2 - a, ch["next"] + 0.2 - t))
             f.set_clip()
             if a < 1.7:                     # leader: detector -> bus -> down into the track (may pass behind a tower)
                 tw = ctx.towers[ch["key"]]
                 ox, oy = tw.det
                 yb = BUS_Y[ch["key"]]
-                al = (0.4 if ch["echo"] else 1.0) * math.exp(-a / 0.5) * min(1.0, a / 0.1 + 0.2)
-                f.polyline("r", [ox, ox, float(px[0]), float(px[0])], [oy - 14, yb, yb, float(py[0])], 1.1 * al, width=L.LW)
-                f.dots("r", [float(px[0])], [yb], 3.0, 1.4 * al)
+                al = (0.4 if ch["echo"] else 1.0) * math.exp(-a / 0.5)
+                if draw_leader(f, "r", [ox, ox, float(px[0]), float(px[0])], [oy - 14, yb, yb, float(py[0])], 1.1 * al,
+                               a / 0.1) >= 3:                           # drawn in 0.1 s, from the detector
+                    f.dots("r", [float(px[0])], [yb], 3.0, 1.4 * al)
 
     # ------------------------------------------------------------------- HUD
     def _callouts_d(self, f, t, e_txt, frac, yaw):
         fr = int(t * 30)
         self._view_block(f, "VIEW 01 // BODY // LOSING MASS",
-                         [f"ORBIT {math.degrees(yaw) % 360:05.1f} DEG", f" N/N0 {frac:.3f}"], e_txt, fr)
-        prim = [ch for ch in self.chunks if ch["t"] <= t and not ch["echo"]]
-        if prim:
-            ch = prim[-1]
-            age = t - ch["t"]
-            if age < 4.0:
-                al = 1.0 - float(smoothstep(3.2, 4.0, age))
-                lines = [f"{L.NAMES[ch['key']]}  E {ch['e']:.3f}", f"E_E {ch['ee'] * 52.8:5.2f} MEV", f"CHUNK -{ch['n']:03d} NODES"]
-                self._corner(f, 1, er("MU- > E- NU NU", e_txt, 93, fr),
-                             [(er(hud.typed(ln, age, delay=0.1 + 0.1 * k), e_txt, 94 + k, fr), "w") for k, ln in enumerate(lines)],
-                             alpha=al, tag_alpha=al * fade(e_txt), tag_size=L.T_SMALL)
-        self._corner(f, -1, er("DISINTEGRATING", e_txt, 96, fr),
+                         [f"ORBIT {math.degrees(yaw) % 360:05.1f} DEG", f" N/N0 {frac:.3f}"], e_txt, fr, t=t)
+        # bottom right: the last decay - its tag is made on the hit and taken apart four seconds later (or as
+        # soon as the next hit comes)
+        got = one_tag(self.prim_t, t, 4.0)
+        if got:
+            ch = self.prim[got[0]]
+            lines = [f"{L.NAMES[ch['key']]}  E {ch['e']:.3f}", f"E_E {ch['ee'] * 52.8:5.2f} MEV", f"CHUNK -{ch['n']:03d} NODES"]
+            self._corner(f, 1, "MU- > E- NU NU", [(er(ln, e_txt, 94 + k, fr), "w") for k, ln in enumerate(lines)],
+                         tag_size=L.T_SMALL, age=got[1], erode=e_txt, key=93, fr=fr)
+        self._corner(f, -1, "DISINTEGRATING",
                      [(er(f"HITS {len(self.chunks_before(t)):03d}", e_txt, 97, fr), "w"),
-                      (er(f"REMAINING {100 * frac:05.2f} %", e_txt, 98, fr), "w")], tag_alpha=fade(e_txt))
+                      (er(f"REMAINING {100 * frac:05.2f} %", e_txt, 98, fr), "w")],
+                     age=self._age0("corner", t), tag_age=self._age("corner", t, e_txt), erode=e_txt, key=96, fr=fr)
 
     def _integrity(self, f, t, ctx, e_txt):
         """N/N0 against time, under the tomogram: the decay law (dotted) and what is really left of the body
@@ -385,37 +459,44 @@ class Disintegrate(Sphere):
         if not lay.tomo:
             return
         fr = int(t * 30)
-        x0, x1 = self._low_panel(f, lay.tomo, "INTEGRITY // N/N0 // DECAY LAW EXP(-T/TAU)", e_txt, 101, fr)
+        x0, x1 = lay.tomo
         px0, px1, py0, py1 = x0 + 60, x1 - 8, Y_LOW + 34, Y_BASE
-        g = 1.0 - e_txt
         X = lambda tt: px0 + (np.asarray(tt, np.float64) - T0) / (T1 - T0) * (px1 - px0)
         Y = lambda q: py1 - np.asarray(q, np.float64) * (py1 - py0)
-        f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.65 * g)
-        for q in (0.0, 0.5, 1.0):
-            f.segments("w", [px0 - 8], [float(Y(q))], [px0], [float(Y(q))], 0.8 * g)
-            f.text("w", x0, float(Y(q)) + 5, er(f"{q:.1f}", e_txt, 102, fr), size=L.T_MICRO, alpha=0.7)
-        hud.ruler(f, px0, px1, py1 + 2, T0, T1, 1.0, 10.0, inten=0.6 * g)
-        for tv in np.arange(610.0, T1, 10.0 if px1 - px0 >= 420 else 20.0):
-            f.text("w", float(X(tv)) + 3, py1 + 28, er(sd.tc(tv)[:5], e_txt, 103, fr), size=L.T_MICRO, alpha=0.7)
-        tt = np.linspace(T0, T1, 150)
-        keep = hash01(np.arange(150), 105) > e_txt
-        f.dots("w", X(tt)[keep], Y(remaining(tt))[keep], 1.3, 0.7)
+        rect = (x0, Y_LOW - 26.0, x1, Y_BASE + 34.0)
+        with self._blk(f, "profile", t, rect, erode=e_txt):             # its boxes and rules: header, axes, ticks
+            self._low_panel(f, lay.tomo, "INTEGRITY // N/N0 // DECAY LAW EXP(-T/TAU)", e_txt, 101, fr)
+            f.segments("w", [px0, px0], [py1, py1], [px0, px1], [py0, py1], 0.65)
+            for q in (0.0, 0.5, 1.0):
+                f.segments("w", [px0], [float(Y(q))], [px0 - 8], [float(Y(q))], 0.8)
+            hud.ruler(f, px0, px1, py1 + 2, T0, T1, 1.0, 10.0, inten=0.6)
         # what is really left
         n = self.body.n
         ts = np.linspace(T0, min(t, T1), max(2, int((min(t, T1) - T0) * 12)))
         left = 1.0 - np.searchsorted(self.rel_sorted, ts, side="right") / n
-        if e_txt < 0.97:
-            f.polyline("w", X(ts), Y(left), 1.0 * (1 - 0.6 * e_txt), width=L.LW_BOLD)
-        for ch in self.chunks:
-            if ch["t"] > t:
-                break
-            if not ch["echo"] and hash01(ch["id"], 106) > e_txt:
-                f.rects("r", float(X(ch["t"])), py1 - 4 - 22 * ch["e"], float(X(ch["t"])) + 3, py1, 0.95)
         xc, yc = float(X(min(t, T1))), float(Y(left[-1]))
-        f.segments("r", [xc], [py0 - 4], [xc], [py1 + 4], 1.1, width=L.LW)
-        f.dots("r", [xc], [yc], 4.0, 1.6)
-        f.tag("r", max(min(xc + 10, px1 - 112), px0 + 4), max(yc - 12, py0 + 22), f"N/N0 {left[-1]:.3f}", size=L.T_MICRO, pad=3)
-        f.text("w", px1, py0 + 12, er(f"TAU {TAU:.1f} S", e_txt, 108, fr), size=L.T_MICRO, alpha=0.8, anchor="rs")
+        with self._blk(f, "profile", t, rect):                          # its lettering, the decay law, the hits, the cursor
+            for q in (0.0, 0.5, 1.0):
+                f.text("w", x0, float(Y(q)) + 5, er(f"{q:.1f}", e_txt, 102, fr), size=L.T_MICRO, alpha=0.7)
+            for tv in np.arange(610.0, T1, 10.0 if px1 - px0 >= 420 else 20.0):
+                f.text("w", float(X(tv)) + 3, py1 + 28, er(sd.tc(tv)[:5], e_txt, 103, fr), size=L.T_MICRO, alpha=0.7)
+            tt = np.linspace(T0, T1, 150)
+            keep = hash01(np.arange(150), 105) > e_txt
+            f.dots("w", X(tt)[keep], Y(remaining(tt))[keep], 1.3, 0.7)
+            for ch in self.chunks:
+                if ch["t"] > t:
+                    break
+                if not ch["echo"] and hash01(ch["id"], 106) > e_txt:      # (the tick of a new hit grows)
+                    f.rects("r", float(X(ch["t"])), py1 - (4 + 22 * ch["e"]) * float(pop(t - ch["t"])),
+                            float(X(ch["t"])) + 3, py1, 0.95)
+            f.segments("r", [xc], [py0 - 4], [xc], [py1 + 4], 1.1, width=L.LW)
+            f.dots("r", [xc], [yc], 4.0, 1.6)
+            f.tag("r", max(min(xc + 10, px1 - 112), px0 + 4), max(yc - 12, py0 + 22), f"N/N0 {left[-1]:.3f}", size=L.T_MICRO, pad=3)
+            f.text("w", px1, py0 + 12, er(f"TAU {TAU:.1f} S", e_txt, 108, fr), size=L.T_MICRO, alpha=0.8, anchor="rs")
+        # the staircase: traced when the panel is made, un-traced when the lettering is all but gone
+        with f.build(B.io(self._age0("profile", t) - 0.3, self.t_line_gone - t, out=0.6, span=0.45), rect, flow="lr",
+                     wave=0.0, line=0.45, marks=False, key=101):
+            f.polyline("w", X(ts), Y(left), 1.0, width=L.LW_BOLD)
 
     def _left_d(self, f, t, e_txt):
         if not self.lay.info:
@@ -426,9 +507,10 @@ class Disintegrate(Sphere):
         rows_ = [f"NODES     {nodes:04d} / {b.n:04d}", f"EDGES     {edges:04d} / {len(b.ea):04d}",
                  f"STRUTS    {struts:04d} / {len(b.sa):04d}", f"STICKS    {sticks:04d} / {N_BINS:04d}",
                  f"TRACKS    {tracks:04d} / {len(self.old):04d}", "MU- -> E- + NU + NU", "TAU_MU    2.197 US"]
-        x, w, y = self._info_block(f, "DISINTEGRATE", rows_, red=(5,), erode=e_txt, fr=fr, key=111)
+        x, w, y = self._info_block(f, "DISINTEGRATE", rows_, red=(5,), erode=e_txt, fr=fr, key=111, t=t)
         past = self.chunks_before(t)[::-1]
-        n_rows = int(round(24 * (1.0 - float(smoothstep(634.0, 650.5, t)))))
+        nr = 24.0 * (1.0 - float(smoothstep(634.0, 650.5, t)))      # the log empties, from the bottom
+        n_rows = int(math.ceil(nr))
         lines = []
         for row, ch in enumerate(past[:n_rows]):
             m = int(ch["t"] // 60)
@@ -436,16 +518,18 @@ class Disintegrate(Sphere):
             red = age < 1.0 or (not ch["echo"] and ch["n"] > 80)
             fields = [f"{m:02d}:{ch['t'] - 60 * m:04.1f}", f"{ch['key']}{'e' if ch['echo'] else ' '}", f"{ch['e']:.2f}",
                       f"{ch['ee'] * 52.8:7.2f}", f" -{ch['n']:03d}"]
-            lines.append((fields, "r" if red else "w", 0.95 if row < 2 or red else 0.62, age))
+            going = 1.0 - (nr - row) if row == n_rows - 1 else 0.0  # its last row falls apart before it is gone
+            lines.append((fields, "r" if red else "w", 0.95 if row < 2 or red else 0.62, age, going))
         self._log_block(f, x, w, y, "DECAY_LOG // LIVE", ["TIME   ", "D ", "E   ", "E_E MEV", "NODES"], lines,
-                        erode=e_txt, fr=fr, key=120)
+                        erode=e_txt, fr=fr, key=120, t=t)
 
     def _michel(self, f, t, e_txt):
         """Spectrum of the decay electrons seen so far, against the Michel shape (under the detectors)."""
         if not self.lay.spec:
             return
         fr = int(t * 30)
-        x0, x1 = self._low_panel(f, self.lay.spec, "E_ELECTRON // MICHEL // MEV", e_txt, 141, fr, cap=460.0)
+        x0, x1 = self.lay.spec
+        x1 = min(x1, x0 + 460.0)
         es = [ch["ee"] for ch in self.chunks if ch["t"] <= t] + [tr["ee"] for tr in self.old if tr["decay"] <= t]
         edges = np.linspace(0, 1, 23)
         cnt, _ = np.histogram(np.array(es), edges) if es else (np.zeros(22), None)
@@ -453,20 +537,24 @@ class Disintegrate(Sphere):
         xs = x0 + 4 + np.arange(22) * bw
         yb, hmax = Y_BASE, 150.0
         top = max(float(np.max(cnt)), 1.0)
-        keep = (cnt > 0) & (hash01(np.arange(22), 142) > e_txt)
-        f.rects("w", xs[keep], yb - hmax * cnt[keep] / top, xs[keep] + bw - 4, yb, 0.95)
-        xx = np.linspace(0, 1, 60)
-        kk = hash01(np.arange(60), 143) > e_txt
-        f.dots("r", (x0 + 4 + xx * 22 * bw)[kk], (yb - hmax * michel(xx))[kk], 1.5, 1.1)
-        hud.ruler(f, x0 + 4, x0 + 4 + 22 * bw, yb + 2, 0, 52.8, 2.4, 12.0 if x1 - x0 >= 300 else 24.0,
-                  fmt=lambda v: er(f"{v:.0f}", e_txt, 144, fr), inten=0.6 * (1 - e_txt), lab_dy=26)
+        rect = (x0, Y_LOW - 26.0, x1, Y_BASE + 34.0)
+        with self._blk(f, "spec", t, rect, erode=e_txt):                # its boxes and rules
+            self._low_panel(f, self.lay.spec, "E_ELECTRON // MICHEL // MEV", e_txt, 141, fr, cap=460.0)
+            hud.ruler(f, x0 + 4, x0 + 4 + 22 * bw, yb + 2, 0, 52.8, 2.4, 12.0 if x1 - x0 >= 300 else 24.0,
+                      fmt=lambda v: er(f"{v:.0f}", e_txt, 144, fr), inten=0.6, lab_dy=26)
+        with self._blk(f, "spec", t, rect):                             # its bars and the Michel shape
+            keep = (cnt > 0) & (hash01(np.arange(22), 142) > e_txt)
+            f.rects("w", xs[keep], yb - hmax * cnt[keep] / top, xs[keep] + bw - 4, yb, 0.95)
+            xx = np.linspace(0, 1, 60)
+            kk = hash01(np.arange(60), 143) > e_txt
+            f.dots("r", (x0 + 4 + xx * 22 * bw)[kk], (yb - hmax * michel(xx))[kk], 1.5, 1.1)
 
     def _bottom_d(self, f, t, ctx, e_txt, frac):
         fr = int(t * 30)
         nodes, edges, struts, sticks, tracks = self._counts(t)
         self._numbers_panel(f, "REMAINING", [("NODES", f"{nodes:04d}", "w"), ("EDGES", f"{edges:04d}", "w"),
-                                             ("STICKS", f"{sticks:03d}", "w")], erode=e_txt, fr=fr)
+                                             ("STICKS", f"{sticks:03d}", "w")], erode=e_txt, fr=fr, t=t)
         self._barcode_panel(f, t, ctx, erode=e_txt, fr=fr)
-        left = nodes / self.body.n
-        self._single_panel(f, "N/N0", "1.0" if left >= 1 else (f"{left:.3f}"[1:] if left < 0.1 else f"{left:.2f}"[1:]),
-                           "r", erode=e_txt, fr=fr)
+        left = nodes / self.body.n          # (0.995 and more reads 1.0: ".2f" would round it to "1.00", shown as ".00")
+        self._single_panel(f, "N/N0", "1.0" if left >= 0.995 else (f"{left:.3f}"[1:] if left < 0.1 else f"{left:.2f}"[1:]),
+                           "r", erode=e_txt, fr=fr, t=t)

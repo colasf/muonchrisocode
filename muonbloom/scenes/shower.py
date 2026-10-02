@@ -20,6 +20,16 @@ rules, rings and long lines are allowed to pass behind the towers.
 
 This module also holds the shower *world* (cascade model + drawing) and the layout helpers that the
 DANCE and GLITCH scenes reuse.
+
+Nothing that shows data fades in or pops in (see build.py). The strip, the particle column, the three
+bottom panels, the view tag, the id lines and the altitude rules are CONSTRUCTED during the first second
+of the scene, one after the other; what an event brings is made on that event and taken apart when it
+leaves (the data of the first interaction, the red front line, MU- 0001, the labels on the track ends,
+H1 / XMAX on the strip, the ground tags when the ground comes up); what the plan view brings at 01:11.1
+(view tag, cross-hair, range rings, CORE, km labels of the second elevation, GROUND in the first panel)
+is made on that cut. The helpers shared with DANCE / GLITCH take the age of what they draw (`age=`,
+seconds since it appeared; None = built) instead of an alpha ramp: draw_info, altitude_rules,
+World.draw_column / draw_strip / draw_counters / draw_barcode, auto_callout(build=).
 """
 from __future__ import annotations
 
@@ -29,6 +39,7 @@ import pickle
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -121,9 +132,11 @@ def put_first(f, ctx, layer, places, y, s, tag=True, **kw):
 
 
 def auto_callout(f, ctx, view, x, y, title, lines=(), red=False, age=9.0, alpha=1.0, avoid=(), prefer=(1, -1),
-                 dx=56.0, dy=50.0, size=L.T_TAG, lsize=L.T_SMALL):
+                 dx=56.0, dy=50.0, size=L.T_TAG, lsize=L.T_SMALL, build=None):
     """hud.callout on the side where its text is inside the view and clear of the towers (and of the `avoid`
-    boxes). Falls back to the title alone, then to nothing. Returns the box it used, or None."""
+    boxes). Falls back to the title alone, then to nothing. Returns the box it used, or None.
+    build = seconds since the callout appeared (build.io if it also leaves): it is constructed out of its
+    point - leader drawn, tag pushed out, lines decoded - instead of typed."""
     xmin, xmax = max(view[0] + 6, X_MIN), min(view[2] - 6, X_MAX)
     for ls in (tuple(lines), ()):
         w = max([text_w(title, size) + 12] + [text_w(s, lsize) for s in ls])
@@ -139,7 +152,8 @@ def auto_callout(f, ctx, view, x, y, title, lines=(), red=False, age=9.0, alpha=
             if hidden(ctx, *box) or any(box[0] < o[2] and o[0] < box[2] and box[1] < o[3] and o[1] < box[3]
                                         for o in avoid):
                 continue
-            hud.callout(f, x, y, sx * dx, sy * dy, title, ls, red=red, alpha=alpha, age=age, size=size, lsize=lsize)
+            hud.callout(f, x, y, sx * dx, sy * dy, title, ls, red=red, alpha=alpha, age=age, size=size, lsize=lsize,
+                        build=build)
             return box
         if not lines:
             break
@@ -330,27 +344,40 @@ def info_layout(ctx, st, label, cam, id_lines=(), id_short=(), zones_top=(), zon
     return lay
 
 
-def draw_info(f, ctx, lay, alpha=1.0):
+def draw_info(f, ctx, lay, alpha=1.0, age=None, age_id=None):
+    """The fixed texts of a view (see info_layout): the view tag with its scale bar, the scene id lines.
+    age / age_id = seconds since the view tag / the id lines appeared (None = built; age_id defaults to
+    age): they are constructed - tag pushed out, scale bar drawn and its ticks thrown, lines decoded -
+    and never fade in. Steady dimming goes through `alpha`."""
     y0 = lay["y0"]
     if lay["a"] is not None:
         x = lay["a"]
-        f.tag("w", x, y0, lay["label"], size=L.T_LABEL, pad=5, alpha=alpha)
+        x1 = x + text_w(lay["label"], L.T_LABEL) + 12
         if lay["scale"]:
-            n, note = lay["scale"]
-            sc = lay["cam"].scale
-            f.segments("w", [x, x, x + n * sc], [y0 + 38, y0 + 31, y0 + 31], [x + n * sc, x, x + n * sc],
-                       [y0 + 38, y0 + 45, y0 + 45], 0.9 * alpha)
-            step = 1.0 if n > 2 else 0.25
-            for k in np.arange(step, n - 1e-6, step):
-                major = abs(k - round(k)) < 1e-6
-                f.segments("w", [x + k * sc], [y0 + 38], [x + k * sc], [y0 + (29 if major else 33)], 0.9 * alpha)
-            f.text("w", x + n * sc + 12, y0 + 44, note, size=L.T_SMALL, alpha=0.8 * alpha)
+            x1 = max(x1, x + lay["scale"][0] * lay["cam"].scale + 14 + text_w(lay["scale"][1], L.T_SMALL))
         elif lay["note"]:
-            f.text("w", x, y0 + 40, lay["note"], size=L.T_SMALL, alpha=0.7 * alpha)
+            x1 = max(x1, x + text_w(lay["note"], L.T_SMALL))
+        with f.build(age, (x - 8, y0 - 30, x1 + 6, y0 + 54), flow="lr", wave=0.2, marks=False, key=41):
+            f.tag("w", x, y0, lay["label"], size=L.T_LABEL, pad=5, alpha=alpha)
+            if lay["scale"]:
+                n, note = lay["scale"]
+                sc = lay["cam"].scale
+                f.segments("w", [x, x, x + n * sc], [y0 + 38, y0 + 31, y0 + 31], [x + n * sc, x, x + n * sc],
+                           [y0 + 38, y0 + 45, y0 + 45], 0.9 * alpha)
+                step = 1.0 if n > 2 else 0.25
+                for k in np.arange(step, n - 1e-6, step):
+                    major = abs(k - round(k)) < 1e-6
+                    f.segments("w", [x + k * sc], [y0 + 38], [x + k * sc], [y0 + (29 if major else 33)], 0.9 * alpha)
+                f.text("w", x + n * sc + 12, y0 + 44, note, size=L.T_SMALL, alpha=0.8 * alpha)
+            elif lay["note"]:
+                f.text("w", x, y0 + 40, lay["note"], size=L.T_SMALL, alpha=0.7 * alpha)
     if lay["b"]:
         x, lines = lay["b"]
-        for k, (ln, al) in enumerate(lines):
-            f.text("w", x, y0 + k * 26, ln, size=L.T_SMALL, alpha=al * alpha, anchor="rs")
+        w = max(text_w(ln, L.T_SMALL) for ln, _ in lines)
+        with f.build(age if age_id is None else age_id, (x - w - 6, y0 - 22, x + 6, y0 + (len(lines) - 1) * 26 + 8),
+                     flow="tb", wave=0.2, marks=False, key=42):
+            for k, (ln, al) in enumerate(lines):
+                f.text("w", x, y0 + k * 26, ln, size=L.T_SMALL, alpha=al * alpha, anchor="rs")
 
 
 def put_right(f, ctx, st, lay, layer, y, s, size=L.T_SMALL, pad=4, alpha=1.0):
@@ -901,32 +928,38 @@ class World:
                 if _hits(box, avoid):
                     continue
                 anchor = "ls" if sgn > 0 else "rs"
-                f.tag("r", cx + sgn * 36, cy - 30, title, size=L.T_TAG, alpha=fade, pad=5, anchor=anchor)
-                for j, s in enumerate(lines):
-                    f.text("w", cx + sgn * 36, cy + 4 + j * 26, s, size=L.T_SMALL, alpha=fade, anchor=anchor)
+                # its data: made on the interaction, taken apart 1.9 s later (the flash fades, the data do not)
+                with f.build(B.io(a, 1.9 - a, out=0.35), box, flow="lr" if sgn > 0 else "rl", wave=0.12, marks=False,
+                             key=60 + k):
+                    f.tag("r", cx + sgn * 36, cy - 30, title, size=L.T_TAG, pad=5, anchor=anchor)
+                    for j, s in enumerate(lines):
+                        f.text("w", cx + sgn * 36, cy + 4 + j * 26, s, size=L.T_SMALL, anchor=anchor)
                 boxes.append(box)
                 break
             for tx_, ty_, txt in ((max(view[0] + 14, X_MIN), cy + 6, f"{e['h1']:06.3f}"),       # its altitude / its x,
                                   (cx + 4, view[1] + 24, f"{float(e['P1'][0]):+07.3f}")):   # on the cross-hair
-                if not _hits(tbox(tx_, ty_, txt, L.T_MICRO, pad=3), avoid):
-                    put_tag(f, ctx, "r", tx_, ty_, txt, size=L.T_MICRO, pad=3, alpha=fade)
+                tb = tbox(tx_, ty_, txt, L.T_MICRO, pad=3)
+                if not _hits(tb, avoid):
+                    with f.build(B.io(a, 1.9 - a, out=0.3, span=0.4), tb, wave=0.05, marks=False, key=64 + k):
+                        put_tag(f, ctx, "r", tx_, ty_, txt, size=L.T_MICRO, pad=3)
         return boxes
 
     def draw_labels(self, f, cam, age, alive, view, avoid=(), limit=8):
         """Floating data tags on the ends of the tracks (PI+, MU-, energies), clear of the `avoid` boxes
-        (the towers, the callouts)."""
+        (the towers, the callouts). Each one is made out of the end of its track (dot, leader, tag, figures
+        decoded) and taken apart 2.6 s later: they never fade."""
         cands = []
         for ev, tt, p, word, num, red in self.labels:
             if not alive[ev]:
                 continue
             a = age[ev] - tt
             if 0 <= a < 2.6:
-                cands.append((a, p, word, num, red, float(smoothstep(0, 0.08, a) * (1 - smoothstep(1.6, 2.6, a)))))
+                cands.append((a, p, word, num, red))
         cands.sort(key=lambda c: c[0])
         boxes = [tuple(b) for b in avoid]
         xmin, xmax = max(view[0] + 30, X_MIN), min(view[2] - 20, X_MAX)
         n = 0
-        for a, p, word, num, red, alpha in cands:
+        for a, p, word, num, red in cands:
             px, py, pz, ok = cam.project(p[None])
             if not ok[0]:
                 continue
@@ -940,84 +973,118 @@ class World:
                 break
             n += 1
             boxes.append(bx)
-            f.dots("w", [x], [y], 2.2, alpha)
-            f.segments("w", [x], [y], [x + 20], [y - 20], 0.5 * alpha)
-            m = int(min(len(num), a * 80))
-            if word:
-                f.tag("r" if red else "w", x + 24, y - 24, word, size=L.T_SMALL, alpha=alpha, pad=3)
-                f.text("w", x + 24 + 10.4 * len(word) + 16, y - 24, num[:m], size=L.T_SMALL, alpha=alpha)
-            else:
-                f.text("w", x + 24, y - 24, num[:m], size=L.T_SMALL, alpha=alpha)
+            with f.build(B.io(a, 2.6 - a, out=0.35, span=0.6), bx, flow="out", origin=(x, y), wave=0.12, line=0.12,
+                         cps=80.0, marks=False):
+                f.dots("w", [x], [y], 2.2, 1.0)
+                f.segments("w", [x], [y], [x + 20], [y - 20], 0.5)
+                if word:
+                    f.tag("r" if red else "w", x + 24, y - 24, word, size=L.T_SMALL, pad=3)
+                    f.text("w", x + 24 + 10.4 * len(word) + 16, y - 24, num, size=L.T_SMALL)
+                else:
+                    f.text("w", x + 24, y - 24, num, size=L.T_SMALL)
 
     # ---------------------------------------------------------------- HUD
-    def draw_column(self, f, k, a, rect, title="PARTICLE_STREAM", alpha=1.0):
+    def draw_column(self, f, k, a, rect, title="PARTICLE_STREAM", alpha=1.0, age=None):
         """Scrolling list of the particles born so far in shower k (age a): id, kind, energy (GeV), x y z (km).
-        `rect` = None when the placement leaves no column for it: nothing is drawn."""
+        `rect` = None when the placement leaves no column for it: nothing is drawn.
+        age = seconds since the column appeared where it is (None = built): it is constructed from the top
+        (rule, tag, frame drawn by pens, rows decoded), never faded in; `alpha` is only a steady dimming."""
         b = self.births[k]
         n_now = int(np.searchsorted(b["t"], a))
         if rect is None or alpha <= 0.01:
             return n_now
         x0, y0, x1, y1 = rect
-        f.rects("w", x0, y0, x1, y0 + 5, 0.95 * alpha)
-        f.tag("w", x0 + 4, y0 + 32, title, size=L.T_MICRO, pad=3, alpha=alpha)
-        f.segments("w", [x1, x0], [y0, y1], [x1, x1], [y1, y1], 0.6 * alpha)
-        pitch = 19.0
-        n_rows = int((y1 - y0 - 96) / pitch)
-        idx = np.arange(max(0, n_now - n_rows), n_now)[::-1]
-        yy = y0 + 62
-        for r, i in enumerate(idx):
-            kk = int(b["k"][i])
-            p = b["p"][i]
-            name = K_NAME[kk] if kk != K_MU else ("MU-" if i % 2 else "MU+")
-            line = f"{i:05d} {name:<5} {b['e'][i] * 3.2e6:09.2f} {p[0]:+06.2f} {p[1]:05.2f} {p[2]:+06.2f}"
-            f.text("r" if K_RED[kk] == 1 else "w", x0 + 8, yy + r * pitch, line, size=L.T_MICRO,
-                   alpha=(0.95 if r < 3 else 0.7) * alpha)
-        f.text("w", x0 + 8, y1 - 10, f"N {n_now:06d}", size=L.T_SMALL, alpha=0.9 * alpha)
+        with f.build(age, (x0 - 6, y0 - 8, x1 + 6, y1 + 6), flow="tb", wave=0.4, key=46):
+            f.rects("w", x0, y0, x1, y0 + 5, 0.95 * alpha)
+            f.tag("w", x0 + 4, y0 + 32, title, size=L.T_MICRO, pad=3, alpha=alpha)
+            f.segments("w", [x1, x0], [y0, y1], [x1, x1], [y1, y1], 0.6 * alpha)
+            pitch = 19.0
+            n_rows = int((y1 - y0 - 96) / pitch)
+            idx = np.arange(max(0, n_now - n_rows), n_now)[::-1]
+            yy = y0 + 62
+            for r, i in enumerate(idx):
+                kk = int(b["k"][i])
+                p = b["p"][i]
+                name = K_NAME[kk] if kk != K_MU else ("MU-" if i % 2 else "MU+")
+                line = f"{i:05d} {name:<5} {b['e'][i] * 3.2e6:09.2f} {p[0]:+06.2f} {p[1]:05.2f} {p[2]:+06.2f}"
+                f.text("r" if K_RED[kk] == 1 else "w", x0 + 8, yy + r * pitch, line, size=L.T_MICRO,
+                       alpha=(0.95 if r < 3 else 0.7) * alpha)
+            f.text("w", x0 + 8, y1 - 10, f"N {n_now:06d}", size=L.T_SMALL, alpha=0.9 * alpha)
         return n_now
 
-    def draw_strip(self, f, k, a, label=None, alpha=1.0, pulse=0.0):
+    def xmax_time(self, k):
+        """Age of shower k at which one bin of its longitudinal profile first holds more than 30 births: when
+        the XMAX tag comes up on the strip."""
+        cache = self.__dict__.setdefault("_xmax_t", {})
+        if k not in cache:
+            b = self.births[k]
+            alt = b["p"][:, 1]
+            ok = (alt >= 0.0) & (alt <= ALT_MAX)
+            bins = np.minimum((alt[ok] / 0.1).astype(np.int64), 159)
+            tt = b["t"][ok]
+            first = np.inf
+            for j in np.unique(bins):
+                tj = tt[bins == j]
+                if len(tj) > 30:
+                    first = min(first, float(tj[30]))
+            cache[k] = first
+        return cache[k]
+
+    def draw_strip(self, f, k, a, label=None, alpha=1.0, pulse=0.0, age=None, title_age=None):
         """Score strip: the longitudinal profile of shower k on a 0-16 km ruler, built live (births per 100 m),
-        H1 and XMAX tags on the red band, a red cursor on the front."""
-        x0, y0, x1, y1, yb = hud.strip_base(f, title=label or f"LONGITUDINAL_PROFILE // SHOWER {k + 1:02d}",
-                                            alpha=alpha)
+        H1 and XMAX tags on the red band, a red cursor on the front.
+        age = seconds since the strip appeared (None = built): band and rules are drawn (hud.strip_base), then
+        ticks, km labels, cursor and FRONT tag are constructed from left to right. title_age = seconds since
+        its title changed (a new shower): the title tag is then made again on its own. The H1 and XMAX tags
+        are made when their event happens. Nothing fades in; `alpha` is only a steady dimming."""
+        title = label or f"LONGITUDINAL_PROFILE // SHOWER {k + 1:02d}"
+        x0, y0, x1, y1, yb = hud.strip_base(f, title=None if title_age is not None else title, alpha=alpha, age=age)
+        if title_age is not None:
+            B.tag(f, "w", x0, y0 - 9, title, title_age, size=L.T_MICRO, pad=3, alpha=alpha, cps=110.0, key=47)
         e = self.events[k]
 
         def X(h):
             return x0 + (ALT_MAX - np.asarray(h, np.float64)) / ALT_MAX * (x1 - x0)
 
-        hs = np.arange(0, ALT_MAX + 0.01, 0.1)
-        xs = X(hs)
-        kk = np.round(hs * 10).astype(int)
-        ln = np.where(kk % 10 == 0, 16.0, np.where(kk % 5 == 0, 9.0, 4.0))
-        f.segments("w", xs, np.full_like(xs, y0), xs, y0 + ln, 0.8 * alpha)
-        f.segments("w", xs, np.full_like(xs, y1), xs, y1 - ln, 0.8 * alpha)
-        for h in range(0, int(ALT_MAX) + 1, 2):
-            f.text("w", float(X(h)) + 6, y1 - 20, f"{h:02d} KM", size=L.T_MICRO, alpha=0.7 * alpha)
+        age_c = None if age is None else age - 0.3            # what stands on the strip comes after its band
         b = self.births[k]
         n_now = int(np.searchsorted(b["t"], a))
+        front = min(ALT_MAX, self.front(k, a))
+        with f.build(age_c, L.STRIP, flow="lr", wave=0.45, marks=False, bars="down", key=48):
+            hs = np.arange(0, ALT_MAX + 0.01, 0.1)
+            xs = X(hs)
+            kk = np.round(hs * 10).astype(int)
+            ln = np.where(kk % 10 == 0, 16.0, np.where(kk % 5 == 0, 9.0, 4.0))
+            f.segments("w", xs, np.full_like(xs, y0), xs, y0 + ln, 0.8 * alpha)
+            f.segments("w", xs, np.full_like(xs, y1), xs, y1 - ln, 0.8 * alpha)
+            for h in range(0, int(ALT_MAX) + 1, 2):
+                f.text("w", float(X(h)) + 6, y1 - 20, f"{h:02d} KM", size=L.T_MICRO, alpha=0.7 * alpha)
+            if n_now:
+                alt = b["p"][:n_now, 1]
+                cnt, _ = np.histogram(alt, bins=160, range=(0.0, ALT_MAX))
+                norm = max(cnt.max(), 1)
+                hh = (50.0 + 8.0 * pulse) * np.sqrt(cnt / norm)
+                bx = X(np.arange(160) * 0.1 + 0.1)
+                m = cnt > 0
+                f.rects("w", bx[m], y0 + 1, bx[m] + 6, y0 + 1 + hh[m], 0.95 * alpha)
+                hb = 18.0 * np.sqrt(cnt / norm) * hash01(np.arange(160), k)
+                f.rects("w", bx[m], y1 - 38 - hb[m], bx[m] + 6, y1 - 38, 0.55 * alpha)
+            xc = float(X(front))
+            f.segments("r", [xc], [y0 - 4], [xc], [y1 + 4], 1.2 * alpha, width=L.LW)
+            anchor = "ls" if xc < x1 - 260 else "rs"
+            ty = y0 - 9 if xc > x0 + 560 else y0 + 44           # keep clear of the title tag on the left
+            f.tag("r", xc + (6 if anchor == "ls" else -6), ty, f"FRONT {front:06.3f} KM", size=L.T_MICRO, pad=3,
+                  alpha=alpha, anchor=anchor)
+        # the two event tags: made when their event happens (or with the strip, if it comes later), and taken
+        # apart with it
+        ev = (lambda age_e: age_e) if age_c is None else (lambda age_e: min(age_e, age_c - 0.2))
         if n_now:
-            alt = b["p"][:n_now, 1]
-            cnt, _ = np.histogram(alt, bins=160, range=(0.0, ALT_MAX))
-            norm = max(cnt.max(), 1)
-            hh = (50.0 + 8.0 * pulse) * np.sqrt(cnt / norm)
-            bx = X(np.arange(160) * 0.1 + 0.1)
-            m = cnt > 0
-            f.rects("w", bx[m], y0 + 1, bx[m] + 6, y0 + 1 + hh[m], 0.95 * alpha)
-            hb = 18.0 * np.sqrt(cnt / norm) * hash01(np.arange(160), k)
-            f.rects("w", bx[m], y1 - 38 - hb[m], bx[m] + 6, y1 - 38, 0.55 * alpha)
             imax = int(np.argmax(cnt))
             if cnt[imax] > 30:
-                f.tag("w", float(X(imax * 0.1 + 0.05)), yb + 7, f"XMAX {imax * 0.1:04.1f} KM", size=L.T_MICRO,
-                      pad=4, alpha=alpha)
-        if a >= e["t1"] - 0.05:
-            f.tag("w", float(X(e["h1"])), yb + 7, f"H1 {e['h1']:.1f} KM", size=L.T_MICRO, pad=4, alpha=alpha)
-        front = min(ALT_MAX, self.front(k, a))
-        xc = float(X(front))
-        f.segments("r", [xc], [y0 - 4], [xc], [y1 + 4], 1.2 * alpha, width=L.LW)
-        anchor = "ls" if xc < x1 - 260 else "rs"
-        ty = y0 - 9 if xc > x0 + 560 else y0 + 44           # keep clear of the title tag on the left
-        f.tag("r", xc + (6 if anchor == "ls" else -6), ty, f"FRONT {front:06.3f} KM", size=L.T_MICRO, pad=3,
-              alpha=alpha, anchor=anchor)
+                B.tag(f, "w", float(X(imax * 0.1 + 0.05)), yb + 7, f"XMAX {imax * 0.1:04.1f} KM",
+                      ev(a - self.xmax_time(k)), size=L.T_MICRO, pad=4, alpha=alpha, cps=90.0, key=49)
+        B.tag(f, "w", float(X(e["h1"])), yb + 7, f"H1 {e['h1']:.1f} KM", ev(a - (e["t1"] - 0.05)), size=L.T_MICRO,
+              pad=4, alpha=alpha, cps=90.0, key=50)
         return front
 
     def counts(self, k, a):
@@ -1026,54 +1093,65 @@ class World:
         return [("E+-", int((kinds == K_E).sum()), "w"), ("GAMMA", int((kinds == K_G).sum()), "w"),
                 ("HADRON", int((kinds == K_H).sum()), "w"), ("MU+-", int((kinds == K_MU).sum()), "r")]
 
-    def draw_counters(self, f, k, a, x0, x1, y0, title="PARTICLES", alpha=1.0):
-        """Counters per particle kind: 2 x 2 when the panel is wide enough, else one narrow column."""
-        hud.panel_header(f, x0, x1, y0, title, alpha=alpha)
-        rows = self.counts(k, a)
-        if x1 - x0 >= 430:
-            cw = (x1 - x0) / 2
-            for r, (lab, n, lay) in enumerate(rows):
-                xx = x0 + (r % 2) * cw
-                yy = y0 + 46 + (r // 2) * 44
-                f.tag(lay, xx + 4, yy, lab, size=L.T_SMALL, pad=3, alpha=alpha)
-                f.text(lay, xx + 104, yy + 2, f"{n:06d}", size=28, alpha=0.95 * alpha)
-        else:
-            for r, (lab, n, lay) in enumerate(rows):
-                yy = y0 + 38 + r * 27
-                f.tag(lay, x0 + 4, yy, lab, size=L.T_MICRO, pad=3, alpha=alpha)
-                f.text(lay, x0 + 92, yy + 2, f"{n:06d}", size=22, alpha=0.95 * alpha)
+    def draw_counters(self, f, k, a, x0, x1, y0, title="PARTICLES", alpha=1.0, age=None):
+        """Counters per particle kind: 2 x 2 when the panel is wide enough, else one narrow column.
+        age = seconds since the panel appeared (None = built): it is constructed (rule, tags made, figures
+        spinning before they lock), never faded in."""
+        with f.build(age, (x0 - 8, y0 - 24, x1 + 8, y0 + 134), wave=0.3, key=51):
+            hud.panel_header(f, x0, x1, y0, title, alpha=alpha)
+            rows = self.counts(k, a)
+            if x1 - x0 >= 430:
+                cw = (x1 - x0) / 2
+                for r, (lab, n, lay) in enumerate(rows):
+                    xx = x0 + (r % 2) * cw
+                    yy = y0 + 46 + (r // 2) * 44
+                    f.tag(lay, xx + 4, yy, lab, size=L.T_SMALL, pad=3, alpha=alpha)
+                    f.text(lay, xx + 104, yy + 2, f"{n:06d}", size=28, alpha=0.95 * alpha)
+            else:
+                for r, (lab, n, lay) in enumerate(rows):
+                    yy = y0 + 38 + r * 27
+                    f.tag(lay, x0 + 4, yy, lab, size=L.T_MICRO, pad=3, alpha=alpha)
+                    f.text(lay, x0 + 92, yy + 2, f"{n:06d}", size=22, alpha=0.95 * alpha)
 
-    def draw_barcode(self, f, t, x0, x1, y0, y1, title="BIRTH_RATE >> BARCODE", span=3.0, alpha=1.0, boost=0.0):
-        """Scrolling barcode: one column per ~13 ms, lit by the number of particles born in it."""
-        hud.panel_header(f, x0, x1, y0, title if x1 - x0 > 260 else "BIRTH_RATE", alpha=alpha)
-        cols = max(8, int((x1 - x0) / 4.0))
-        dt = span / cols
-        k_first = math.floor((t - span) / dt)
-        kk = k_first + np.arange(cols)
-        rate = np.zeros(cols, np.float32)
-        t0s = self.ev_t0[: self.n_showers]
-        for ev in np.nonzero((t0s < t) & (t0s > t - 30.0))[0]:
-            b = self.births[ev]
-            tt = kk * dt - self.ev_t0[ev]
-            rate += (np.searchsorted(b["t"], tt + dt) - np.searchsorted(b["t"], tt))
-        dens = np.clip(0.06 + 0.9 * np.tanh(rate / 60.0) + boost, 0.0, 1.0)
-        cw = (x1 - x0) / cols
-        frac = (t - span) / dt - k_first
-        xs = x0 + (np.arange(cols) - frac) * cw
-        lane_h = (y1 - y0 - 14) / 3
-        for ln in range(3):
-            on = hash01(kk, ln + 13) < dens * (1.0 - 0.2 * ln)
-            m = on & (xs >= x0) & (xs + cw <= x1)
-            ly0 = y0 + 12 + ln * lane_h
-            f.rects("w", xs[m], ly0, xs[m] + cw, ly0 + lane_h - 3, 0.95 * alpha)
-        f.segments("r", [x1 - 2], [y0 + 7], [x1 - 2], [y1], 1.2 * alpha, width=L.LW)
+    def draw_barcode(self, f, t, x0, x1, y0, y1, title="BIRTH_RATE >> BARCODE", span=3.0, alpha=1.0, boost=0.0,
+                     age=None):
+        """Scrolling barcode: one column per ~13 ms, lit by the number of particles born in it.
+        age = seconds since the panel appeared (None = built): constructed (rule, tag, lanes rising, cursor
+        drawn), never faded in."""
+        with f.build(age, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), wave=0.3, key=52):
+            hud.panel_header(f, x0, x1, y0, title if x1 - x0 > 260 else "BIRTH_RATE", alpha=alpha)
+            cols = max(8, int((x1 - x0) / 4.0))
+            dt = span / cols
+            k_first = math.floor((t - span) / dt)
+            kk = k_first + np.arange(cols)
+            rate = np.zeros(cols, np.float32)
+            t0s = self.ev_t0[: self.n_showers]
+            for ev in np.nonzero((t0s < t) & (t0s > t - 30.0))[0]:
+                b = self.births[ev]
+                tt = kk * dt - self.ev_t0[ev]
+                rate += (np.searchsorted(b["t"], tt + dt) - np.searchsorted(b["t"], tt))
+            dens = np.clip(0.06 + 0.9 * np.tanh(rate / 60.0) + boost, 0.0, 1.0)
+            cw = (x1 - x0) / cols
+            frac = (t - span) / dt - k_first
+            xs = x0 + (np.arange(cols) - frac) * cw
+            lane_h = (y1 - y0 - 14) / 3
+            for ln in range(3):
+                on = hash01(kk, ln + 13) < dens * (1.0 - 0.2 * ln)
+                m = on & (xs >= x0) & (xs + cw <= x1)
+                ly0 = y0 + 12 + ln * lane_h
+                f.rects("w", xs[m], ly0, xs[m] + cw, ly0 + lane_h - 3, 0.95 * alpha)
+            f.segments("r", [x1 - 2], [y0 + 7], [x1 - 2], [y1], 1.2 * alpha, width=L.LW)
 
 
 def altitude_rules(f, ctx, st, cam, x_ref, z_ref, lay=None, hmax=17, label_x=None, gain=1.0, depth=True, span=None,
-                   front=None):
+                   front=None, age=None, label_age=None, depth_age=None, wave=0.3):
     """Horizontal rule every km of altitude across the view, or across `span` = (x0, x1) (rules may pass
     behind the towers). Km labels at the left of the focus column, slant depth of the air in the right-hand
-    column of the layout - where no tower and no other block hides them."""
+    column of the layout - where no tower and no other block hides them.
+    age = seconds since the rules appeared (None = built): they are drawn by pens, from the top one down
+    (the five-km rules lead, with a bright head), and their labels are decoded - nothing fades in.
+    label_age / depth_age (default: age) = the same for the km labels / the slant-depth labels alone, when a
+    cut moves them to another column: they are then made again where they are."""
     view = st.view
     x0, x1 = span if span else (view[0], view[2])
     P = np.stack([np.full(hmax, x_ref), np.arange(hmax, dtype=np.float32), np.full(hmax, z_ref)], 1).astype(np.float32)
@@ -1084,18 +1162,29 @@ def altitude_rules(f, ctx, st, cam, x_ref, z_ref, lay=None, hmax=17, label_x=Non
     y_front = None                       # the FRONT tag sits on the red front line: keep its row free
     if front is not None:
         y_front = float(cam.project(np.array([[x_ref, front, z_ref]], np.float32))[1][0])
-    for h in range(hmax):
-        y = float(py[h])
-        if not (view[1] + 8 < y < view[3] - 4):
-            continue
-        f.segments("w", [x0], [y], [x1], [y], (0.13 if h % 5 else 0.3) * gain)
-        if y < view[1] + 40:
-            continue
-        txt = f"{h:02d} KM"
-        if not _hits(tbox(lx, y - 7, txt, L.T_SMALL), taken):
-            put_text(f, ctx, "w", lx, y - 7, txt, size=L.T_SMALL, alpha=0.75 * gain)
-        if xr is not None and not (y_front is not None and abs(y - y_front) < 30.0):
-            txt = f"X {1030.0 * math.exp(-h / 8.4):06.1f} G/CM2"      # slant depth of the air above this altitude
+    hs = [h for h in range(hmax) if view[1] + 8 < float(py[h]) < view[3] - 4]
+    rect = (x0, view[1], x1, view[3])
+    with f.build(age, rect, flow="tb", wave=wave, line=0.3, marks=False, key=43):
+        for five in (True, False):       # two calls: the few five-km rules keep the head of their pen
+            ys = np.array([float(py[h]) for h in hs if (h % 5 == 0) == five], np.float32)
+            if len(ys):
+                f.segments("w", np.full_like(ys, x0), ys, np.full_like(ys, x1), ys, (0.3 if five else 0.13) * gain)
+    with f.build(age if label_age is None else label_age, rect, flow="tb", wave=wave, marks=False, key=44):
+        for h in hs:
+            y = float(py[h])
+            if y < view[1] + 40:
+                continue
+            txt = f"{h:02d} KM"
+            if not _hits(tbox(lx, y - 7, txt, L.T_SMALL), taken):
+                put_text(f, ctx, "w", lx, y - 7, txt, size=L.T_SMALL, alpha=0.75 * gain)
+    if xr is None:
+        return
+    with f.build(age if depth_age is None else depth_age, rect, flow="tb", wave=wave, marks=False, key=45):
+        for h in hs:
+            y = float(py[h])
+            if y < view[1] + 40 or (y_front is not None and abs(y - y_front) < 30.0):
+                continue
+            txt = f"X {1030.0 * math.exp(-h / 8.4):06.1f} G/CM2"          # slant depth of the air above this altitude
             if not _hits(tbox(xr, y - 7, txt, L.T_MICRO, "rs"), taken):
                 put_text(f, ctx, "w", xr, y - 7, txt, size=L.T_MICRO, alpha=0.5 * gain, anchor="rs")
 
@@ -1179,16 +1268,13 @@ class Shower(Scene):
                            roll_deg=6.0 + 10.0 * u)
 
     # ------------------------------------------------------------------ draw
-    def draw(self, f, t, ctx):
+    def _views(self, ctx, t, a, top):
+        """[(kind, camera, clip)] of the views and the info layout, for the elevations (top=False) or for the
+        plan phase (top=True)."""
         w, st = self.world, self.st
         view = st.view
         e = w.events[0]
-        gx, gz = float(e["G"][0]), float(e["G"][2])
-        age, alive, env = w.state(t)
-        a = float(age[0])
-        top = t >= self.t_land
         two = self.clip2 is not None
-        kick = min(1.5, ctx.cues.kick(t))
         fx = ctx.focus[0]
         cam1 = self._cam_top(t, ctx.focus) if top else self._cam_side(a, fx, 8.0)
         views = [("top" if top else "side", cam1, self.clip1)]
@@ -1214,13 +1300,46 @@ class Shower(Scene):
                           [("AIR_SHOWER // SHOWER 01", 0.85), (f"E0 {e['E0'] * 3.2:.2f}E15 EV", 0.6),
                            (f"ZENITH {e['zen']:.1f} DEG", 0.6), (CITY, 0.6)],
                           z_top, z_full, within=(self.clip2[0], self.clip2[2]) if (top and two) else None)
+        return views, lay
+
+    def _ground_in(self):
+        """Age of the shower at which the ground comes up into the elevations (the camera follows the front
+        down): what the ground line carries (GROUND tag, ELEVATION X / Z) is made at that moment."""
+        e = self.world.events[0]
+        f_in = 0.5 * (VIEW_Y1 - VIEW_Y0) / self.s_side - 1.2
+        return e["t1"] + max(0.0, e["h1"] - f_in) / (e["speed"] * math.cos(math.radians(e["zen"])))
+
+    def draw(self, f, t, ctx):
+        w, st = self.world, self.st
+        view = st.view
+        e = w.events[0]
+        gx, gz = float(e["G"][0]), float(e["G"][2])
+        age, alive, env = w.state(t)
+        a = float(age[0])
+        top = t >= self.t_land
+        two = self.clip2 is not None
+        kick = min(1.5, ctx.cues.kick(t))
+        views, lay = self._views(ctx, t, a, top)
+        cam1 = views[0][1]
+        # Nothing of the instrument pops in or fades in: it is CONSTRUCTED during the first second of the scene
+        # (age0, each block a little after the other); what the plan view brings is constructed on that cut.
+        age0 = t - self.t_in
+        age_v = (t - self.t_land) if top else age0 - 0.05
+        age_id, age_depth = age0 - 0.15, age0 - 0.1
+        if top:                                   # what the plan view had to move is made again where it is now
+            before = self._views(ctx, t, a, False)[1]
+            if lay["b"] and before["b"] != lay["b"]:
+                age_id = age_v
+            if before["xr"] != lay["xr"]:
+                age_depth = age_v
         # altitude rules: across the wall while both views are elevations, then only under the second one
         f.set_clip(*view)
         if not top:
-            altitude_rules(f, ctx, st, cam1, gx, gz, lay, front=w.front(0, a))
+            altitude_rules(f, ctx, st, cam1, gx, gz, lay, front=w.front(0, a), age=age0 - 0.1, wave=0.35)
         elif two:
             altitude_rules(f, ctx, st, views[1][1], gx, gz, lay, span=(self.clip2[0], self.clip2[2]),
-                           label_x=col_of(ctx, self.x2)[0] + 4)
+                           label_x=col_of(ctx, self.x2)[0] + 4, age=age0 - 0.1, label_age=age_v, depth_age=age_depth,
+                           wave=0.25)
         fixed = tower_boxes(ctx) + lay["boxes"]
         for j, (kind, cam, clip) in enumerate(views):
             f.set_clip(*clip)
@@ -1229,7 +1348,7 @@ class Shower(Scene):
             w.draw_hits(f, cam, age, alive)
             w.draw_splash(f, cam, age)
             if j == 0:
-                self._overlay(f, ctx, lay, cam, kind, t, a, clip)
+                self._overlay(f, ctx, lay, cam, kind, t, a, clip, age0)
                 boxes = w.draw_interaction(f, cam, age, clip, ctx, avoid=lay["boxes"])
                 box = self._the_muon(f, ctx, cam, kind, t, a, boxes + lay["boxes"], clip)
                 if box:
@@ -1237,16 +1356,16 @@ class Shower(Scene):
                 w.draw_labels(f, cam, age, alive, clip, avoid=fixed + boxes, limit=7)
             else:
                 w.draw_interaction(f, cam, age, clip, tags=False)
-                self._second(f, ctx, cam, t, a, clip)
+                self._second(f, ctx, cam, t, a, clip, age0)
                 w.draw_labels(f, cam, age, alive, clip, avoid=fixed, limit=4)
         f.set_clip()
-        w.draw_column(f, 0, a, st.col)
-        w.draw_strip(f, 0, a, label="LONGITUDINAL_PROFILE // SHOWER 01 // ABOVE THIS CITY", pulse=kick)
-        self._bottom(f, ctx, t, a)
-        draw_info(f, ctx, lay)
+        w.draw_column(f, 0, a, st.col, age=age0 - 0.1)
+        w.draw_strip(f, 0, a, label="LONGITUDINAL_PROFILE // SHOWER 01 // ABOVE THIS CITY", pulse=kick, age=age0)
+        self._bottom(f, ctx, t, a, age0)
+        draw_info(f, ctx, lay, age=age_v, age_id=age_id)
         return {"invert": 0.0 <= t - self.t_int < 0.05, "invert_rect": view}
 
-    def _overlay(self, f, ctx, lay, cam, kind, t, a, clip):
+    def _overlay(self, f, ctx, lay, cam, kind, t, a, clip, age0):
         w, st = self.world, self.st
         view = st.view
         e = w.events[0]
@@ -1256,41 +1375,52 @@ class Shower(Scene):
             if 0 < front < e["h1"]:                                   # the front: one red line across the wall
                 P = np.array([[float(e["G"][0]), front, float(e["G"][2])]], np.float32)
                 y = float(cam.project(P)[1][0])
-                f.segments("r", [view[0]], [y], [view[2]], [y], 0.9, width=L.LW)
-                put_right(f, ctx, st, lay, "r", y - 9, f"FRONT {front:06.3f} KM", size=L.T_LABEL, pad=5)
+                # drawn by a pen from the left when the primary interacts; its tag is made when the pen gets there
+                with f.build(a - e["t1"], (view[0], y - 34.0, view[2], y + 8.0), flow="lr", wave=0.3, marks=False, key=70):
+                    f.segments("r", [view[0]], [y], [view[2]], [y], 0.9, width=L.LW)
+                    put_right(f, ctx, st, lay, "r", y - 9, f"FRONT {front:06.3f} KM", size=L.T_LABEL, pad=5)
             gy = float(cam.project(e["G"][None].astype(np.float32))[1][0])
+            age_g = a - self._ground_in()                             # the ground has come up into the view
             if view[1] < gy < view[3]:
-                put_right(f, ctx, st, lay, "w", gy - 9, f"GROUND // {CITY}", size=L.T_SMALL, pad=4)
+                with f.build(age_g, (view[0], gy - 34.0, view[2], gy + 8.0), flow="rl", wave=0.1, marks=False, key=71):
+                    put_right(f, ctx, st, lay, "w", gy - 9, f"GROUND // {CITY}", size=L.T_SMALL, pad=4)
             f.set_clip(*clip)
             ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
-            f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5)
+            with f.build(age0 - 0.1, clip, flow="bt", wave=0.2, marks=False, key=72):      # the axis of the shower
+                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5)
             if self.clip2 is not None and view[1] < float(ay[0]) < view[3]:
-                put_text(f, ctx, "w", float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION X", size=L.T_SMALL, alpha=0.7)
+                with f.build(age_g, tbox(float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION X", L.T_SMALL), wave=0.05,
+                             marks=False, key=73):
+                    put_text(f, ctx, "w", float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION X", size=L.T_SMALL, alpha=0.7)
         else:
             gx, gy, _, _ = cam.project(e["G"][None].astype(np.float32))
             X, Y = float(gx[0]), float(gy[0])
-            big = 1e5
-            f.segments("r", [X - big, X], [Y, Y - big], [X + big, X], [Y, Y + big], 0.45)
-            sc = cam.scale
-            f.rings("w", [X] * 4, [Y] * 4, [sc * r for r in (1, 2, 4, 8)], 0.25)
-            for r in (1, 2, 4, 8):
-                if X + sc * r + 70 < min(clip[2], st.tx1):
-                    put_text(f, ctx, "w", X + sc * r + 7, Y - 8, f"{r} KM", size=L.T_SMALL, alpha=0.6)
-            put_tag(f, ctx, "r", X - 12, Y - 14, "CORE", size=L.T_SMALL, pad=4, anchor="rs")
+            # the plan view brings its own marks: cross-hair, range rings and their labels grow out of the core
+            with f.build(t - self.t_land, clip, flow="out", origin=(X, Y), wave=0.3, marks=False, key=74):
+                f.segments("r", [X, X, X, X], [Y, Y, Y, Y], [clip[0], clip[2], X, X], [Y, Y, clip[1], clip[3]], 0.45)
+                sc = cam.scale
+                f.rings("w", [X] * 4, [Y] * 4, [sc * r for r in (1, 2, 4, 8)], 0.25)
+                for r in (1, 2, 4, 8):
+                    if X + sc * r + 70 < min(clip[2], st.tx1):
+                        put_text(f, ctx, "w", X + sc * r + 7, Y - 8, f"{r} KM", size=L.T_SMALL, alpha=0.6)
+                put_tag(f, ctx, "r", X - 12, Y - 14, "CORE", size=L.T_SMALL, pad=4, anchor="rs")
 
-    def _second(self, f, ctx, cam, t, a, clip):
+    def _second(self, f, ctx, cam, t, a, clip, age0):
         """The second elevation: no tags, only its name and the tagged muon as a bolder track."""
         e = self.world.events[0]
         ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
-        f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5)
+        with f.build(age0 - 0.15, clip, flow="bt", wave=0.2, marks=False, key=75):          # the axis of the shower
+            f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5)
         if clip[1] < float(ay[0]) < clip[3]:
-            put_text(f, ctx, "w", float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION Z", size=L.T_SMALL, alpha=0.7)
+            with f.build(a - self._ground_in(), tbox(float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION Z", L.T_SMALL),
+                         wave=0.05, marks=False, key=76):
+                put_text(f, ctx, "w", float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION Z", size=L.T_SMALL, alpha=0.7)
         y = self.world.you
         if y is None or a < y["t0"]:
             return
         prog = float(np.clip((a - y["t0"]) / (y["t1"] - y["t0"]), 0.0, 1.0))
-        A, B = y["a"], y["b"]
-        sx, sy, _, ok = cam.project(np.stack([A, A + (B - A) * prog]).astype(np.float32))
+        A, B_ = y["a"], y["b"]
+        sx, sy, _, ok = cam.project(np.stack([A, A + (B_ - A) * prog]).astype(np.float32))
         if ok.all():
             f.segments("r", sx[:1], sy[:1], sx[1:], sy[1:], 1.0, width=L.LW_BOLD)
             if prog < 1.0:
@@ -1302,16 +1432,16 @@ class Shower(Scene):
         if y is None or a < y["t0"]:
             return None
         prog = float(np.clip((a - y["t0"]) / (y["t1"] - y["t0"]), 0.0, 1.0))
-        A, B = y["a"], y["b"]
-        head = A + (B - A) * prog
-        P = np.stack([A, head, B]).astype(np.float32)
+        A, B_ = y["a"], y["b"]
+        head = A + (B_ - A) * prog
+        P = np.stack([A, head, B_]).astype(np.float32)
         sx, sy, _, ok = cam.project(P)
         if not ok.all():
             return None
         f.segments("r", sx[:1], sy[:1], sx[1:2], sy[1:2], 1.2, width=L.LW_BOLD)
         hx, hy = float(sx[1]), float(sy[1])
         gam = y["E"] / 0.10566
-        t_lab = float(np.linalg.norm(B - A)) / 299792.458 * 1e6          # us
+        t_lab = float(np.linalg.norm(B_ - A)) / 299792.458 * 1e6          # us
         if kind == "side":
             tx_, ty_ = float(sx[2]), float(sy[2])                        # where it is going: a red target
             if clip[1] < ty_ < clip[3]:
@@ -1324,7 +1454,7 @@ class Shower(Scene):
             f.rings("r", [hx], [hy], [15.0], 0.9, width=L.LW)
             return auto_callout(f, ctx, clip, hx, hy, "MU- 0001",
                                 [f"E {y['E']:.3f} GEV", f"GAMMA {gam:.1f}", f"T-{max(0.0, self.t_land - t):05.3f} S"],
-                                red=True, age=a - y["t0"], avoid=avoid, prefer=(1, -1))
+                                red=True, avoid=avoid, prefer=(1, -1), build=a - y["t0"])
         al = max(0.0, t - self.t_land)
         u = min(1.0, al / 0.9)
         f.rings("r", [hx, hx], [hy, hy], [14.0, 14.0 + 90.0 * (1 - (1 - u) ** 3)], [1.0, 0.9 * (1 - u)],
@@ -1333,10 +1463,11 @@ class Shower(Scene):
         f.dots("w", [hx], [hy], 3.4, 1.5)
         return auto_callout(f, ctx, clip, hx, hy, "MU- 0001",
                             ["ARRIVED", f"T {t_lab:.1f} US", f"TAU' {t_lab / gam:.2f} US", ">> THROUGH..."],
-                            red=True, age=al, avoid=avoid, prefer=(1, 1), dx=40.0, dy=64.0)
+                            red=True, avoid=avoid, prefer=(1, 1), dx=40.0, dy=64.0, build=al)
 
-    def _bottom(self, f, ctx, t, a):
-        """Bottom band, before the detectors are revealed: the blocks flow into the panels between the towers."""
+    def _bottom(self, f, ctx, t, a, age0):
+        """Bottom band, before the detectors are revealed: the blocks flow into the panels between the towers.
+        Each panel is constructed at the start of the scene, one after the other."""
         w = self.world
         sl = ctx.slots_pre
         y0, y1 = sl["y0"], sl["y1"]
@@ -1346,23 +1477,27 @@ class Shower(Scene):
             x0, x1 = place["time"]
             wide = x1 - x0 >= 560
             size = min(64.0, (x1 - x0 - (200 if wide else 10)) / 6.1)
-            hud.panel_header(f, x0, x1, y0, "FRONT // TIME TO GROUND")
             rem = self.t_land - t
-            if rem > 0:
-                f.text("w", x0 + 2, y0 + 96, f"T-{rem:06.3f} S", size=size)
+            with f.build(age0 - 0.2, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), wave=0.3, key=77):
+                hud.panel_header(f, x0, x1, y0, "FRONT // TIME TO GROUND")
+                if rem > 0:
+                    f.text("w", x0 + 2, y0 + 96, f"T-{rem:06.3f} S", size=size)
+                    if wide:
+                        f.text("w", x1 - 4, y0 + 46, f"ALT {min(w.front(0, a), 99.0):06.3f} KM", size=L.T_SMALL, alpha=0.8,
+                               anchor="rs")
+                        f.text("w", x1 - 4, y0 + 72, "V 0.9998 C", size=L.T_SMALL, alpha=0.6, anchor="rs")
+                        slow = (self.t_land - self.t_int) / (w.events[0]["h1"] / 299792.458)
+                        f.text("w", x1 - 4, y0 + 98, f"SLOWED x {slow:,.0f}".replace(",", " "), size=L.T_SMALL, alpha=0.6,
+                               anchor="rs")
+            if rem <= 0:                    # landed: the count-down gives way to what was measured, made on the cut
+                al = -rem
+                B.tag(f, "r", x0 + 6, y0 + 96, "GROUND", al, size=size, pad=8, bold=True, cps=40.0, key=78, commit=True)
                 if wide:
-                    f.text("w", x1 - 4, y0 + 46, f"ALT {min(w.front(0, a), 99.0):06.3f} KM", size=L.T_SMALL, alpha=0.8,
-                           anchor="rs")
-                    f.text("w", x1 - 4, y0 + 72, "V 0.9998 C", size=L.T_SMALL, alpha=0.6, anchor="rs")
-                    slow = (self.t_land - self.t_int) / (w.events[0]["h1"] / 299792.458)
-                    f.text("w", x1 - 4, y0 + 98, f"SLOWED x {slow:,.0f}".replace(",", " "), size=L.T_SMALL, alpha=0.6,
-                           anchor="rs")
-            else:
-                f.tag("r", x0 + 6, y0 + 96, "GROUND", size=size, pad=8, bold=True)
-                if wide:
-                    f.text("r", x1 - 4, y0 + 46, f"T+{-rem:05.3f} S", size=L.T_SMALL, anchor="rs")
-                    f.text("w", x1 - 4, y0 + 72, CITY, size=L.T_SMALL, alpha=0.7, anchor="rs")
+                    f.text("r", x1 - 4, y0 + 46, B.resolve(f"T+{al:05.3f} S", al, 70.0, 0.15, key=79, pad=True),
+                           size=L.T_SMALL, anchor="rs")
+                    f.text("w", x1 - 4, y0 + 72, B.resolve(CITY, al, 70.0, 0.25, key=80, pad=True), size=L.T_SMALL,
+                           alpha=0.7, anchor="rs")
         if "count" in place:
-            w.draw_counters(f, 0, a, place["count"][0], place["count"][1], y0)
+            w.draw_counters(f, 0, a, place["count"][0], place["count"][1], y0, age=age0 - 0.3)
         if "bar" in place:
-            w.draw_barcode(f, t, place["bar"][0], place["bar"][1], y0, y1)
+            w.draw_barcode(f, t, place["bar"][0], place["bar"][1], y0, y1, age=age0 - 0.4)

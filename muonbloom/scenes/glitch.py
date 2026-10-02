@@ -17,6 +17,12 @@ towers, the frame and the HUD break with the picture: the wall itself glitches.
 
 Layout: everything comes from the DANCE stage (particle column and view derived from the towers); the
 lone muon of the break falls on ctx.focus, in the bay that hosts the one-centre compositions.
+
+The tearing is a post-process and stays what it was. The data, here as everywhere, never fade in: in the
+break the furniture of the DANCE scene is still there (dimmed, emptied) and what is new - the view tag, the
+rules, the lone muon's call-out, the cursor of the strip, the counts - is constructed; when the drums come
+back the grid builds each bar as in DANCE; in the transition the instrument does not fade out with the
+picture, it is taken apart piece by piece (T_HUD_OUT), and the last read-out (LANES) is constructed.
 """
 from __future__ import annotations
 
@@ -24,19 +30,21 @@ import math
 
 import numpy as np
 
+from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
 from ..engine import OrthoCamera, hash01, smoothstep
 from ..show import Scene
-from .dance import BEAT, PANEL_BLOCKS, PHRASE, T0, Y_GROUND, Dance, grid
+from .dance import BEAT, N_PHRASES, PANEL_BLOCKS, PHRASE, T0, Y_GROUND, Dance, grid
 from .shower import (altitude_rules, auto_callout, bottom_panels, draw_info, flow, info_layout, put_tag, put_text,
-                     stage_for)
+                     stage_for, tbox)
 
 T_IN = 415.0
 T_DRUMS = T0 + 13 * PHRASE          # 422.666: the kick that brings the drums back
 T_TRANS = 447.0
 T_OUT = 454.0
+T_HUD_OUT = T_TRANS + 1.0           # the instrument is taken apart from here, one piece every half second
 STEP = BEAT / 2                     # the glitch re-rolls on the eighth notes (bright bands: on the beat)
 _HEX = "0123456789ABCDEF"
 
@@ -151,7 +159,8 @@ class Glitch(Scene):
         fade = float(1.0 - smoothstep(T_TRANS, T_TRANS + 4.5, t))
         amt = _amount(t, ctx)
         vertical = float(smoothstep(T_TRANS - 2.0, T_TRANS + 1.5, t) * (1.0 - smoothstep(T_TRANS + 2.5, T_TRANS + 4.5, t)))
-        self.dance.draw(f, t, ctx, gain=fade, hud_alpha=fade, flash=False, bursts=fade > 0.5, hide=(12,), extended=True)
+        self.dance.draw(f, t, ctx, gain=fade, hud_alpha=1.0, flash=False, bursts=fade > 0.5, hide=(12,), extended=True,
+                        hud_out=T_HUD_OUT)
         st = self.dance.stage(grid(t)[0])
         view = st.view
         rng = np.random.default_rng((5, int(math.floor((t - T0) / BEAT))))
@@ -226,13 +235,16 @@ class Glitch(Scene):
                 f.dots("w", x[~landed], y[~landed], 1.0, 0.9 * gate * out)
 
     def _tag(self, f, ctx, st, t, amt, fade):
+        """The read-out of the scene: SIGNAL INTEGRITY is made when the drums come back and taken apart in the
+        transition; LANES is then constructed in its place. Neither fades."""
         x0, y0 = st.focus_col[0] + 10, st.view[3] - 26
-        if fade > 0.05:
-            put_tag(f, ctx, "r", x0, y0, f"SIGNAL INTEGRITY {max(0.0, 1.0 - amt) * 100:05.1f} %", size=L.T_LABEL, pad=5,
-                    alpha=fade)
-        else:
-            put_text(f, ctx, "w", x0, y0, f"LANES {int((t - self.lane_t > 0).sum()):02d}   15.000 KM TO GROUND",
-                     size=L.T_SMALL, alpha=0.7 * float(smoothstep(T_TRANS + 3.5, T_TRANS + 5.0, t)))
+        txt = f"SIGNAL INTEGRITY {max(0.0, 1.0 - amt) * 100:05.1f} %"
+        with f.build(B.io(t - T_DRUMS, T_TRANS + 3.3 - t, out=0.3, span=0.6), tbox(x0, y0, txt, L.T_LABEL, pad=5),
+                     wave=0.05, marks=False, key=81):
+            put_tag(f, ctx, "r", x0, y0, txt, size=L.T_LABEL, pad=5)
+        txt = f"LANES {int((t - self.lane_t > 0).sum()):02d}   15.000 KM TO GROUND"
+        with f.build(t - (T_TRANS + 3.5), tbox(x0, y0, txt, L.T_SMALL), wave=0.1, marks=False, key=82):
+            put_text(f, ctx, "w", x0, y0, txt, size=L.T_SMALL, alpha=0.7)
 
     # ------------------------------------------------------------------ 7.0 almost nothing
     def _break(self, f, t, ctx):
@@ -252,33 +264,41 @@ class Glitch(Scene):
         xt = xg - slope * (Y_GROUND - ytop)
         info = info_layout(ctx, st, "VIEW 04 // ORTHO_FRONT // HOLD", cam, zones_top=[(xt - 110.0, xt + 110.0)],
                            zones_full=[(xt - 260.0, xg + 260.0)])
+        age0 = t - T_IN                         # what the break brings is constructed from its cut
         f.set_clip(*view)
         w.draw_ground(f, cam, "front", view, gain=dim)
-        altitude_rules(f, ctx, st, cam, 0.0, 0.0, info, gain=dim, depth=False)
+        altitude_rules(f, ctx, st, cam, 0.0, 0.0, info, gain=dim, depth=False, age=age0 - 0.1)
         f.segments("r", [xg - slope * (Y_GROUND - ytop)], [ytop], [x], [y], 0.06, 0.75, width=L.LW)
         f.dots("r", [x], [y], 4.2, 1.7)
         f.dots("w", [x], [y], 1.6, 1.1)
         alt = (Y_GROUND - y) / geo.S
         said = sd.said("almost nothing", 420.0)
         auto_callout(f, ctx, view, x, y, "MU-", [f"ALT {alt:06.3f} KM", "E 3.871 GEV", "N 000001" if t < said else "1 OF 1"],
-                     red=True, age=t - T_IN, prefer=(1, -1), dx=64.0, dy=46.0)
-        f.segments("r", [xg - 16, xg], [Y_GROUND, Y_GROUND - 16], [xg + 16, xg], [Y_GROUND, Y_GROUND + 2], 0.5)
+                     red=True, prefer=(1, -1), dx=64.0, dy=46.0, build=age0 - 0.2)
+        with f.build(age0 - 0.3, (xg - 18.0, Y_GROUND - 18.0, xg + 18.0, Y_GROUND + 4.0), wave=0.05, marks=False, key=91):
+            f.segments("r", [xg - 16, xg], [Y_GROUND, Y_GROUND - 16], [xg + 16, xg], [Y_GROUND, Y_GROUND + 2], 0.5)
         f.set_clip()
-        # what is left of the HUD
+        # what is left of the HUD: the furniture of the DANCE scene, still there, dimmed and emptied (it is not
+        # rebuilt); what is new on it - title, cursor, the one row, the counts - is made on the cut
         a = 0.4
-        x0, y0, x1, y1, yb = hud.strip_base(f, title="LONGITUDINAL_PROFILE // --", alpha=a)
+        x0, y0, x1, y1, yb = hud.strip_base(f, title=None, alpha=a)
+        B.tag(f, "w", x0, y0 - 9, "LONGITUDINAL_PROFILE // --", age0, size=L.T_MICRO, pad=3, alpha=a, cps=110.0, key=83)
         xs = x0 + (16.0 - np.arange(0, 16.01, 1.0)) / 16.0 * (x1 - x0)
         f.segments("w", xs, np.full_like(xs, y0), xs, y0 + 12, 0.8 * a)
         xc = x0 + (16.0 - min(alt, 16.0)) / 16.0 * (x1 - x0)
-        hud.strip_cursor(f, float(xc), y0, y1, f"ALT {alt:06.3f} KM", alpha=0.9)
+        with f.build(age0 - 0.1, (xc - 6.0, y0 - 8.0, xc + 190.0, y1 + 8.0), flow="tb", wave=0.1, marks=False, key=84):
+            hud.strip_cursor(f, float(xc), y0, y1, f"ALT {alt:06.3f} KM", alpha=0.9)
         if st.col is not None:
             cx0, cy0, cx1, cy1 = st.col
-            f.rects("w", cx0, cy0, cx1, cy0 + 5, 0.95 * a)
-            f.tag("w", cx0 + 4, cy0 + 32, "PARTICLE_STREAM", size=L.T_MICRO, pad=3, alpha=a)
-            f.segments("w", [cx1, cx0], [cy0, cy1], [cx1, cx1], [cy1, cy1], 0.6 * a)
-            f.text("r", cx0 + 8, cy0 + 62, f"00000 MU-   003871.00 {(x - geo.x_mid) / geo.S:+06.2f} {alt:05.2f} +00.00",
-                   size=L.T_MICRO, alpha=0.95)
-            f.text("w", cx0 + 8, cy1 - 10, "N 000001", size=L.T_SMALL, alpha=0.9 * a)
+            moved = self.dance.stage(N_PHRASES - 1).col != st.col       # the column was elsewhere: made here
+            with f.build(age0 - 0.1 if moved else None, (cx0 - 6, cy0 - 8, cx1 + 6, cy1 + 6), flow="tb", wave=0.4,
+                         key=46):
+                f.rects("w", cx0, cy0, cx1, cy0 + 5, 0.95 * a)
+                f.tag("w", cx0 + 4, cy0 + 32, "PARTICLE_STREAM", size=L.T_MICRO, pad=3, alpha=a)
+                f.segments("w", [cx1, cx0], [cy0, cy1], [cx1, cx1], [cy1, cy1], 0.6 * a)
+            row = f"00000 MU-   003871.00 {(x - geo.x_mid) / geo.S:+06.2f} {alt:05.2f} +00.00"
+            f.text("r", cx0 + 8, cy0 + 62, B.decode(row, age0 - 0.2, cps=120.0, key=85), size=L.T_MICRO, alpha=0.95)
+            f.text("w", cx0 + 8, cy1 - 10, B.roll("N 000001", age0, 0.4, 0.3, key=86), size=L.T_SMALL, alpha=0.9 * a)
         py0, py1 = ctx.slots["y0"], ctx.slots["y1"]
         place = flow(bottom_panels(ctx), PANEL_BLOCKS)
         if "count" in place:
@@ -290,15 +310,17 @@ class Glitch(Scene):
                 for r, (lab, n, lay) in enumerate(rows):
                     xx, yy = px0 + (r % 2) * cw, py0 + 46 + (r // 2) * 44
                     f.tag(lay, xx + 4, yy, lab, size=L.T_SMALL, pad=3, alpha=a if lay == "w" else 1.0)
-                    f.text(lay, xx + 104, yy + 2, f"{n:06d}", size=28, alpha=a if lay == "w" else 1.0)
+                    f.text(lay, xx + 104, yy + 2, B.roll(f"{n:06d}", age0, 0.45, 0.25 + 0.06 * r, key=87 + r), size=28,
+                           alpha=a if lay == "w" else 1.0)
             else:
                 for r, (lab, n, lay) in enumerate(rows):
                     yy = py0 + 38 + r * 27
                     f.tag(lay, px0 + 4, yy, lab, size=L.T_MICRO, pad=3, alpha=a if lay == "w" else 1.0)
-                    f.text(lay, px0 + 92, yy + 2, f"{n:06d}", size=22, alpha=a if lay == "w" else 1.0)
+                    f.text(lay, px0 + 92, yy + 2, B.roll(f"{n:06d}", age0, 0.45, 0.25 + 0.06 * r, key=87 + r), size=22,
+                           alpha=a if lay == "w" else 1.0)
         if "bar" in place:
             px0, px1 = place["bar"]
             hud.panel_header(f, px0, px1, py0, "BIRTH_RATE >> BARCODE" if px1 - px0 > 260 else "BIRTH_RATE", alpha=a)
             f.segments("r", [px1 - 2], [py0 + 7], [px1 - 2], [py1], 1.2 * a, width=L.LW)
-        draw_info(f, ctx, info, alpha=0.7)
+        draw_info(f, ctx, info, alpha=0.7, age=age0 - 0.05)
         return {"edge_alpha": 0.5}
