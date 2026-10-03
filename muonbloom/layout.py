@@ -21,7 +21,9 @@ FX0, FY0, FX1, FY1 = 28.0, 46.0, 2950.0, 1354.0
 FRAME = (FX0, FY0, FX1, FY1)
 HEAD_Y = 220.0                                   # bottom of the header band
 SUB = (1469.0, FY0, FX1, HEAD_Y)                 # subtitle box, top right
-STRIP = (FX0, FY0, SUB[0], HEAD_Y)               # score strip, top left
+STRIP0 = (FX0, FY0, SUB[0], HEAD_Y)              # score strip, top left, while the subtitle box is open
+STRIP = STRIP0                                   # ... and at the frame being drawn: the show sets it (hud.strip_rect),
+#                                                  the strip grows over the whole header when the box is away
 MAIN = (FX0, HEAD_Y, FX1, FY1)                   # everything under the header
 VIEW = (FX0 + 12.0, HEAD_Y + 20.0, FX1 - 12.0, 1190.0)   # main view above the bottom band
 BOT = (FX0 + 24.0, 1214.0, FX1 - 24.0, 1340.0)   # bottom data band (split in gaps by the towers)

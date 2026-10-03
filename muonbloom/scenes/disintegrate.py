@@ -1,16 +1,18 @@
-"""DISINTEGRATE - everything returns to almost nothing.   Sheet scene 10, 10:06 - 10:52.
+"""DISINTEGRATE - everything returns to almost nothing.   Sheet 9.2, 09:35 - 09:48: the ending of scene 9.
 
+Scene 10 of the sheet (10:06 - 10:52 in the V7 audio) was cut in the scene 10 edit of the audio: its best
+part became the ending of scene 9, and so did this, condensed from 46 s to 13 s.
 The sphere of COSMIC GROOVE (scenes/sphere.py) comes back with the picture it had built - the same
-94 tracks: the PoCA dots gathered on the core, the last ghost lines - and falls apart, the way a
+tracks: the PoCA dots gathered on the core, the last ghost lines - and falls apart, the way a
 muon does: mu -> e + nu + nu.
-  10:06 - 10:28  loud, dense: every detector hit sends a muon that stops on the body and decays
-                 there (a three-prong star: one electron, two neutrinos); the chunk under it breaks
-                 off - vertices drift away, edges erode into dots, halo sticks drop. Echo repeats
-                 of a hit keep biting at the same wound. The old tracks decay one by one: the core
-                 sparkles, then its picture is gone.
-  10:28 - 10:52  thinning out: what is left follows the decay law N/N0 = exp(-t/tau); the HUD text
-                 erodes, the counters run backwards, the log empties. At 10:52 a few drifting dots
-                 and the lattice: the next scene opens on "nothing chose when...".
+  09:35 - 09:45  loud, dense (the groove of the rise goes on): every detector hit sends a muon that stops
+                 on the body and decays there (a three-prong star: one electron, two neutrinos); the chunk
+                 under it breaks off - vertices drift away, edges erode into dots, halo sticks drop. Echo
+                 repeats of a hit keep biting at the same wound. The old tracks decay one by one: the core
+                 sparkles, then its picture is gone. What is left follows the decay law N/N0 = exp(-t/tau);
+                 the HUD text erodes, the counters run backwards, the log empties.
+  09:45 - 09:48  the music drops into the pulse of scene 11: a few drifting dots and the lattice; the next
+                 scene opens on "nothing chose when...".
 Everything is a closed-form function of t: the release time of every vertex / stick / track is
 fixed at start-up from the hit list (the realtime app does the same from the live stream).
 The layout is the one of the sphere scene (sphere.Lay): every block is dealt out from the columns
@@ -46,9 +48,10 @@ from ..show import Scene
 from .sphere import (BLK, BUS_Y, HOT, N_BINS, R_FAR, Y_BASE, Y_LOW, Body, Lay, Sphere, draw_leader, er, fade, one_tag,
                      pop, ring_values, sphere_tracks, unit)
 
-T0, T1 = 606.0, 652.0
-TAU = 16.0                        # s: decay constant of the body
-EDGE_LIFE, STRUT_LIFE, DOT_TAU = 1.6, 2.2, 3.4
+T0, T1 = 575.0, 588.0
+T_ALMOST = 585.3                  # the music drops into the pulse of scene 11 (first heavy kick 584.9): almost nothing
+TAU = 3.6                         # s: decay constant of the body
+EDGE_LIFE, STRUT_LIFE, DOT_TAU = 0.9, 1.2, 1.8
 G = 760.0                         # px / s2: the halo sticks fall
 KEEP = 7                          # vertices that never go: "almost" nothing
 UNMAKE = 0.4                      # s of build a line / a rule needs once the wave of its block has reached it
@@ -57,7 +60,7 @@ UNMAKE = 0.4                      # s of build a line / a rule needs once the wa
 def remaining(t):
     """Fraction of the body still there at t."""
     t = np.asarray(t, np.float64)
-    return np.exp(-np.clip(t - T0, 0, None) / TAU) * (1.0 - smoothstep(634.0, 652.0, t) ** 1.5)
+    return np.exp(-np.clip(t - T0, 0, None) / TAU) * (1.0 - smoothstep(T0 + 5.5, T_ALMOST, t) ** 1.5)
 
 
 def michel(x):
@@ -67,7 +70,7 @@ def michel(x):
 
 def e_text(t):
     """How far the lettering of the HUD has eroded at t (0..1)."""
-    return float(smoothstep(628.0, 651.0, t)) ** 1.2
+    return float(smoothstep(T0 + 4.5, T_ALMOST + 1.6, t)) ** 1.2
 
 
 def e_picture(t):
@@ -103,11 +106,11 @@ class Disintegrate(Sphere):
         for tr in self.old:
             if tr["echo"]:
                 tr["ghost"] = 0.0
-                tr["decay"] = float(min(T0 + 0.8 + rng.exponential(9.0), 641.0))
+                tr["decay"] = float(min(T0 + 0.25 + rng.exponential(2.4), T0 + 8.0))
             else:
                 k = rank[tr["id"]]
                 tr["ghost"] = 1.0 if k < 8 else (0.5 if k < 16 else 0.25)
-                tr["decay"] = float(min(T0 + 1.5 + rng.exponential(11.0), 645.0))
+                tr["decay"] = float(min(T0 + 0.45 + rng.exponential(3.0), T0 + 9.0))
             tr["star"] = self._star_dirs(rng)
             tr["ee"] = float(self._michel_sample(rng))
         self._schedule(ctx, np.random.default_rng(2020))
@@ -167,7 +170,7 @@ class Disintegrate(Sphere):
         for key in sd.KEYS:
             tt, ee, ec = ctx.det.hits(key, T0, T1)
             ev += [(float(a), key, float(e), bool(c)) for a, e, c in zip(tt, ee, ec)]
-        ev += [(float(tq), "", 0.0, False) for tq in np.arange(T0 + 1.0, T1, 0.25)]      # the slow trickle
+        ev += [(float(tq), "", 0.0, False) for tq in np.arange(T0 + 0.3, T1, 0.07)]      # the trickle
         ev.sort()
         rel = np.full(n, np.inf)
         ragged = 4.5 * (b.rho(u, 0.0) - 1.0)          # smooth noise: the wounds get ragged edges
@@ -183,8 +186,8 @@ class Disintegrate(Sphere):
                 break
             if key == "":                       # trickle: single nodes let go when the decay law runs ahead
                 if want > 14:
-                    idx = rng.choice(np.nonzero(free)[0], size=min(3, room), replace=False)
-                    rel[idx] = th + rng.uniform(0, 0.25, len(idx))
+                    idx = rng.choice(np.nonzero(free)[0], size=min(max(3, want // 3), room), replace=False)
+                    rel[idx] = th + rng.uniform(0, 0.07, len(idx))
                     vel[idx] = u[idx] * rng.uniform(0.08, 0.2, (len(idx), 1)) + rng.normal(0, 0.03, (len(idx), 3))
                     free[idx] = False
                     released += len(idx)
@@ -299,7 +302,7 @@ class Disintegrate(Sphere):
         self._left_d(f, t, e_txt)
         self._right(f, t, ctx, alive, title="DECAY", erode=e_txt)
         self._michel(f, t, e_txt)
-        self._strip(f, t, ctx, title="INTEGRITY_TIMELINE // 10.0 DISINTEGRATE // ONE TICK = ONE HIT", t0=T0, t1=T1,
+        self._strip(f, t, ctx, title="INTEGRITY_TIMELINE // 9.2 RISE ENDING // ONE TICK = ONE HIT", t0=T0, t1=T1,
                     erode=e_txt, curve=lambda tt: remaining(tt))
         self._bottom_d(f, t, ctx, e_txt, frac)
         return {"burst_gain": 0.6, "burst_size": 0.7}       # the hits come in swarms: the towers reply lower
@@ -469,7 +472,7 @@ class Disintegrate(Sphere):
             f.segments("w", [px0, px0], [py1, py1], [px0, px1], [py0, py1], 0.65)
             for q in (0.0, 0.5, 1.0):
                 f.segments("w", [px0], [float(Y(q))], [px0 - 8], [float(Y(q))], 0.8)
-            hud.ruler(f, px0, px1, py1 + 2, T0, T1, 1.0, 10.0, inten=0.6)
+            hud.ruler(f, px0, px1, py1 + 2, T0, T1, 0.5, 2.0, inten=0.6)
         # what is really left
         n = self.body.n
         ts = np.linspace(T0, min(t, T1), max(2, int((min(t, T1) - T0) * 12)))
@@ -478,7 +481,7 @@ class Disintegrate(Sphere):
         with self._blk(f, "profile", t, rect):                          # its lettering, the decay law, the hits, the cursor
             for q in (0.0, 0.5, 1.0):
                 f.text("w", x0, float(Y(q)) + 5, er(f"{q:.1f}", e_txt, 102, fr), size=L.T_MICRO, alpha=0.7)
-            for tv in np.arange(610.0, T1, 10.0 if px1 - px0 >= 420 else 20.0):
+            for tv in np.arange(T0 + 1.0, T1, 2.0 if px1 - px0 >= 420 else 4.0):
                 f.text("w", float(X(tv)) + 3, py1 + 28, er(sd.tc(tv)[:5], e_txt, 103, fr), size=L.T_MICRO, alpha=0.7)
             tt = np.linspace(T0, T1, 150)
             keep = hash01(np.arange(150), 105) > e_txt
@@ -509,7 +512,7 @@ class Disintegrate(Sphere):
                  f"TRACKS    {tracks:04d} / {len(self.old):04d}", "MU- -> E- + NU + NU", "TAU_MU    2.197 US"]
         x, w, y = self._info_block(f, "DISINTEGRATE", rows_, red=(5,), erode=e_txt, fr=fr, key=111, t=t)
         past = self.chunks_before(t)[::-1]
-        nr = 24.0 * (1.0 - float(smoothstep(634.0, 650.5, t)))      # the log empties, from the bottom
+        nr = 24.0 * (1.0 - float(smoothstep(T0 + 6.0, T_ALMOST + 0.8, t)))      # the log empties, from the bottom
         n_rows = int(math.ceil(nr))
         lines = []
         for row, ch in enumerate(past[:n_rows]):

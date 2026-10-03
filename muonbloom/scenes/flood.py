@@ -2,7 +2,7 @@
 Sheet 5.0 (voice) + 5.1 Cosmic Break, 04:36 - 05:22.
 
 The figure of YOU comes back, between the left and the centre tower, and this time the rain is
-shown at its real rate: 63 muons a second through one body.
+shown at its real rate: 70 muons a second through one body (showdata.RATE_YOU).
   04:36.9  "In the time you spend here,"        the show as a bar, the count so far
   04:41.2  "more than fifty thousand of them"   the count projected to the end of the show
   04:44.9  "will flood through your skin."      the rain goes from 1 in 5 to all of them: real time
@@ -38,14 +38,15 @@ import numpy as np
 
 from .. import build as B
 from .. import hud
+from .. import human
 from .. import layout as L
 from .. import showdata as sd
 from ..engine import OrthoCamera, hash01, smoothstep, text_w
 from ..show import Scene
-from .you import HEART, LOFTS, PART_NAMES, Body, Plan, _loft_at, fit_text, spaced, width
+from .you import HEART, PART_NAMES, Body, Plan, fit_text, spaced, width
 
 T0, T1 = 276.0, 322.0
-RATE = 63.0
+RATE = sd.RATE_YOU
 SHOW = sd.SHOW_END
 Y_TOP, Y_BOT = 240.0, 1190.0
 GROUPS = [("HEAD", ("HEAD", "NECK")), ("TORSO", ("TORSO",)), ("ARMS", ("ARM_L", "ARM_R")),
@@ -103,16 +104,8 @@ class Flood(Scene):
             tt.append(t)
         th = np.array(tt)
         n_hit = len(th)
-        # targets inside the body, parts weighted by their size seen by the rain
-        wts = np.array([float(np.mean(l[4] + l[5]) * (l[1][-1] - l[1][0]) + 2.0 * np.mean(l[4] * l[5])) for l in LOFTS])
-        part = rng.choice(len(LOFTS), n_hit, p=wts / wts.sum())
-        tg = np.zeros((n_hit, 3))
-        for li, l in enumerate(LOFTS):
-            m = part == li
-            y = rng.uniform(l[1][0], l[1][-1], m.sum())
-            cx, cz, rx, rz = _loft_at(l, y)
-            a, r = rng.uniform(0, 2 * np.pi, m.sum()), 0.92 * np.sqrt(rng.random(m.sum()))
-            tg[m] = np.stack([cx + rx * r * np.cos(a), y, cz + rz * r * np.sin(a)], 1)
+        # targets anywhere inside the body
+        tg, _ = human.random_inside(rng, n_hit)
         # the ones that miss, around the figure (same rate again)
         n_miss = n_hit
         tm = np.sort(rng.choice(th, n_miss) + rng.uniform(-0.2, 0.2, n_miss))
@@ -157,7 +150,7 @@ class Flood(Scene):
         self.h_mid = self.r_mid[o2]
         self.h_part = self.r_part[o2]
         self.h_frac = self.r_frac[o2]
-        gi = np.full(len(LOFTS), -1)
+        gi = np.full(len(PART_NAMES), -1)
         for k, (_, names) in enumerate(GROUPS):
             for nm in names:
                 gi[PART_NAMES.index(nm)] = k
@@ -184,7 +177,8 @@ class Flood(Scene):
         marks = [(self.t_time, "IN THE TIME"), (self.t_fifty, "50 000"), (self.t_flood, "FLOOD"),
                  (self.t_every, "EVERY MINUTE"), (self.t_will, "AS THEY WILL"), (self.t_leave, "LEAVE BEHIND"),
                  (299.0, "5.1 COSMIC BREAK")]
-        hud.show_strip(f, t, ctx, "FLOOD // 63 MUONS /S THROUGH ONE BODY // REAL TIME", T0, T1, marks, age=t - T0)
+        hud.show_strip(f, t, ctx, f"FLOOD // {RATE:.0f} MUONS /S THROUGH ONE BODY // REAL TIME", T0, T1, marks,
+                       age=t - T0)
         self._draw_bottom(f, t, ctx)
         return {"burst_size": 0.8}
 
@@ -269,7 +263,7 @@ class Flood(Scene):
             with f.build(t - self.t_half, (xh - 14.0, yh - 14.0, xh + 14.0, yh + 14.0), flow="out", wave=0.05,
                          marks=False, key=4):
                 f.crosses("r", [xh], [yh], 12.0, 0.9, width=L.LW)
-            msg = fit_text(["1.80 M  x  0.38 M2  OF AIR", "1.80 M OF AIR", "AIR"], width(col), L.T_LABEL)
+            msg = fit_text([f"1.80 M  x  {sd.AREA_YOU:.2f} M2  OF AIR", "1.80 M OF AIR", "AIR"], width(col), L.T_LABEL)
             f.text("w", self.fig_x, Y_BOT - 14, B.resolve(msg, t - self.t_gone + 1.6, 30.0, key=5, pad=True),
                    size=L.T_LABEL, alpha=0.85, anchor="ms")
 
@@ -288,7 +282,7 @@ class Flood(Scene):
         X = lambda tt: x0 + np.asarray(tt, np.float64) / SHOW * (x1 - x0)
         proj = float(smoothstep(self.t_fifty, self.t_fifty + 1.2, t))
         with f.build(age, (x0 - 8, y - 26, x1 + 8, yb1 + 40), flow="lr", wave=0.4, key=10):
-            f.tag("w", x0, y, "THIS SHOW // 13:22", size=L.T_LABEL, pad=5)
+            f.tag("w", x0, y, f"THIS SHOW // {sd.mmss(SHOW)}", size=L.T_LABEL, pad=5)
             f.rect("w", x0, yb0, x1, yb1, 0.8, width=L.LW)
             f.rects("w", x0 + 3, yb0 + 4, float(X(t)), yb1 - 4, 0.9)
             mins = np.arange(0, SHOW, 60.0)
@@ -298,7 +292,7 @@ class Flood(Scene):
                 f.rects("r", float(X(t)), yb0 + 11, xe, yb1 - 11, 0.95)
             f.segments("r", [float(X(t))], [yb0 - 6], [float(X(t))], [yb1 + 12], 1.2, width=L.LW)
             f.text("r", float(X(t)) + 6, yb1 + 30, sd.tc(t)[:5], size=L.T_SMALL, alpha=0.95)
-            f.text("w", x1, yb1 + 30, "13:22", size=L.T_SMALL, alpha=0.7, anchor="rs")
+            f.text("w", x1, yb1 + 30, sd.mmss(SHOW), size=L.T_SMALL, alpha=0.7, anchor="rs")
         # so far
         y1_ = y + 142
         lab = "THROUGH YOU SO FAR" if gone < 0.5 else fit_text(["THROUGH THE SPACE YOU LEFT", "THROUGH THAT SPACE"], w,
@@ -309,7 +303,7 @@ class Flood(Scene):
             f.tag("w", x0, y1_, hud.erode(lab, 1.0 - abs(2 * gone - 1.0) ** 0.5 if 0 < gone < 1 else 0.0, 3, fr),
                   size=L.T_TAG, pad=5)
             f.text("w", x0 - 6 * k, yn, spaced(n_now), size=big, alpha=1.0, bold=True)
-            f.text("w", x0, yn + 36, fit_text([f"+{RATE:.0f} EVERY SECOND  //  1 MUON /CM2 /MIN  //  0.38 M2",
+            f.text("w", x0, yn + 36, fit_text([f"+{RATE:.0f} EVERY SECOND  //  1 MUON /CM2 /MIN  //  {sd.AREA_YOU:.2f} M2",
                                                f"+{RATE:.0f} EVERY SECOND // 1 /CM2 /MIN", f"+{RATE:.0f} EVERY SECOND"],
                                               w, L.T_SMALL), size=L.T_SMALL, alpha=0.75)
         # the break: only the count stays. What leaves does not fade: its letters fall apart (1 - calm of them
@@ -338,8 +332,9 @@ class Flood(Scene):
             rs = float(np.clip(w / 24.0, 18.0, 30.0))
             pitch = 1.47 * rs
             y3 = y2 + 16 + mid + 60
-            rows = [("EVERY SECOND", "63"), ("EVERY MINUTE", "3 780"), ("EVERY DAY", "5 443 200"),
-                    ("EVERY YEAR", "1.99 BN"), ("IN 80 YEARS", "159 BN")]
+            rows = [("EVERY SECOND", sd.through_you_in(1)), ("EVERY MINUTE", sd.through_you_in(60)),
+                    ("EVERY DAY", sd.through_you_in(86400)), ("EVERY YEAR", sd.through_you_in(sd.YEAR)),
+                    ("IN 80 YEARS", sd.through_you_in(80 * sd.YEAR))]
             n_fit = int((Y_BOT - 6 - y3) / pitch)                # rows that fit above the bottom band (one is kept
             rows = rows[: max(0, n_fit - 1)]                     # for AFTER YOU)
             # the rule over the rows: drawn by a pen on "as they have", pulled back in the break
@@ -469,7 +464,8 @@ class Flood(Scene):
             x0, x1 = wide[0]
             with block(wide[0], 0):
                 hud.panel_header(f, x0, x1, y0, "MUONS THROUGH YOU")
-                cols = [("PER SECOND", "63"), ("PER MINUTE", "3 780"), ("IN A LIFE", "159 BN")]
+                cols = [("PER SECOND", sd.through_you_in(1)), ("PER MINUTE", sd.through_you_in(60)),
+                        ("IN A LIFE", sd.through_you_in(80 * sd.YEAR))]
                 n = int(min(3, max(1, (x1 - x0) // 150)))
                 cols = cols if n == 3 else [cols[0], cols[2]] if n == 2 else [cols[1]]
                 cw = (x1 - x0) / n
@@ -494,6 +490,6 @@ class Flood(Scene):
             x0, x1 = rest[0]
             with block(rest[0], 2):
                 hud.panel_header(f, x0, x1, y0, "RATE")
-                f.text("w", x0 + 2, y0 + 78, "63", size=58)
+                f.text("w", x0 + 2, y0 + 78, f"{RATE:.0f}", size=58)
                 f.text("w", x0 + 78, y0 + 78, "/S", size=24, alpha=0.8)
                 f.text("w", x0 + 2, y0 + 110, "UNCHANGED", size=L.T_MICRO, alpha=0.75)

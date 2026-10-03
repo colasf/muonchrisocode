@@ -8,10 +8,13 @@ the star, the rays of its collapse) kept as it is and given its data:
   00:03  LOADING     top left: MUON BLOOM // LOADING, a bar that creeps and jumps on the low thumps
   00:06  LOADED      the lattice of crosses draws itself row by row, then the red dot and its crosshair:
                      at 00:07 everything is there, the dot pulses with the low thumps
+  00:07:47  HUD      on the sound: the arrivals barcode starts in the score strip - one tick per muon through
+                     one spectator, 70 per second - then the card, the panels, the scale and the counters
+                     (the wall counter runs at about 60 800 per second)
   00:11  HERE / NOW  "something is passing through you": rings leave the dot (light-time shells around the
-                     muon), the arrivals barcode starts in the score strip - one tick per muon through one
-                     spectator, 63 per second - and the wall counter runs (about 60 800 per second)
-  00:19  ALWAYS      the spiral field of streaks grows out of the dot and turns
+                     muon), HERE / RIGHT NOW is written on its axis
+  00:19  ALWAYS      the spiral field grows out of the dot and turns: particles, each one trailing the line
+                     of its own path (the trails of the TouchDesigner galaxy, scene3.0.mov)
   00:24  NOT FELT    a 'felt' trace stays flat under the frantic barcode
   00:28  MINISCULE   the dot collapses to a point, a scale ruler dives through eighteen powers of ten
   00:31  STAR        "billions of years ago ... a star collapsed, immense": the point is the core of a star;
@@ -60,14 +63,15 @@ T_LOAD = 3.15                                    # MUON BLOOM // LOADING comes o
 T_LOADED = 6.0                                   # 100 %: the lattice of crosses draws itself, row by row
 T_BOOT = 6.7                                     # the crosses are drawn: the red dot appears
 T_READY = 7.0                                    # everything is there (dot, crosshair, lattice, edge ticks)
-LOAD_STEPS = ["CANVAS 2978 X 1400", "AUDIO 13:22", "DETECTORS L C R // OSC", "MUON FLUX 1 /CM2/MIN"]
+T_HUD = 7.0 + 47.0 / 60.0                        # 00:07:47, on the sound: the HUD builds up (strip, card, panels, counters)
+LOAD_STEPS = ["CANVAS 2978 X 1400", f"AUDIO {sd.mmss(sd.SHOW_END)}", "DETECTORS L C R // OSC", "MUON FLUX 1 /CM2/MIN"]
 LOAD_N = 50                                      # blocks in the loading bar
 T_FIELD = 17.6                                   # the streak field starts to grow
 T_IMPLODE = 39.25                                # the disc gives way
 T_X = 40.0                                       # bounce: the rays leave
 T_END = 44.0
 
-RATE_YOU = 63.0                                  # muons / s through one spectator
+RATE_YOU = sd.RATE_YOU                           # muons / s through one spectator
 RATE_WALL = 60800.0                              # 28 m x 13 m at 1 / cm2 / min
 YEAR0 = 4.8e9                                    # years ago ("perhaps before the Earth existed")
 CARD_Y = 300.0
@@ -387,52 +391,65 @@ def cell_right(f, lay, label, value, sub=None, red=False, alpha=1.0, short=None,
 # ----------------------------------------------------------------------------
 
 class StreakField:
-    """Thousands of short strokes riding logarithmic spiral arms around a centre. Closed form: every stroke
-    is a function of time (it drifts outward along its arm, the whole field turns)."""
+    """Particles riding logarithmic spiral arms around a centre, each one trailing the line of its own path
+    (the trails of the TouchDesigner galaxy, scene3.0.mov): a thin curve that is bright at the particle and
+    dies away behind it. Closed form: every particle is a function of time (it drifts outward along its arm,
+    the whole field turns), so its trail is simply where it was during the last seconds."""
 
-    def __init__(self, n=42000, arms=9, pitch=1.28, r_max=1780.0, r_min=58.0, seed=5):
+    M = 12                                                   # segments of a trail
+
+    def __init__(self, n=4600, arms=9, pitch=1.28, r_max=1780.0, r_min=58.0, seed=5):
         rng = np.random.default_rng(seed)
         self.n, self.arms, self.pitch, self.r_max, self.r_min = n, arms, pitch, r_max, r_min
         self.arm = rng.integers(0, arms, n)
         self.u = rng.random(n)
         self.j = rng.normal(0.0, 1.0, n)                     # position across the arm
-        self.len = rng.uniform(0.75, 1.3, n)
+        self.span = 4.0 + 9.0 * rng.random(n) ** 1.6         # how far back its trail goes (s)
         self.b = rng.uniform(0.45, 1.0, n)
-        self.tilt = rng.normal(0.0, 0.16, n)
         self.spd = rng.uniform(0.7, 1.3, n)
-        self.bend = rng.normal(0.0, 0.22, n)
-        self.grain = rng.random(n) < 0.12
+        self.wob = rng.normal(0.0, 0.05, n)                  # each path leaves its arm a little
+        self.bold = rng.random(n) < 0.16
         self.arm_ph = rng.uniform(-0.12, 0.12, arms)
 
     def draw(self, f, t, cx, cy, front=1e9, gain=1.0, omega=0.11, drift=0.014, squeeze=1.0, layer="w",
              r_scale=1.0, twist=0.0):
-        """front = radius the field has reached; squeeze < 1 pulls every stroke towards the centre."""
-        q = (self.u + drift * self.spd * t) % 1.0
+        """front = radius the field has reached; squeeze < 1 pulls every particle towards the centre."""
+        M = self.M
+        q0 = self.u + drift * self.spd * t
+        base = np.floor(q0)
+        qh = q0 - base                                        # where the particle is on its way out (0..1)
+        rh = (self.r_min + (self.r_max - self.r_min) * qh ** 0.62) * r_scale * squeeze
+        birth = np.minimum(1.0, qh / 0.03) * np.minimum(1.0, (1.0 - qh) / 0.05)
+        edge = np.exp(-((front - rh) / 110.0) ** 2) if front < 5000 else 0.0
+        inten = gain * self.b * birth * (0.5 + 0.5 * np.exp(-0.5 * self.j ** 2)) * (1.0 + 1.2 * edge)
+        m = (rh < front) & (inten > 0.01)
+        if not m.any():
+            return
+        u, spd, j, arm, wob = self.u[m], self.spd[m], self.j[m], self.arm[m], self.wob[m]
+        inten, bold = inten[m], self.bold[m]
+        # the trail: the same closed form, seconds ago (not further back than the birth of the particle, and
+        # never more than a third of a turn when the field spins fast)
+        span = np.minimum(self.span[m], 2.0 / max(abs(omega), 1e-3))
+        span = np.minimum(span, qh[m] / (drift * spd))
+        ts = t - np.linspace(0.0, 1.0, M + 1)[None, :] * span[:, None]
+        q = np.clip(u[:, None] + drift * spd[:, None] * ts - base[m][:, None], 0.0, 1.0)
         r = (self.r_min + (self.r_max - self.r_min) * q ** 0.62) * r_scale
         width = 0.105 + 0.07 * (r / self.r_max)
-        phi = (2 * np.pi * self.arm / self.arms + self.arm_ph[self.arm] + self.pitch * np.log(r / self.r_min)
-               + omega * t + width * self.j + twist * (1.0 - q))
+        phi = (2 * np.pi * arm[:, None] / self.arms + self.arm_ph[arm][:, None] + self.pitch * np.log(r / self.r_min)
+               + omega * ts + width * j[:, None] + twist * (1.0 - q) + wob[:, None] * np.log(r / self.r_min))
         r = r * squeeze
         x = cx + r * np.cos(phi)
         y = cy + r * np.sin(phi)
-        vis = (r < front) & (x > L.FX0 - 30) & (x < L.FX1 + 30) & (y > L.FY0 - 30) & (y < L.FY1 + 30)
-        if not vis.any():
-            return
-        edge = np.exp(-((front - r) / 110.0) ** 2) if front < 5000 else 0.0
-        birth = np.minimum(1.0, q / 0.03) * np.minimum(1.0, (1.0 - q) / 0.05)
-        inten = gain * self.b * birth * (0.34 + 0.52 * np.exp(-0.5 * self.j ** 2)) * (1.0 + 1.2 * edge)
-        psi = math.atan(self.pitch) + 0.55 * np.tanh(self.j) + self.tilt     # barbs of a feather
-        ang = phi + psi
-        ln = self.len * (11.0 + 15.0 * (r / self.r_max) ** 0.5)
-        b = self.bend
-        m = vis & (inten > 0.01)
-        x, y, ang, ln, b, inten = x[m], y[m], ang[m], ln[m], b[m], inten[m]
-        ax, ay = x - 0.5 * ln * np.cos(ang - b), y - 0.5 * ln * np.sin(ang - b)
-        bx, by = x + 0.5 * ln * np.cos(ang + b), y + 0.5 * ln * np.sin(ang + b)
-        f.segments(layer, np.r_[ax, x], np.r_[ay, y], np.r_[x, bx], np.r_[y, by],
-                   np.r_[inten * 0.5, inten], np.r_[inten, inten * 0.7], width=1.5, spacing=0.8)
-        g = self.grain[m]
-        f.dots(layer, bx[g], by[g], 1.4, 1.5 * inten[g])
+        vis = ((x.max(1) > L.FX0 - 30) & (x.min(1) < L.FX1 + 30) & (y.max(1) > L.FY0 - 30) & (y.min(1) < L.FY1 + 30))
+        x, y, inten, bold = x[vis], y[vis], inten[vis], bold[vis]
+        fall = (1.0 - np.arange(M + 1) / M) ** 1.6            # bright at the particle, gone at the end of the trail
+        ia = inten[:, None] * fall[None, :-1] * 0.62
+        ib = inten[:, None] * fall[None, 1:] * 0.62
+        for sel, w in ((bold, 1.7), (~bold, 1.05)):
+            if sel.any():
+                f.segments(layer, x[sel, :-1].ravel(), y[sel, :-1].ravel(), x[sel, 1:].ravel(), y[sel, 1:].ravel(),
+                           ia[sel].ravel(), ib[sel].ravel(), width=w, spacing=0.8)
+        f.dots(layer, x[:, 0], y[:, 0], np.where(bold, 2.6, 1.8), 1.5 * inten)
 
 
 # ----------------------------------------------------------------------------
@@ -661,11 +678,11 @@ class Origin(Scene):
         self.lay = Lay(ctx)
         self.C = self.lay.C
         far = self.lay.far
-        self.field = StreakField(n=int(min(70000, 42000 * ((far + 80.0) / 1780.0) ** 2)), r_max=far + 80.0)
+        self.field = StreakField(n=int(min(8000, 4600 * ((far + 80.0) / 1780.0) ** 2)), r_max=far + 80.0)
         self.rip = Ripples(T_HERE, list(ctx.cues.onset_t), far)
         self.nova = Nova(self.lay)
         rng = np.random.default_rng(3)
-        # arrival times of the muons through one spectator, 63 / s (Poisson), and their energies
+        # arrival times of the muons through one spectator, RATE_YOU / s (Poisson), and their energies
         gaps = rng.exponential(1.0 / RATE_YOU, int(RATE_YOU * 50))
         self.arr_t = np.cumsum(gaps)
         self.arr_e = np.exp(rng.normal(1.2, 0.8, len(gaps)))                 # GeV
@@ -677,14 +694,31 @@ class Origin(Scene):
         ts = np.r_[np.arange(T_LOAD, T_LOADED, 1.0 / 240.0), T_LOADED]
         ps = np.array([self._load_p(float(v)) for v in ts])
         self.load_block_t = np.array([float(ts[np.argmax(ps >= (k + 0.5) / LOAD_N)]) for k in range(LOAD_N)])
-        # star granulation
-        n = 5200
+        # the star, drawn as line work (no filled disc): plumes rising between the burning shells, a sparse
+        # granulation, the boiling limb, the spikes of its wind
+        n = 1500
+        self.pl_a = rng.uniform(0, 2 * np.pi, n)             # plumes: angle, phase, speed, length, level, curl
+        self.pl_u = rng.random(n)
+        self.pl_v = rng.uniform(0.035, 0.11, n)
+        self.pl_len = rng.uniform(0.035, 0.13, n)
+        self.pl_b = rng.uniform(0.25, 0.85, n)
+        self.pl_curl = rng.normal(0.0, 0.16, n)
+        n = 900
         r = np.sqrt(rng.random(n))
         a = rng.uniform(0, 2 * np.pi, n)
         self.gran = np.stack([r * np.cos(a), r * np.sin(a)], 1)
-        self.gran_r = rng.uniform(3.5, 8.5, n)
-        self.gran_b = rng.uniform(0.25, 0.8, n)
+        self.gran_r = rng.uniform(1.0, 2.3, n)
+        self.gran_b = rng.uniform(0.2, 0.7, n)
         self.gran_ph = rng.uniform(0, 2 * np.pi, n)
+        n = 300
+        self.sp_a = np.sort(rng.uniform(0, 2 * np.pi, n))    # wind spikes: angle, length, level, phase, rate
+        self.sp_len = np.where(rng.random(n) < 0.1, rng.uniform(0.3, 0.62, n), rng.uniform(0.04, 0.2, n))
+        self.sp_b = rng.uniform(0.3, 0.9, n)
+        self.sp_ph = rng.uniform(0, 2 * np.pi, n)
+        self.sp_w = rng.uniform(0.6, 2.4, n)
+        self.limb_k = rng.integers(3, 23, 7)                 # harmonics of the boiling limb
+        self.limb_ph = rng.uniform(0, 2 * np.pi, 7)
+        self.limb_w = rng.uniform(-1.3, 1.3, 7)
 
     # ------------------------------------------------------------------ draw
     def draw(self, f, t, ctx):
@@ -725,9 +759,9 @@ class Origin(Scene):
     # --- 00:00 - 00:31 ---------------------------------------------------------
     def _boot(self, t):
         """Finishing options of the opening: black, the border fades in, the furniture builds up once loaded
-        (the counter with 'something is passing through you'). Data never fades in: it is constructed."""
+        (the counter with the rest of the HUD, on the sound at 00:07:47). Data never fades in: it is constructed."""
         fa = float(smoothstep(T_FRAME, T_FRAME + 2.2, t))
-        ca = t - (T_HERE + 1.6)
+        ca = t - (T_HUD + 2.2)
         return {"frame_alpha": fa, "tower_outline": 0.16 * fa, "edge_ticks": t >= T_LOADED,
                 "edge_kw": {"reveal": B.lin(t, T_LOADED, T_READY)}, "cell": ca > 0.0, "cell_age": ca}
 
@@ -812,7 +846,8 @@ class Origin(Scene):
         f.text("w", x0, by1 + 30.0, gone(s, 4), size=L.T_SMALL, alpha=0.7)
         B.flash(f, (x0 - 8.0, y0 - 2.0, x1 + 8.0, by1 + 8.0), t - T_LOADED, 0.0)
 
-    def _lattice(self, f, t, gain=1.0):
+    def _lattice(self, f, t, gain=1.0, hole=0.0):
+        """The lattice of crosses; hole = radius around the centre left free (the star)."""
         a = gain
         if t < T_LOADED or a <= 0.01:
             return
@@ -827,6 +862,8 @@ class Origin(Scene):
         row = (KY - ky[0]).ravel()
         head = (t - T_LOADED) / (T_BOOT - 0.05 - T_LOADED) * len(ky)
         on = row < head
+        if hole > 0.0:
+            on = on & (np.hypot(X - C[0], Y - C[1]) > hole)
         f.crosses("w", X[on & ~major], Y[on & ~major], 7.0, 0.2 * a)
         f.crosses("w", X[on & major], Y[on & major], 10.0, 0.42 * a, width=1.3)
         new = on & (row >= head - 1.0)
@@ -883,28 +920,28 @@ class Origin(Scene):
             self.rip.draw(f, t, C[0], C[1], kick=kick)
         f.set_clip()
         self._dot(f, t, ctx, size=1.0 - 0.94 * mini)
-        if t <= T_HERE - 0.6:
+        if t <= T_HUD:
             return opt
         self._strip_arrivals(f, t, ctx)
-        a = t - (T_HERE + 1.2)
+        a = t - (T_HUD + 1.8)
         if a > 0:
             card(f, lay, "SOMETHING", [("MU FLUX        1 /CM2/MIN", "FLUX  1 /CM2/MIN"),
                                        ("SEA LEVEL      ~170 /M2/S", "~170 /M2/S"),
-                                       ("THROUGH YOU    ~63 /S", "YOU   ~63 /S"),
+                                       (f"THROUGH YOU    ~{RATE_YOU:.0f} /S", f"YOU   ~{RATE_YOU:.0f} /S"),
                                        ("THROUGH WALL   ~60 800 /S", "WALL  ~60 800 /S"),
                                        ("MEAN ENERGY    4 GEV", "MEAN  4 GEV"), ("SPEED          0.9997 C", "SPEED 0.9997 C"),
                                        ("CHARGE         + OR -", None), ("LIFETIME       2.197 US", "LIFE  2.197 US")],
                  a, red_rows=(2,), build=True)
         self._notes(f, t, mini)
         self._dial(f, t)
-        if t > T_HERE + 0.8:
+        if t > T_HUD + 1.4:
             self._panels_build(f, [lambda f, x0, x1, y0, y1, a_: self._p_felt(f, t, x0, x1, y0, y1, a_),
                                    lambda f, x0, x1, y0, y1, a_: self._p_arrivals(f, t, x0, x1, y0, y1, a_),
                                    lambda f, x0, x1, y0, y1, a_: self._p_scale(f, t, x0, x1, y0, y1, a_),
                                    lambda f, x0, x1, y0, y1, a_: self._p_energy(f, t, x0, x1, y0, y1, a_)],
-                               t - (T_HERE + 0.8))
+                               t - (T_HUD + 1.4))
         cell_right(f, lay, "THROUGH THIS WALL // SINCE 00:00", f"{int(RATE_WALL * t):,}".replace(",", " "),
-                   sub="364 M2", age=t - (T_HERE + 1.8), short="THROUGH THIS WALL")
+                   sub="364 M2", age=t - (T_HUD + 2.4), short="THROUGH THIS WALL")
         return opt
 
     def _notes(self, f, t, mini):
@@ -936,7 +973,7 @@ class Origin(Scene):
         """A fixed scale among the moving rings: light-time shells, 1 px = 1 cm on the wall.
         Built, not faded in: a pen shoots out of the dot and brakes; every tick is thrown out long as the pen
         passes it and falls back to its length; its label is decoded out of noise."""
-        age = t - (T_HERE + 1.2)
+        age = t - (T_HUD + 1.8)
         if age <= 0.0:
             return
         lay, C = self.lay, self.C
@@ -972,16 +1009,16 @@ class Origin(Scene):
                    anchor="ls" if right else "rs")
 
     def _strip_arrivals(self, f, t, ctx):
-        """Score strip: every muon through one spectator as a tick (63 / s), the last five seconds.
+        """Score strip: every muon through one spectator as a tick (RATE_YOU / s), the last five seconds.
         It builds up in a good second, without a fade: the red band shoots across, the rules and their ticks
         follow it (hud.strip_base); then a scan head prints the arrivals - close to the head they are still
         noise and settle behind it; the cursor drops, its tag is made and its count spins before it locks."""
-        age = t - (T_HERE - 0.6)
+        age = t - T_HUD
         x0, y0, x1, y1 = L.STRIP
         f.occlude(x0, y0, x0 + (x1 - x0) * float(B.ease(B.lin(age, 0.0, 0.36))), y1)
         span, ahead = 5.0, 0.9
         ta, tb = t - span, t + ahead
-        ix0, iy0, ix1, iy1, yb = hud.strip_base(f, title="ARRIVALS // MUONS THROUGH ONE SPECTATOR // ~63 PER SECOND",
+        ix0, iy0, ix1, iy1, yb = hud.strip_base(f, title=f"ARRIVALS // MUONS THROUGH ONE SPECTATOR // ~{RATE_YOU:.0f} PER SECOND",
                                                 ticks=(ta, tb, 0.1, 1.0), age=age)
         X = lambda v: ix0 + (np.asarray(v) - ta) / (tb - ta) * (ix1 - ix0)
         i0, i1 = np.searchsorted(self.arr_t, [max(ta, 0.0), t])
@@ -1096,18 +1133,62 @@ class Origin(Scene):
                    anchor="rs" if v == 100 else "ls")
 
     # --- 00:31 - 00:40 ---------------------------------------------------------
-    def _star_disc(self, f, t, R, gain=1.0, hole=0.0):
+    # the burning shells, from the envelope down to the silicon around the iron core: (radius / R, dashes
+    # around the ring - 0 = a full ring -, part of a dash that is drawn, turns per second, level)
+    SHELLS = ((0.86, 0, 1.0, 0.0, 0.34), (0.72, 96, 0.62, 0.012, 0.6), (0.58, 0, 1.0, 0.0, 0.4),
+              (0.46, 48, 0.7, -0.02, 0.7), (0.35, 0, 1.0, 0.0, 0.5), (0.25, 24, 0.55, 0.035, 0.85))
+
+    def _star_disc(self, f, t, R, gain=1.0, hole=0.0, pulse=0.0):
+        """The star as a stylised supernova progenitor: no white disc, the wall stays black and the star is
+        drawn - a double limb that boils, the burning shells as rings (full and dashed, turning against each
+        other), plumes rising between them, a sparse granulation, and the spikes of its wind outside."""
         if R < 3:
             return
         C = self.C
+        k = max(R / 212.0, 0.25)
+        lw = 1.0 if k > 0.5 else 1.4
+        # plumes: short radial strokes rising from the core to the limb, born and gone at the two ends
+        p = (self.pl_u + self.pl_v * t) % 1.0
+        r0 = (0.1 + 0.86 * p) * R
+        r1 = np.minimum(r0 + self.pl_len * R, R - 2.0)
+        a0 = self.pl_a
+        a1 = a0 + self.pl_curl * self.pl_len
+        m = r0 > hole + 6.0
+        lvl = gain * self.pl_b * np.sin(np.pi * p) ** 0.7
+        f.segments("w", C[0] + r0[m] * np.cos(a0[m]), C[1] + r0[m] * np.sin(a0[m]), C[0] + r1[m] * np.cos(a1[m]),
+                   C[1] + r1[m] * np.sin(a1[m]), 0.25 * lvl[m], 0.75 * lvl[m], width=lw)
+        # granulation: a few points, flickering
         P = self.gran
-        flick = 0.75 + 0.25 * np.sin(self.gran_ph + t * 2.3)
-        out = np.hypot(P[:, 0], P[:, 1]) * R > hole + 5.0
-        f.dots("w", C[0] + P[out, 0] * R * 0.985, C[1] + P[out, 1] * R * 0.985,
-               self.gran_r[out] * max(R / 212.0, 0.35), gain * self.gran_b[out] * flick[out])
+        rr = np.hypot(P[:, 0], P[:, 1]) * R
+        m = (rr > hole + 5.0) & (rr < R - 4.0)
+        flick = 0.6 + 0.4 * np.sin(self.gran_ph + t * 2.3)
+        f.dots("w", C[0] + P[m, 0] * R, C[1] + P[m, 1] * R, self.gran_r[m] * max(k, 0.6), gain * self.gran_b[m] * flick[m])
+        # the shells
+        for frac, dashes, duty, turn, lvl in self.SHELLS:
+            r = frac * R
+            if r < hole + 10.0:
+                continue
+            if dashes == 0:
+                f.rings("w", [C[0]], [C[1]], [r], lvl * gain, width=1.2)
+                continue
+            n = dashes if k > 0.5 else dashes // 2
+            a = 2 * np.pi * (np.arange(n) / n + turn * t)
+            b = a + 2 * np.pi * duty / n
+            f.segments("w", C[0] + r * np.cos(a), C[1] + r * np.sin(a), C[0] + r * np.cos(b), C[1] + r * np.sin(b),
+                       lvl * gain, width=1.6)
         if hole > 4:
             f.rings("w", [C[0]], [C[1]], [hole + 3.0], 0.9 * gain, width=1.6)
-        f.rings("w", [C[0], C[0]], [C[1], C[1]], [R, R - 3.0], [1.3 * gain, 0.9 * gain], width=3.0)
+        # the limb: two rings and a line that boils around them
+        f.rings("w", [C[0], C[0]], [C[1], C[1]], [R, R - 5.0], [1.15 * gain, 0.5 * gain], width=2.2)
+        th = np.linspace(0.0, 2 * np.pi, 361)
+        boil = sum(np.sin(kk * th + ph + w * t) / (1.0 + 0.12 * kk) for kk, ph, w in zip(self.limb_k, self.limb_ph, self.limb_w))
+        rb = R + (9.0 + 3.6 * boil + 5.0 * pulse) * k
+        f.polyline("w", C[0] + rb * np.cos(th), C[1] + rb * np.sin(th), 0.62 * gain, width=1.2)
+        # the wind: spikes that breathe, the long ones reach far out
+        ln = self.sp_len * R * (0.72 + 0.28 * np.sin(self.sp_ph + self.sp_w * t) + 0.35 * pulse)
+        ra = R + 20.0 * k
+        f.segments("w", C[0] + ra * np.cos(self.sp_a), C[1] + ra * np.sin(self.sp_a), C[0] + (ra + ln) * np.cos(self.sp_a),
+                   C[1] + (ra + ln) * np.sin(self.sp_a), 0.8 * gain * self.sp_b, 0.0, width=1.2)
 
     def _star(self, f, t, ctx):
         lay, C = self.lay, self.C
@@ -1115,7 +1196,7 @@ class Origin(Scene):
         grow = float(smoothstep(0.0, 2.3, a))
         implode = float(smoothstep(T_IMPLODE, T_X, t)) ** 2.2
         R = lay.r_star * (1.0 - math.exp(-a / 0.5)) * (1.0 - 0.9 * implode)
-        self._lattice(f, t, gain=0.75)
+        self._lattice(f, t, gain=0.75, hole=R + 14.0)
         f.set_clip(*FRAME_CLIP)
         if grow < 1.0:                  # the field of the opening falls back into the star (time runs backwards)
             self.field.draw(f, t, C[0], C[1], gain=1.1 * (1.0 - grow), squeeze=1.0 - 0.88 * grow ** 0.7,
@@ -1124,7 +1205,7 @@ class Origin(Scene):
         self.rip.draw(f, t, C[0], C[1], gain=1.0, kick=self._pulse(t, ctx), scale=suck, r_min=R + 10)
         f.set_clip()
         core = (24.0 * (1.0 - 0.55 * implode) + 5.0 * self._pulse(t, ctx)) * min(1.0, R / 60.0)
-        self._star_disc(f, t, R, gain=1.0 + 0.8 * implode, hole=core + 8.0)
+        self._star_disc(f, t, R, gain=1.0 + 0.8 * implode, hole=core + 8.0, pulse=self._pulse(t, ctx))
         f.dots("r", [C[0]], [C[1]], core, 1.4)
         self._strip_star(f, t, ctx)
         left = max(T_X - t, 0.0)

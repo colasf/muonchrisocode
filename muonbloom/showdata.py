@@ -6,7 +6,6 @@ In the realtime app the three detector values arrive live over OSC; here they ar
 """
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -16,12 +15,15 @@ import numpy as np
 
 from .layout import DATA, ROOT
 
-SHOW_END = 802.0                # 13:22, end of scene 11
-TRACK_END = 834.0               # the audio file runs to 13:54 (credits)
+# The audio is "muon bloom Mixed v1 scene 10 edit" (2026-10-02). Against V7 (tools/align_audio.py): identical up to
+# 09:35; scene 10 is cut and its best part ends scene 9 (9.2, 09:35 - 09:48); scene 11 starts at 09:48 (V7 10:52,
+# -64 s) and from 10:00 on everything is V7 - 75.56 s. The music ends at 12:38.5 (the file is padded with silence).
+SHOW_END = 726.44               # 12:06.4, end of scene 11: the credits follow
+TRACK_END = 758.48              # 12:38.5, the end of the music
 
 T_BLOOM_CUT = 133.3             # the cut to the towers lands on the hit under "A bloom", not on 02:13.0
 
-# (code, name, time in, time out, look) - times from Muon_Bloom_Scenes_TimeCodes_V2
+# (code, name, time in, time out, look) - times from Muon_Bloom_Scenes_TimeCodes_V2, moved to the scene 10 edit
 SECTIONS = [
     ("1.0", "INTRO", 0.0, 31.0, "origin"),
     ("1.1", "BILLIONS BUILD", 31.0, 44.0, "star"),
@@ -49,23 +51,48 @@ SECTIONS = [
     ("8.1", "OUTLAST BUILD", 502.0, 512.0, "outlast"),
     ("9.0", "RISE CRESCENDO", 512.0, 551.0, "rise"),
     ("9.1", "RISE VOICE OVER", 551.0, 575.0, "rise"),
-    ("9.2", "RISE BREAK", 575.0, 606.0, "rise"),
-    ("10.0", "DISINTEGRATE", 606.0, 628.0, "disintegrate"),
-    ("10.1", "DISINTEGRATE", 628.0, 639.0, "disintegrate"),
-    ("10.2", "TRANSITION", 639.0, 652.0, "disintegrate"),
-    ("11.0", "NARRATIVE", 652.0, 740.0, "outro"),
-    ("11.1", "CRESCENDO / ACCELERANDO", 740.0, 776.0, "outro"),
-    ("11.2", "SWIRLING OUTRO", 776.0, 802.0, "outro"),
-    ("12.0", "CREDITS", 802.0, 834.0, "credits"),
+    ("9.2", "RISE ENDING", 575.0, 588.0, "disintegrate"),     # scene 10 (cut) condensed: the ending of scene 9
+    ("11.0", "NARRATIVE", 588.0, 664.44, "outro"),
+    ("11.1", "CRESCENDO / ACCELERANDO", 664.44, 700.44, "outro"),
+    ("11.2", "SWIRLING OUTRO", 700.44, SHOW_END, "outro"),
+    ("12.0", "CREDITS", SHOW_END, TRACK_END, "credits"),
 ]
 
-# detector life cycle (scene 2 reveals them, scene 3 switches them on, scene 9.2 powers them down)
+# detector life cycle: scene 2 reveals them, scene 3 switches them on, then they stay on to the end of the music
+# (the outro draws their power-down under the credits)
 T_REVEAL = 104.0
 T_BLOOM = 133.3                 # the hit under "A bloom" (onset of the music stem)
 T_ON = {"L": 147.35, "R": 160.0, "C": 170.5}
-T_OFF = {"C": 575.4, "R": 576.2, "L": 577.0}
-T_BACK = 606.0
 KEYS = ("L", "C", "R")
+
+# the muons through one spectator: 1 /cm2/min reaches the ground, over AREA_YOU that is RATE_YOU a second. The
+# voice says "more than fifty thousand of them will flood through your skin": the fifty-thousandth goes through
+# you in the swirl of 11.2 (11:54), before the credits (the show got shorter with the scene 10 edit: 63 /s and
+# 0.38 m2 no longer made it true).
+RATE_YOU = 70.0
+AREA_YOU = RATE_YOU * 60.0 / 1e4                # 0.42 m2
+YEAR = 3.156e7
+
+
+def spaced(n):
+    """12 345 678: thousands set apart by a space, as on the counters."""
+    return f"{int(round(n)):,}".replace(",", " ")
+
+
+def through_you_in(seconds, short=False):
+    """Muons through one spectator in `seconds`, written the way the read-outs write it:
+    70 / 4 200 / 6 048 000 (short: 6.0 M) / 2.21 BN / 177 BN."""
+    n = RATE_YOU * seconds
+    if n >= 1e9:
+        return f"{n / 1e9:.2f} BN" if n < 1e10 else f"{n / 1e9:.0f} BN"
+    if short and n >= 1e6:
+        return f"{n / 1e6:.1f} M"
+    return spaced(n)
+
+
+def mmss(t):
+    """Seconds -> M:SS or MM:SS, the way the show length is written (12:06)."""
+    return f"{int(t // 60):02d}:{int(t % 60):02d}"
 
 
 def section_at(t):
@@ -261,13 +288,11 @@ class Detectors:
             return 0.0
         if t < T_ON[key]:
             return 0.35
-        if T_OFF[key] <= t < T_BACK:
-            return 0.35 * math.exp(-(t - T_OFF[key]) / 0.4)
         return 1.0
 
     @staticmethod
     def online(key, t):
-        return T_ON[key] <= t and not (T_OFF[key] <= t < T_BACK)
+        return T_ON[key] <= t
 
     # -- events --------------------------------------------------------------
     def hits(self, key, t0, t1, echoes=True):
@@ -336,7 +361,7 @@ class Context:
         self.cols = layout.columns(self.towers)                   # usable text columns, left to right
 
     # the muons through one spectator since the show started (the VO: "more than fifty thousand")
-    RATE_YOU = 63.0                 # per second: 1 /cm2/min over ~0.38 m2
+    RATE_YOU = RATE_YOU
 
     def through_you(self, t):
         return int(self.RATE_YOU * max(0.0, t))

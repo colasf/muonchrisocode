@@ -1,11 +1,12 @@
 # MUON : BLOOM - storyboard of the preview stills.   [*] time | what the audience sees
 # Render everything:  python preview.py board     (stills -> previews/board, sheets -> previews/sheets)
 # Times are show time = position in the audio files (they start at 00:00).  * = also on the overview sheet.
+# Audio: "muon bloom Mixed v1 scene 10 edit" (scene 10 cut, its best part ends scene 9; the music ends at 12:38).
 # The three towers stand in front of the wall for the whole show: dark bands until 01:44, lit after.
 
 # ---- SCENE 1 - INTRO  (TouchDesigner scene 1: dot, rings, streak field, star, messenger, body) -------
 * 0:05    | Black wall, white border; top left MUON BLOOM // LOADING (100 % at 0:06, then crosses row by row, red dot at 0:07)
-* 0:13    | Rings leave the dot; HERE / RIGHT NOW in the next bay; arrivals barcode starts: 63 ticks a second
+* 0:13    | Rings leave the dot; HERE / RIGHT NOW in the next bay; arrivals barcode starts: 70 ticks a second
 0:21      | The spiral field of streaks grows out of the dot between the rings; ALWAYS note on the axis
 * 0:26    | The field fills the wall behind the towers. Bottom: the FELT trace, flat at 0.000 - NOTHING
 0:29.6    | "Miniscule": the dot shrinks to a point, MU // POINT-LIKE, the scale ruler dives to 1E-18 m
@@ -69,8 +70,8 @@
 4:20      | Between hits: 46 tracks faded to ghosts, the red core ring and the hot voxels of the tomogram stay
 * 4:28    | Full picture: flagged red bins in the halo and the unrolled profile, RHO_CORE 11.3
 4:35      | Last second before the cut: 94 tracks logged, the picture stands, only the kicks move it
-4:39      | "In the time you spend here": you again, between the towers; show progress bar, count so far 17 577
-* 4:46    | "More than fifty thousand of them will flood through your skin": rain at the real rate, 50 526 by the end
+4:39      | "In the time you spend here": you again, between the towers; show progress bar, count so far 19 530
+* 4:46    | "More than fifty thousand of them will flood through your skin": rain at the real rate, 50 850 by the end
 4:52      | "Every minute of your life": the same number on every time scale; entry map from above
 * 5:02    | Cosmic break - "into the space you leave behind": the body dissolves to a dotted outline
 5:15      | The empty outline, the thin unchanged rain, the count still running: AFTER YOU - UNCHANGED
@@ -109,37 +110,32 @@
 9:19      | "The mass.": real hits on DET_C and DET_R, red rings at the centre head, a red ray with its energy
 * 9:22    | "It ends as light": the centre column becomes a beam; the card is rewritten: LIGHT, mass 0, speed c
 9:30      | The beam reaches the top of the wall, photons fly out sideways, 34 million scintillation photons
-9:37      | Rise break - power down, scene 3 reversed: centre and right dark, left tower last
-* 9:55    | "Something is rushing through you": detectors offline, a faint red drizzle keeps falling in the dark
-10:03     | "But now, now, you know": one muon is seen through the centre tower, the towers answer once
-
-# ---- SCENE 10 - DISINTEGRATE  (the sphere falls apart) ----------------------------------------------
-10:08.6   | The sphere is back with its picture (core ring, PoCA cluster); first hits decay on it, a chunk breaks off
-* 10:18.7 | Loud and dense: cratered shell, halo sticks falling, the old tracks decaying as stars around the core
-10:26.2   | A quarter left: fragments of net, stick clusters, decay log full
-10:34.2   | Thinning out: HUD text eroding, counters running backwards, a crescent of the body remains
-* 10:42   | 9 % left: scattered edges, tags fading, log emptying
-10:50     | Almost nothing: lattice, drifting dots, two last sticks, N/N0 .012
+# 9.2 = the ending of scene 9: the best of scene 10 (cut in the scene 10 edit), the disintegration condensed
+* 9:36    | Cut on the groove: the sphere of scene 5 is back with its picture; the old tracks decay as stars around the core
+9:38.5    | Chunks break off, halo sticks fall, the decay law N/N0 = exp(-t/3.6 s); decay log and Michel spectrum fill up
+* 9:42.5  | Hits on DET_R: muons stop on the body and decay (three-prong stars); the HUD erodes, N/N0 .08
+9:45.5    | The music drops into the pulse of scene 11: almost nothing, drifting dots, N/N0 .005
 
 # ---- SCENE 11 - OUTRO  (new: the journey as one line, then the whirl of the first minute) -----------
-10:54     | "Nothing chose when": dust of the disintegration settles over the lattice, towers still replying
-* 11:03   | "NOTHING": only the lattice, the three towers and one last bloom on the centre detector
-11:06     | One red dot appears at the left with the words ALMOST NOTHING
-11:20     | The journey draws itself as one line: star, Earth forms, dinosaurs, pyramids, muon discovered
-11:34     | "Billions of years": the red dot leaves the star; two clocks, OUR TIME 5 GYR / ITS OWN TIME 5 KYR
-* 11:47   | "Less than a heartbeat": the dot at T-9.72 ms, a heartbeat trace with its whole life as one red tick
-12:06     | "Passing through your body": the line ends in a figure, heart lit red; JUST LONG ENOUGH
-12:18     | "The universe does not stop": the whole journey on one axis, HERE // CINCINNATI, first repeats
-12:31     | "It continues": hundreds of travellers run the line again, its end curls towards the centre
-* 12:42   | "You are part of this": the line has coiled into a whirl around NOW, beside the centre tower
-12:45.5   | The towers stay live; the whirl grows behind them and continues
-12:51.4   | Drums: 7 000 trails swirl around the red dot, rings thrown out on every hit, passing behind the towers
-* 13:00   | The swirling field of the first minute fills the wall around the dot, towers standing in front of it
-13:14     | The count through you passes 50 000: the bottom-left cell flashes MORE THAN FIFTY THOUSAND
-13:20     | Full whirl, loudest moment, just before the title
+9:50      | "Nothing chose when": dust of the disintegration settles over the lattice, towers still replying
+* 9:59    | "NOTHING": only the lattice, the three towers and their live replies
+10:02     | One red dot appears at the left with the words ALMOST NOTHING
+10:08     | The journey draws itself as one line: star, Earth forms, dinosaurs, pyramids, muon discovered
+10:19     | "Time stretched around it": the red dot leaves the star; two clocks, OUR TIME 5 GYR / ITS OWN TIME 5 KYR
+* 10:31.5 | "Less than a heartbeat": a heartbeat trace with its whole life as one red tick
+10:36     | "Just long enough to reach you": the dot arrives at YOU, its own time against its lifetime
+10:50.5   | "Passing through your body": the line ends in a figure, heart lit red; JUST LONG ENOUGH
+11:03     | "The universe does not stop": the whole journey on one axis, HERE // CINCINNATI, first repeats
+11:15.5   | "It continues": hundreds of travellers run the line again, its end curls towards the centre
+* 11:26.5 | "You are part of this": the line has coiled into a whirl around NOW, beside the centre tower
+11:30     | The towers stay live; the whirl grows behind them and continues
+11:36     | Drums: 7 000 trails swirl around the red dot, rings thrown out on every hit, passing behind the towers
+* 11:44.5 | The swirling field of the first minute fills the wall around the dot, towers standing in front of it
+11:54.6   | The count through you passes 50 000: the bottom-left cell flashes MORE THAN FIFTY THOUSAND
+12:04.5   | Full whirl, loudest moment, just before the title
 
 # ---- CREDITS -------------------------------------------------------------------------------------------
-13:24     | MUON : BLOOM types on beside the centre tower, the whirl held back softly behind it
-13:27.5   | Drums stop: the detectors power down centre, right, left while the credits finish typing
-13:29.5   | The whirl drains into the dot; credits and "50 526 MUONS WENT THROUGH YOU" sit in their own bays
-* 13:40   | First image again: lattice, one red dot between the dark towers, credits, IT CONTINUES
+12:08.5   | MUON : BLOOM types on beside the centre tower, the whirl held back softly behind it
+12:12     | Drums stop: the detectors power down centre, right, left while the credits finish typing
+12:14     | The whirl drains into the dot; credits and "50 850 MUONS WENT THROUGH YOU" sit in their own bays
+* 12:25   | First image again: lattice, one red dot between the dark towers, credits, IT CONTINUES

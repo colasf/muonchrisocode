@@ -17,8 +17,8 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-MUSIC = Path(r"D:\muonchristo\audio\muonbloom V7 no muon sounds.wav")
-MUON = Path(r"D:\muonchristo\audio\v7 just muon sounds.wav")
+MUSIC = Path(r"D:\muonchristo\audio\muon bloom Mixed v1 scene 10 edit NO MUONS SOUNDS.wav")
+MUON = Path(r"D:\muonchristo\audio\muon bloom Mixed v1 just muons.wav")
 N_FFT, HOP = 2048, 441                      # 10 ms hop at 44.1 kHz
 DT = 0.01
 BANDS = [(20, 120), (120, 400), (400, 1500), (1500, 5000), (5000, 16000)]
@@ -102,18 +102,21 @@ def main():
     EL, _, _ = stft_feats(a[:, 0], sr)
     ER, _, _ = stft_feats(a[:, 1], sr)
     pk = peaks(Fm.sum(1))
+    amps = np.array([float(Em[i:min(len(Em), i + 12)].sum(1).max()) for i in pk])
+    # energy 0..1 on a log scale of two decades under the loudest hits of the stem (its 97th percentile), so
+    # that a louder or quieter mix of the muon sounds gives the same spread of energies
+    ref = float(np.percentile(amps, 97)) if len(amps) else 1.0
     hits = []
     last = {0: (-9.0, 0.0), 1: (-9.0, 0.0), 2: (-9.0, 0.0)}
-    for i in pk:
+    for i, amp in zip(pk, amps):
         j = min(len(Em), i + 12)
-        amp = float(Em[i:j].sum(1).max())
         eL, eR = float(EL[i:j].sum()), float(ER[i:j].sum())
         pan = (eR - eL) / (eR + eL + 1e-9)
         k = 0 if pan < -0.3 else 2 if pan > 0.3 else 1
         t = i * DT
         echo = (t - last[k][0] < 1.2) and (amp < 1.35 * last[k][1])
         last[k] = (t, amp)
-        e = float(np.clip(np.log10(max(amp, 1e-3)) / 2.0, 0.05, 1.0))        # 1 .. 100 -> 0 .. 1
+        e = float(np.clip(np.log10(max(amp * 100.0 / ref, 1e-3)) / 2.0, 0.05, 1.0))   # ref / 100 .. ref -> 0 .. 1
         hits.append((t, k, e, echo))
     hits += [(t, k, e, False) for t, k, e in SCRIPTED]
     hits.sort()

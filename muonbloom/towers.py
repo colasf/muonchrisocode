@@ -93,9 +93,8 @@ def face(f, tw, t, power=1.0, value=0.0, hit_age=99.0, hit_e=0.0, texture=True, 
         for sx, x in ((-1, tw.x0 - b), (1, tw.x1 + b)):
             f.segments("r", [x, x, x], [tw.top - b, tw.top - b, yd + b], [x, x - sx * 22, x - sx * 22],
                        [yd + b, tw.top - b, yd + b], 0.9 * p / 0.35 * blink * 0.6, width=L.LW)
-    if label:                   # its name is decoded when the towers come on (the reveal, and again at T_BACK)
-        name = B.resolve(L.NAMES[tw.key], t - (sd.T_BACK if t >= sd.T_BACK else sd.T_REVEAL), 30.0, 0.25, pad=True,
-                         key=ord(tw.key))
+    if label:                   # its name is decoded when the towers come on (the reveal)
+        name = B.resolve(L.NAMES[tw.key], t - sd.T_REVEAL, 30.0, 0.25, pad=True, key=ord(tw.key))
         f.text("r" if flash > 0.2 else "w", tw.cx, tw.top - 14, name, size=L.T_MICRO,
                alpha=0.85 * p / max(p, 0.35) if on else 0.8, anchor="ms")
 
@@ -309,11 +308,9 @@ def strings(f, towers, t, det, n=27, gain=1.0, power=None, y_span=(700.0, 1170.0
 # ----------------------------------------------------------------------------
 
 def scope_age(key, t, lag=0.0):
-    """Build age of the scope of a tower: it is constructed when the detectors are revealed (and again when
-    they come back, T_BACK) and taken apart when its tower powers down - it never fades."""
-    if t >= sd.T_BACK:
-        return t - sd.T_BACK - lag
-    return B.io(t - sd.T_REVEAL - lag, sd.T_OFF[key] + 0.45 - t, out=0.45)
+    """Build age of the scope of a tower: it is constructed when the detectors are revealed - it never fades
+    (the outro takes it apart under the credits)."""
+    return t - sd.T_REVEAL - lag
 
 
 def scopes(f, ctx, t, alpha=1.0, span=3.0):

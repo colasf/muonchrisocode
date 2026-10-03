@@ -8,7 +8,7 @@ Examples
   python preview.py wall 2:52 5:40                    stills mocked up on the photo of the wall
   python preview.py towers 0:26 2:53 9:22             the same frames with three tower placements, side by side
   python preview.py video 2:10 3:00 --scale 0.5       H.264 preview of a time range, with the audio
-  python preview.py video --scale 0.5 --workers 24    the whole show (00:00 - 13:54), with the audio
+  python preview.py video --scale 0.5 --workers 24    the whole show (00:00 - 12:38), with the audio
 
 Time codes are show time (the audio files start at 00:00): M:SS, M:SS.cc or seconds.
 """
@@ -41,8 +41,8 @@ from muonbloom.engine import font  # noqa: E402
 
 WALL_PHOTO = Path(r"D:\muonchristo\Interactive_Stage_1_clean_v5 (1) (1).png")
 WALL_ORIGIN = (11, 272)                  # where the 2978 x 1400 output sits in the 3000 x 1688 stage photo
-MUSIC = Path(r"D:\muonchristo\audio\muonbloom V7 no muon sounds.wav")
-MUON = Path(r"D:\muonchristo\audio\v7 just muon sounds.wav")
+MUSIC = Path(r"D:\muonchristo\audio\muon bloom Mixed v1 scene 10 edit NO MUONS SOUNDS.wav")
+MUON = Path(r"D:\muonchristo\audio\muon bloom Mixed v1 just muons.wav")
 
 
 def parse_time(s):
@@ -213,8 +213,8 @@ def overview_sheet(rows, paths, cols=6, tw=640, name="overview"):
     n_rows = (len(keys) + cols - 1) // cols
     sheet = Image.new("RGB", (cols * tw + (cols + 1) * pad, head + n_rows * (th + cap_h + pad) + pad), (24, 24, 24))
     dr = ImageDraw.Draw(sheet)
-    dr.text((pad + 2, 14), "MUON : BLOOM   //   THE WHOLE SHOW AT A GLANCE   //   2978 x 1400   //   13:22 + CREDITS",
-            font=f0, fill=(255, 255, 255))
+    dr.text((pad + 2, 14), "MUON : BLOOM   //   THE WHOLE SHOW AT A GLANCE   //   2978 x 1400   //   "
+            f"{sd.mmss(sd.SHOW_END)} + CREDITS", font=f0, fill=(255, 255, 255))
     for k, ((t, cap, _, num), path) in enumerate(keys):
         x = pad + (k % cols) * (tw + pad)
         y = head + (k // cols) * (th + cap_h + pad)
