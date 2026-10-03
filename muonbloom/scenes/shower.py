@@ -1,34 +1,39 @@
 """AIR SHOWER - "Through the atmosphere above this city. Through..."   Sheet 1.2, 01:07.0 - 01:12.4.
 
-The liked air-shower study, ported to the wall canvas and put on the voice:
-  01:07.55  "Through the atmosphere above this city."  the primary (red) meets the air: first interaction
-            ORTHO_SIDE chart: altitude rules every km, the cascade feathers out, a red line tracks the front
-  01:11.12  "Through..."                               the front lands: ORTHO_TOP, the footprint blooms over
-                                                        the dot lattice of the city
+The anatomy of ONE event, on the voice - a plate, not a chase (the groove of 05:22, DANCE, is the other way
+of looking at the same physics: many showers, on the grid, from every side):
+  01:07.0   the plates are constructed: a fixed elevation of the whole column of air (0 - 15 km, one scale,
+            no camera move) in the focus bay, and beside it, in the other bays, the same shower at the same
+            instant drawn once per component: 01 HADRONIC CORE, 02 ELECTROMAGNETIC, 03 MUONS
+  01:07.55  "Through the atmosphere above this city."  the primary (red) meets the air: first interaction,
+            the burst in every plate; one red line - the front - comes down across all of them
+  01:11.12  "Through..."   the front is on the ground. The electromagnetic plate has thinned out on the way;
+            the muon plate has kept every track: what reaches the ground is red
   01:12.40  cut to YOU
 One muon of this shower is tagged from its birth (MU- 0001): it is the one that goes through the body in
-the next scene. In the plan view it lands exactly on ctx.focus, where the figure of YOU will stand.
-When a second bay is wide enough, a second elevation (Z) of the same shower runs in it, without tags. HUD: longitudinal profile on the 0-16 km ruler (strip), particle stream (column),
-time to ground, birth-rate barcode, particle counters (bottom band).
+the next scene. It lands on the x of ctx.focus, at the foot of the place where the figure of YOU will stand.
+HUD: longitudinal profile on the 0-16 km ruler, all particles in white and the muons alone in red (strip);
+time to ground, composition (tracks per component, log), the air the front has gone through in g/cm2 with
+its interaction and radiation lengths (bottom band); what stands at these altitudes (a free bay).
+Every figure written is a real one (lifetimes, interaction and radiation lengths of air, depth of the
+atmosphere); the counts are those of the tracks drawn.
 
 The towers stand in front of the wall for the whole show (dark before the detectors are revealed), and
-their position / size is not known yet. So nothing here has a fixed x: the shower axis sits on
-ctx.focus (the middle of the bay that hosts the one-centre compositions), the particle column takes
-an edge column of ctx.cols if one is wide enough, the bottom blocks flow into ctx.slots_pre, and every
+their position / size is not known for sure. So nothing here has a fixed x: plate 00 sits in the focus bay,
+the component plates take the other bays (one per PLATE_W of free width, two at most per bay; with less
+room the muons stay, then the electromagnetic part), the bottom blocks flow into ctx.slots_pre, and every
 text / tag / callout is tested against the tower rectangles (`hidden`) and moved or dropped. Cascades,
-rules, rings and long lines are allowed to pass behind the towers.
+rules and long lines are allowed to pass behind the towers.
 
 This module also holds the shower *world* (cascade model + drawing) and the layout helpers that the
-DANCE and GLITCH scenes reuse.
+DANCE scene and the break of GLITCH reuse.
 
-Nothing that shows data fades in or pops in (see build.py). The strip, the particle column, the three
-bottom panels, the view tag, the id lines and the altitude rules are CONSTRUCTED during the first second
-of the scene, one after the other; what an event brings is made on that event and taken apart when it
-leaves (the data of the first interaction, the red front line, MU- 0001, the labels on the track ends,
-H1 / XMAX on the strip, the ground tags when the ground comes up); what the plan view brings at 01:11.1
-(view tag, cross-hair, range rings, CORE, km labels of the second elevation, GROUND in the first panel)
-is made on that cut. The helpers shared with DANCE / GLITCH take the age of what they draw (`age=`,
-seconds since it appeared; None = built) instead of an alpha ramp: draw_info, altitude_rules,
+Nothing that shows data fades in or pops in (see build.py). The strip, the plates with their titles, the
+bottom panels, the id lines and the altitude rules are CONSTRUCTED during the first half second of the
+scene, one after the other; what an event brings is made on that event and taken apart when it leaves
+(the data of the first interaction, the red front line, MU- 0001, the labels on the track ends, H1 / XMAX
+on the strip, what each plate says). The helpers shared with DANCE / GLITCH take the age of what they draw
+(`age=`, seconds since it appeared; None = built) instead of an alpha ramp: draw_info, altitude_rules,
 World.draw_column / draw_strip / draw_counters / draw_barcode, auto_callout(build=).
 """
 from __future__ import annotations
@@ -65,6 +70,7 @@ K_HEAD_I = np.array([0.5, 0.0, 1.3, 1.4, 1.6, 1.3], np.float32)
 
 CITY = "39.103N 084.512W"                       # Cincinnati
 COL_W = 390.0                                   # width of the particle stream column
+COL_MIN = 330.0                                 # ... the narrowest edge column it is still set in (smaller type)
 VIEW_Y0, VIEW_Y1 = 232.0, 1196.0                # main view, between the header and the bottom band
 X_MIN, X_MAX = L.COL_X0, L.COL_X1               # text stays inside the edge ticks
 
@@ -283,13 +289,16 @@ def anchors(ctx, st, side):
 
 
 def info_layout(ctx, st, label, cam, id_lines=(), id_short=(), zones_top=(), zones_full=(), within=None,
-                unit="KM", ratio=1e5):
+                unit="KM", ratio=1e5, bars=None):
     """Where the fixed texts of a view go for this tower placement and this view:
          a      the view tag (+ scale bar under it), top left
          b      the scene id lines, top right: the full version, else the short one, else nothing
          xr     the right-hand column of the chart (slant depth labels, FRONT / GROUND tags), full height
     zones_top / zones_full = x-intervals taken by the cascades at the top of the view / over its whole height.
-    Every candidate is an edge of the view or of a tower, so the blocks line up with the furniture."""
+    Every candidate is an edge of the view or of a tower, so the blocks line up with the furniture.
+    Under the view tag: the scale bar of an orthographic camera - the longest of 5, 2, 1 `unit` that fits, or
+    of `bars` = ((length in km, its name), ...) for a view at another scale - else the note of the camera
+    (cam.note; by default its field of view)."""
     y0 = st.view[1] + 44
     lay = dict(y0=y0, label=label, cam=cam, a=None, scale=None, note=None, b=None, xr=None, boxes=[],
                zones_top=tuple(zones_top), zones_full=tuple(zones_full))
@@ -318,10 +327,11 @@ def info_layout(ctx, st, label, cam, id_lines=(), id_short=(), zones_top=(), zon
         others = lay["boxes"][1:]
         if getattr(cam, "ortho", False):
             sc = cam.scale
-            cands = [n for n in (5, 2, 1) if n * sc <= 320.0] or [1]
+            named = list(bars) if bars else [(n, f"{n} {unit}") for n in (5, 2, 1)]
+            cands = [c for c in named if c[0] * sc <= 320.0] or named[-1:]
             for zs, ns in ((zones_top, cands), ((), cands[-1:])):     # the longest short bar that fits
-                for n in ns:
-                    note = f"{n} {unit}   1:{int(ratio / sc):d}"
+                for n, name in ns:
+                    note = f"{name}   1:{int(ratio / sc):d}"
                     box = (x - 2, y0 + 22, x + n * sc + 14 + text_w(note, L.T_SMALL), y0 + 52)
                     if _free(ctx, st, box, zs, others):
                         lay["scale"] = (n, note)
@@ -330,7 +340,7 @@ def info_layout(ctx, st, label, cam, id_lines=(), id_short=(), zones_top=(), zon
                 if lay["scale"]:
                     break
         else:
-            note = f"F {getattr(cam, 'fov', 44.0):.1f} DEG   CAM ORBIT"
+            note = getattr(cam, "note", None) or f"F {getattr(cam, 'fov', 44.0):.1f} DEG   CAM ORBIT"
             box = (x - 2, y0 + 22, x + text_w(note, L.T_SMALL), y0 + 48)
             if _free(ctx, st, box, (), others):
                 lay["note"] = note
@@ -400,7 +410,8 @@ def put_right(f, ctx, st, lay, layer, y, s, size=L.T_SMALL, pad=4, alpha=1.0):
 class Stage:
     """Where things go for a tower placement: the particle column (an edge column of ctx.cols, on the
     preferred side if it is wide enough, else on the other side, else none), and the main view next to it.
-    side = None: no column at all, the view takes the whole width."""
+    The column is COL_W wide, or as wide as its edge column when that is narrower (down to COL_MIN: see
+    col_type). side = None: no column at all, the view takes the whole width."""
 
     def __init__(self, ctx, side="L"):
         cols = ctx.cols
@@ -409,10 +420,10 @@ class Stage:
         self.col, self.side = None, None
         for name in ((side, "L" if side == "R" else "R") if side else ()):
             c = left if name == "L" else right
-            if c is not None and c[1] - c[0] >= COL_W - 1.0:
+            if c is not None and c[1] - c[0] >= COL_MIN:
                 self.side = name
-                self.col = ((c[0], 240.0, c[0] + COL_W, 1190.0) if name == "L" else
-                            (c[1] - COL_W, 240.0, c[1], 1190.0))
+                cw = min(COL_W, c[1] - c[0])
+                self.col = ((c[0], 240.0, c[0] + cw, 1190.0) if name == "L" else (c[1] - cw, 240.0, c[1], 1190.0))
                 break
         x0, x1 = L.FX0 + 12.0, L.FX1 - 12.0
         if self.side == "L":
@@ -430,6 +441,11 @@ class Stage:
 # ----------------------------------------------------------------------------
 # cascade model
 # ----------------------------------------------------------------------------
+
+def col_type(rect):
+    """Type size of the rows of a particle column: the 41 characters of a row have to fit between its rules."""
+    return L.T_MICRO if rect[2] - rect[0] >= 41 * 0.61 * L.T_MICRO + 14.0 else 13
+
 
 def _perp_basis(d):
     a = np.array([1.0, 0.0, 0.0]) if abs(d[0]) < 0.9 else np.array([0.0, 0.0, 1.0])
@@ -793,11 +809,20 @@ class World:
         m = lok[:-1] & lok[1:]
         f.segments("r", lx[:-1][m], ly[:-1][m], lx[1:][m], ly[1:][m], 0.5 * self.fog(lz[:-1][m]) * gain)
 
-    def draw_cascades(self, f, cam, age, alive, env, gain=1.0):
+    def draw_cascades(self, f, cam, age, alive, env, gain=1.0, kinds=None, floor=None):
+        """The tracks of the live events, each drawn up to where its particle is now.
+        kinds = only these particle kinds (K_E ...): one component of the shower on its own.
+        floor = per kind, the level a track keeps instead of dying away (a diagram keeps what it has drawn)."""
         live = np.nonzero(alive)[0]
         if not len(live):
             return
         idx = np.concatenate([np.arange(*self.ranges[e]) for e in live])
+        if kinds is not None:
+            lut = np.zeros(len(K_INT), bool)
+            lut[list(kinds)] = True
+            idx = idx[lut[self.SK[idx]]]
+            if not len(idx):
+                return
         sa, ev = self.SA[idx], self.SE[idx]
         G = age[ev].astype(np.float32)
         ta = self.VT[sa]
@@ -816,13 +841,29 @@ class World:
         tau = K_TAU[kind]
         base = K_INT[kind] * var * env[ev].astype(np.float32) * gain
         flash = np.where(kind <= K_G, 0.5, 1.3).astype(np.float32)
+        keep = None if floor is None else np.asarray(floor, np.float32)[kind]
 
         def inten(a):
-            return base * (0.72 * np.exp(-a / tau) + 0.28 * np.exp(-a / (4.5 * tau)) + flash * np.exp(-a / 0.06))
+            d = 0.72 * np.exp(-a / tau) + 0.28 * np.exp(-a / (4.5 * tau))
+            if keep is not None:
+                d = np.maximum(d, keep)
+            return base * (d + flash * np.exp(-a / 0.06))
 
         ia, ib = inten(G - ta), inten(np.where(part, 0.0, G - tb))
         ax, ay, az, aok = cam.project(pa)
         bx, by, bz, bok = cam.project(pb)
+        head_ok = bok
+        cut = aok != bok
+        if cut.any():           # a track that goes past the camera (a view from inside the shower) is cut on its
+            c = np.nonzero(cut)[0]                            # near plane: it runs out of the picture, it does not vanish
+            tt = ((cam.near * 1.05 - az[c]) / (bz[c] - az[c])).astype(np.float32)
+            cx_, cy_, cz_, _ = cam.project(pa[c] + (pb[c] - pa[c]) * tt[:, None])
+            ic = ia[c] + (ib[c] - ia[c]) * tt
+            at_a = ~aok[c]                                    # which end was behind the camera
+            ca, cb = c[at_a], c[~at_a]
+            ax[ca], ay[ca], az[ca], ia[ca] = cx_[at_a], cy_[at_a], cz_[at_a], ic[at_a]
+            bx[cb], by[cb], bz[cb], ib[cb] = cx_[~at_a], cy_[~at_a], cz_[~at_a], ic[~at_a]
+            aok, bok = aok | cut, bok | cut
         ok = aok & bok
         ia = ia * self.fog(az)
         ib = ib * self.fog(bz)
@@ -831,7 +872,7 @@ class World:
         for m, name in ((ok & ~red, "w"), (ok & red, "r")):
             if m.any():
                 f.segments(name, ax[m], ay[m], bx[m], by[m], ia[m], ib[m], width=width[m])
-        hm = part & ok & (K_HEAD[kind] > 0)
+        hm = part & ok & head_ok & (K_HEAD[kind] > 0)
         if hm.any():
             hk = kind[hm]
             fog = self.fog(bz[hm])
@@ -882,16 +923,17 @@ class World:
             u = a / 2.6
             for j, (rmax, lay, rad) in enumerate(((11.0, "r", 2.5), (6.5, "w", 1.8))):
                 r = 0.3 + rmax * (1 - (1 - u) ** 2.2)
-                n = int(90 + 26 * r)
+                n = 300 if j == 0 else 220                    # the same dots all the way: they spread, they do not hop
                 ang = np.linspace(0, 2 * np.pi, n, endpoint=False, dtype=np.float32) + j * 0.05
                 P = np.stack([e["G"][0] + r * np.cos(ang), np.zeros(n, np.float32), e["G"][2] + r * np.sin(ang)], 1)
                 sx, sy, z, ok = cam.project(P.astype(np.float32))
                 f.dots(lay, sx[ok], sy[ok], rad * np.clip(36.0 / z[ok], 0.5, 1.6),
                        (1.1 * (1 - u) ** 1.4) * self.fog(z[ok]) * gain)
 
-    def draw_interaction(self, f, cam, age, view, ctx=None, tags=True, avoid=()):
+    def draw_interaction(self, f, cam, age, view, ctx=None, tags=True, avoid=(), extra=(), cross=True):
         """First interaction of the primary: rays, a red ring, a red cross-hair, and (tags) its data on the
-        side that is clear of the towers and of the `avoid` boxes. Returns the boxes used by the text."""
+        side that is clear of the towers and of the `avoid` boxes. Returns the boxes used by the text.
+        extra = more data lines under the two it always writes; cross=False leaves the cross-hair out."""
         rng = np.random.default_rng(3)
         boxes = []
         for k in range(self.n_showers):
@@ -912,18 +954,21 @@ class World:
             f.segments("w", cx + np.cos(ang) * r0, cy + np.sin(ang) * r0, cx + np.cos(ang) * (r0 + ln),
                        cy + np.sin(ang) * (r0 + ln), 0.6 * fade)
             f.dots("w", cx + np.cos(ang) * (r0 + ln), cy + np.sin(ang) * (r0 + ln), 3.0, 1.2 * fade)
-            f.rings("r", [cx], [cy], [20 + 230 * (1 - (1 - u) ** 2)], fade, width=L.LW_BOLD)
-            big = 1e5
-            f.segments("r", [cx - big, cx], [cy, cy - big], [cx + big, cx], [cy, cy + big], 0.55 * fade)
+            ra = np.linspace(0.0, 2 * np.pi, 121)              # (a fixed number of vertices: the ring only grows)
+            rr = 20 + 230 * (1 - (1 - u) ** 2)
+            f.polyline("r", cx + rr * np.cos(ra), cy + rr * np.sin(ra), fade, width=L.LW_BOLD)
+            if cross:
+                big = 1e5
+                f.segments("r", [cx - big, cx], [cy, cy - big], [cx + big, cx], [cy, cy + big], 0.55 * fade)
             if not tags or ctx is None:
                 continue
             title = "FIRST_INTERACTION"
-            lines = [f"H {e['h1']:.3f} KM", f"E0 {e['E0'] * 3.2:.2f}E15 EV"]
+            lines = [f"H {e['h1']:.3f} KM", f"E0 {e['E0'] * 3.2:.2f}E15 EV"] + list(extra)
             w = max(text_w(title, L.T_TAG) + 12, max(text_w(s, L.T_SMALL) for s in lines))
             xmin, xmax = max(view[0] + 6, X_MIN), min(view[2] - 6, X_MAX)
             for sgn in (1, -1):
                 bx0 = cx + 36 if sgn > 0 else cx - 36 - w
-                box = (bx0 - 6, cy - 58, bx0 + w + 6, cy + 40)
+                box = (bx0 - 6, cy - 58, bx0 + w + 6, cy + 40 + 26 * len(extra))
                 if box[0] < xmin or box[2] > xmax or box[1] < view[1] + 4 or box[3] > view[3] - 4 or hidden(ctx, *box):
                     continue
                 if _hits(box, avoid):
@@ -1000,6 +1045,7 @@ class World:
             f.tag("w", x0 + 4, y0 + 32, title, size=L.T_MICRO, pad=3, alpha=alpha)
             f.segments("w", [x1, x0], [y0, y1], [x1, x1], [y1, y1], 0.6 * alpha)
             pitch = 19.0
+            size = col_type(rect)
             n_rows = int((y1 - y0 - 96) / pitch)
             idx = np.arange(max(0, n_now - n_rows), n_now)[::-1]
             yy = y0 + 62
@@ -1008,7 +1054,7 @@ class World:
                 p = b["p"][i]
                 name = K_NAME[kk] if kk != K_MU else ("MU-" if i % 2 else "MU+")
                 line = f"{i:05d} {name:<5} {b['e'][i] * 3.2e6:09.2f} {p[0]:+06.2f} {p[1]:05.2f} {p[2]:+06.2f}"
-                f.text("r" if K_RED[kk] == 1 else "w", x0 + 8, yy + r * pitch, line, size=L.T_MICRO,
+                f.text("r" if K_RED[kk] == 1 else "w", x0 + 8, yy + r * pitch, line, size=size,
                        alpha=(0.95 if r < 3 else 0.7) * alpha)
             f.text("w", x0 + 8, y1 - 10, f"N {n_now:06d}", size=L.T_SMALL, alpha=0.9 * alpha)
         return n_now
@@ -1031,9 +1077,10 @@ class World:
             cache[k] = first
         return cache[k]
 
-    def draw_strip(self, f, k, a, label=None, alpha=1.0, pulse=0.0, age=None, title_age=None):
+    def draw_strip(self, f, k, a, label=None, alpha=1.0, pulse=0.0, age=None, title_age=None, muons=False):
         """Score strip: the longitudinal profile of shower k on a 0-16 km ruler, built live (births per 100 m),
         H1 and XMAX tags on the red band, a red cursor on the front.
+        muons=True: the lower comb is the profile of the muons alone, in red (where they are born).
         age = seconds since the strip appeared (None = built): band and rules are drawn (hud.strip_base), then
         ticks, km labels, cursor and FRONT tag are constructed from left to right. title_age = seconds since
         its title changed (a new shower): the title tag is then made again on its own. The H1 and XMAX tags
@@ -1068,8 +1115,14 @@ class World:
                 bx = X(np.arange(160) * 0.1 + 0.1)
                 m = cnt > 0
                 f.rects("w", bx[m], y0 + 1, bx[m] + 6, y0 + 1 + hh[m], 0.95 * alpha)
-                hb = 18.0 * np.sqrt(cnt / norm) * hash01(np.arange(160), k)
-                f.rects("w", bx[m], y1 - 38 - hb[m], bx[m] + 6, y1 - 38, 0.55 * alpha)
+                if muons:
+                    cm, _ = np.histogram(alt[b["k"][:n_now] == K_MU], bins=160, range=(0.0, ALT_MAX))
+                    hb = 30.0 * np.sqrt(cm / max(cm.max(), 1))
+                    mm = cm > 0
+                    f.rects("r", bx[mm], y1 - 38 - hb[mm], bx[mm] + 6, y1 - 38, 0.95 * alpha)
+                else:
+                    hb = 18.0 * np.sqrt(cnt / norm) * hash01(np.arange(160), k)
+                    f.rects("w", bx[m], y1 - 38 - hb[m], bx[m] + 6, y1 - 38, 0.55 * alpha)
             xc = float(X(front))
             f.segments("r", [xc], [y0 - 4], [xc], [y1 + 4], 1.2 * alpha, width=L.LW)
             anchor = "ls" if xc < x1 - 260 else "rs"
@@ -1115,32 +1168,30 @@ class World:
                     f.text(lay, x0 + 92, yy + 2, f"{n:06d}", size=22, alpha=0.95 * alpha)
 
     def draw_barcode(self, f, t, x0, x1, y0, y1, title="BIRTH_RATE >> BARCODE", span=3.0, alpha=1.0, boost=0.0,
-                     age=None):
-        """Scrolling barcode: one column per ~13 ms, lit by the number of particles born in it.
+                     age=None, pulse=None):
+        """Scrolling barcode: one column per ~20 ms, lit by the number of particles born in it. The bars slide
+        (hud.bars), and a column keeps what was written in it: pulse = a function of an array of show times
+        that gives what to add to the density of the columns written at those times (the kick of the music:
+        it is then recorded in the barcode as it goes by; `boost` adds to every column at once).
         age = seconds since the panel appeared (None = built): constructed (rule, tag, lanes rising, cursor
         drawn), never faded in."""
         with f.build(age, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), wave=0.3, key=52):
             hud.panel_header(f, x0, x1, y0, title if x1 - x0 > 260 else "BIRTH_RATE", alpha=alpha)
             cols = max(8, int((x1 - x0) / 4.0))
-            dt = span / cols
-            k_first = math.floor((t - span) / dt)
-            kk = k_first + np.arange(cols)
-            rate = np.zeros(cols, np.float32)
+            kk, frac, dt = hud.barcode_keys(t, span, cols)
+            rate = np.zeros(len(kk), np.float32)
             t0s = self.ev_t0[: self.n_showers]
             for ev in np.nonzero((t0s < t) & (t0s > t - 30.0))[0]:
                 b = self.births[ev]
                 tt = kk * dt - self.ev_t0[ev]
                 rate += (np.searchsorted(b["t"], tt + dt) - np.searchsorted(b["t"], tt))
-            dens = np.clip(0.06 + 0.9 * np.tanh(rate / 60.0) + boost, 0.0, 1.0)
-            cw = (x1 - x0) / cols
-            frac = (t - span) / dt - k_first
-            xs = x0 + (np.arange(cols) - frac) * cw
+            dens = np.clip(0.06 + 0.9 * np.tanh(rate / 60.0) + boost + (pulse(kk * dt) if pulse else 0.0), 0.0, 1.0)
+            xl, xr = hud.barcode_cols(x0, x1, cols, frac)       # the bars slide under the edges, they do not pop
             lane_h = (y1 - y0 - 14) / 3
             for ln in range(3):
-                on = hash01(kk, ln + 13) < dens * (1.0 - 0.2 * ln)
-                m = on & (xs >= x0) & (xs + cw <= x1)
+                m = (hash01(kk, ln + 13) < dens * (1.0 - 0.2 * ln)) & (xr > xl)
                 ly0 = y0 + 12 + ln * lane_h
-                f.rects("w", xs[m], ly0, xs[m] + cw, ly0 + lane_h - 3, 0.95 * alpha)
+                hud.bars(f, "w", xl[m], ly0, xr[m], ly0 + lane_h - 3, 0.95 * alpha)
             f.segments("r", [x1 - 2], [y0 + 7], [x1 - 2], [y1], 1.2 * alpha, width=L.LW)
 
 
@@ -1191,10 +1242,37 @@ def altitude_rules(f, ctx, st, cam, x_ref, z_ref, lay=None, hmax=17, label_x=Non
 
 
 # ----------------------------------------------------------------------------
-# scene: the hero shower of the intro
+# scene: the anatomy of one air shower
 # ----------------------------------------------------------------------------
 
+H_PLATE = 15.7                  # km of air a plate holds above its ground line
+PLATE_W = 372.0                 # px a component plate needs at the scale of the plates
+PLATE_Y = 262.0                 # the rule under the title of a plate
+X_AIR = 1030.0                  # g/cm2 of air above sea level
+L_INT, X0_AIR = 90.0, 36.6      # g/cm2: nuclear interaction length / radiation length of air
+# the muon tracks (and the hadrons that feed them) stay lit once drawn: a plate keeps what reaches the ground
+KEEP = np.array([0.0, 0.0, 0.3, 0.6, 0.3, 0.0], np.float32)
+# the three components of a shower: (number, title, particle kinds, what the plate says)
+PLATES = {
+    "had": ("01", "HADRONIC CORE", (K_H, K_P),
+            ("P  N  PI+-  K+-", f"INTERACTS EVERY {L_INT:.0f} G/CM2", "FEEDS THE TWO OTHERS")),
+    "em": ("02", "ELECTROMAGNETIC", (K_E, K_G),
+           ("PI0 -> GAMMA GAMMA   8.4E-17 S", "GAMMA -> E+ E-   E -> E GAMMA", f"X0 {X0_AIR:.1f} G/CM2",
+            "ABOUT 90 % OF THE ENERGY", "THINS OUT AFTER ITS MAXIMUM")),
+    "mu": ("03", "MUONS", (K_MU,),
+           ("PI+- -> MU+- NU    26 NS", "K+-  -> MU+- NU    12 NS", "LIFETIME 2.197 US x GAMMA", "REACH THE GROUND")),
+}
+# what stands at these altitudes (km): the scale of the plates, in things one knows
+REFS = ((11.0, "TROPOPAUSE // AIRLINERS", "10-12 KM"), (8.849, "EVEREST", "8.849 KM"),
+        (5.5, "HALF OF THE AIR IS BELOW", "5.5 KM"))
+
+
 class Shower(Scene):
+    """ONE event, taken apart. A fixed elevation of the whole column of air (no camera move: this is a plate,
+    not a chase) stands in the focus bay; in the other bays the same shower, at the same scale and the same
+    instant, is drawn once per component - hadronic core, electromagnetic, muons - so that what is left at the
+    ground reads at a glance: the red ones. DANCE, four minutes later, is the other way of looking at the same
+    physics: many showers, on the grid, from every side."""
     name = "shower"
 
     def __init__(self, ctx):
@@ -1216,257 +1294,249 @@ class Shower(Scene):
             rain.append(dict(t_land=float(tk), target=(float(rng.uniform(-11, 11)), 0.0, float(rng.uniform(-4, 4)))))
         sig = zlib.crc32(np.round([r["t_land"] for r in rain], 3).tobytes()) % 100000   # new audio, new kicks: rebuilt
         self.world = World([spec], rain, seed=4, cache=f"hero_{int(self.t_int * 1000)}_{int(self.t_land * 1000)}_{sig:05d}")
-        # --- layout from the towers ---
-        # view 1 (the hero: tags, MU- 0001, the footprint) lives in the focus bay, on ctx.focus;
-        # view 2 (a second elevation, no tags) takes the widest other bay, if there is one worth it.
-        st = self.st = stage_for(ctx, ctx.focus[0])
+        # --- layout from the towers ---------------------------------------------------------------------
+        # plate 00 (everything: the first interaction and its data, MU- 0001) stands in the focus bay, the
+        # tagged muon landing on ctx.focus; the component plates take the other bays, left to right, one per
+        # PLATE_W of free width (two at most in a bay); a fourth free place holds the references of the scale.
+        st = self.st = Stage(ctx, None)                  # no particle column: the wall itself is the plate
         view = st.view
+        self.y_g = VIEW_Y1 - 40.0                        # the ground line of every plate
+        self.S = (self.y_g - (PLATE_Y + 36.0)) / H_PLATE       # px per km
+        self.cyw = (self.y_g - st.cy) / self.S           # altitude that sits at mid-height of the view
         fb = ctx.focus_bay
-        cands = []
+        self.clip0 = (max(fb[0], view[0]), view[1], min(fb[1], view[2]), view[3])
+        slots = []
         for b in ctx.bays:
             if abs(b[0] - fb[0]) < 1.0 and abs(b[1] - fb[1]) < 1.0:
                 continue
-            a0, a1 = max(b[0], view[0]), min(b[1], view[2])          # what the particle column leaves of it
-            if a1 - a0 >= 550.0:                                     # wide enough for a scale of 75 px per km
-                cands.append((a0, a1))
-        self.bay2 = max(cands, key=lambda b: b[1] - b[0]) if cands else None
-        w1 = fb[1] - fb[0]
-        w2 = (self.bay2[1] - self.bay2[0]) if self.bay2 else w1
-        self.s_side = float(np.clip((min(w1, w2) / 2 - 20) / 3.4, 60.0, 96.0))     # px per km, elevations
-        self.s_top = float(np.clip(w1 / 8.0, 70.0, 110.0))                         # px per km, plan
-        if self.bay2 is None:
-            self.clip1, self.clip2 = view, None
-        elif self.bay2[0] >= fb[1]:
-            split = 0.5 * (fb[1] + self.bay2[0])
-            self.clip1, self.clip2 = (view[0], view[1], split, view[3]), (split, view[1], view[2], view[3])
-        else:
-            split = 0.5 * (self.bay2[1] + fb[0])
-            self.clip1, self.clip2 = (split, view[1], view[2], view[3]), (view[0], view[1], split, view[3])
-        self.x2 = 0.5 * (self.bay2[0] + self.bay2[1]) if self.bay2 else None
-
-    # ------------------------------------------------------------------ cameras
-    def _cam_side(self, a, x_screen, yaw_deg):
-        """Elevation tracking the front: the ground ends just above the bottom band."""
-        w = self.world
-        e = w.events[0]
-        gx, gz = float(e["G"][0]), float(e["G"][2])
-        half = 0.5 * (VIEW_Y1 - VIEW_Y0)
-        c_lo = (half - 30.0) / self.s_side
-        c_hi = max(c_lo, e["h1"] - (half - 130.0) / self.s_side)       # first interaction under the header
-        cy = float(np.clip(w.front(0, a) + 1.2, c_lo, c_hi))
-        yaw = math.radians(yaw_deg)
-        return OrthoCamera((gx + 60 * math.sin(yaw), cy, gz + 60 * math.cos(yaw)), (gx, cy, gz), scale=self.s_side,
-                           screen_center=(x_screen, self.st.cy))
-
-    def _cam_top(self, t, focus):
-        """Plan view centred on the point where the tagged muon lands: MU- 0001 sits exactly on ctx.focus,
-        where the figure of the next scene (YOU) stands; the core of the shower is 1.3 km away from it."""
+            a0, a1 = max(b[0], view[0]), min(b[1], view[2])
+            n = int(min(2, (a1 - a0) // PLATE_W))
+            slots += [(a0 + j * (a1 - a0) / n, a0 + (j + 1) * (a1 - a0) / n) for j in range(n)]
+        slots.sort()
+        names = {0: (), 1: ("mu",), 2: ("em", "mu")}.get(len(slots), ("had", "em", "mu"))
+        self.plates = [(nm, sl) for nm, sl in zip(names, slots)]
+        self.ref_slot = slots[3] if len(slots) > 3 else None
+        # cameras: the same elevation for every plate, only moved sideways
+        e = self.world.events[0]
         y = self.world.you
-        c = y["b"] if y is not None else self.world.events[0]["G"]
-        cx, cz = float(c[0]), float(c[2])
-        u = (t - self.t_land) / max(self.t_out - self.t_land, 1e-3)
-        return OrthoCamera((cx, 40.0, cz + 1e-3), (cx, 0.0, cz), scale=self.s_top * (1.0 + 0.14 * u),
-                           up=(0.0, 0.0, -1.0), screen_center=(float(focus[0]), float(focus[1])),
-                           roll_deg=6.0 + 10.0 * u)
-
-    # ------------------------------------------------------------------ draw
-    def _views(self, ctx, t, a, top):
-        """[(kind, camera, clip)] of the views and the info layout, for the elevations (top=False) or for the
-        plan phase (top=True)."""
-        w, st = self.world, self.st
-        view = st.view
-        e = w.events[0]
-        two = self.clip2 is not None
-        fx = ctx.focus[0]
-        cam1 = self._cam_top(t, ctx.focus) if top else self._cam_side(a, fx, 8.0)
-        views = [("top" if top else "side", cam1, self.clip1)]
-        hw = 3.4 * self.s_side
-        if top:                                   # the footprint: its dense part stays clear of the texts
-            gp = cam1.project(e["G"][None].astype(np.float32))
-            xc, yc = float(gp[0][0]), float(gp[1][0])
-            ch = chord(xc, yc, 2.4 * cam1.scale, view[1] + 100.0)
-            z_top = [ch] if ch else []
-            z_full = [zone(ctx, xc, 3.7 * cam1.scale, ctx.focus_bay)]
-        else:
-            z_top = [(fx - 150.0, fx + 150.0)]
-            z_full = [zone(ctx, fx, hw, ctx.focus_bay)]
-        if two:
-            views.append(("side", self._cam_side(a, self.x2, 98.0), self.clip2))
-            z_top.append((self.x2 - 150.0, self.x2 + 150.0))
-            z_full.append(zone(ctx, self.x2, hw, self.bay2))
-        name = "ORTHO_TOP" if top else ("ORTHO_SIDE X / Z" if two else "ORTHO_SIDE")
-        lay = info_layout(ctx, st, f"VIEW {2 if top else 1:02d} // {name}", cam1,
+        land = y["b"] if y is not None else e["G"]
+        probe = self._cam(0.0)
+        dx = float(probe.project(np.asarray(land, np.float32)[None])[0][0])
+        self.cam0 = self._cam(float(ctx.focus[0]) - dx)  # MU- 0001 lands on the x of ctx.focus
+        gx0 = float(probe.project(np.stack([e["G"], e["P1"]]).astype(np.float32))[0].mean())     # middle of the axis
+        self.cams = [self._cam(0.5 * (sl[0] + sl[1]) - gx0) for _, sl in self.plates]
+        self.x_axis = float(self.cam0.project(e["G"][None].astype(np.float32))[0][0])
+        # the fixed texts: the id lines and the right-hand column, clear of the plates
+        hw = 3.3 * self.S
+        z_full = [zone(ctx, self.x_axis, hw, fb)] + [(0.5 * (sl[0] + sl[1]) - hw, 0.5 * (sl[0] + sl[1]) + hw)
+                                                      for _, sl in self.plates]
+        z_top = [(self.clip0[0], self.clip0[2])] + [sl for _, sl in self.plates]
+        lay = info_layout(ctx, st, "", self.cam0,
                           [("AIR_SHOWER // MUON BLOOM // SHOWER 01", 0.85),
                            (f"E0 {e['E0'] * 3.2:.2f}E15 EV   ZENITH {e['zen']:.1f} DEG", 0.6),
                            (f"GROUND {CITY}", 0.6)],
                           [("AIR_SHOWER // SHOWER 01", 0.85), (f"E0 {e['E0'] * 3.2:.2f}E15 EV", 0.6),
-                           (f"ZENITH {e['zen']:.1f} DEG", 0.6), (CITY, 0.6)],
-                          z_top, z_full, within=(self.clip2[0], self.clip2[2]) if (top and two) else None)
-        return views, lay
+                           (f"ZENITH {e['zen']:.1f} DEG", 0.6), (CITY, 0.6)], z_top, z_full)
+        lay["a"] = lay["scale"] = None                    # the plates carry their own titles
+        lay["boxes"] = []
+        if lay["b"]:                                      # ... and the id lines sit under their rules
+            lay["y0"] = PLATE_Y + 30.0
+            x, lines = lay["b"]
+            w = max(text_w(ln, L.T_SMALL) for ln, _ in lines)
+            lay["boxes"] = [(x - w - 6, lay["y0"] - 20, x + 6, lay["y0"] + (len(lines) - 1) * 26 + 8)]
+        self.lay = lay
+        # time at which the front passes an altitude (the references light up as it goes by)
+        self.c_zen = math.cos(math.radians(e["zen"]))
 
-    def _ground_in(self):
-        """Age of the shower at which the ground comes up into the elevations (the camera follows the front
-        down): what the ground line carries (GROUND tag, ELEVATION X / Z) is made at that moment."""
+    def _cam(self, x_screen):
+        """The elevation of the plates: the whole column, the ground on y_g, the shower axis x_screen px right
+        of where its foot would be with x_screen = 0. It never moves."""
         e = self.world.events[0]
-        f_in = 0.5 * (VIEW_Y1 - VIEW_Y0) / self.s_side - 1.2
-        return e["t1"] + max(0.0, e["h1"] - f_in) / (e["speed"] * math.cos(math.radians(e["zen"])))
+        gx, gz = float(e["G"][0]), float(e["G"][2])
+        yaw = math.radians(8.0)
+        return OrthoCamera((gx + 60 * math.sin(yaw), self.cyw, gz + 60 * math.cos(yaw)), (gx, self.cyw, gz),
+                           scale=self.S, screen_center=(x_screen, self.st.cy))
 
+    def _y(self, h):
+        """Screen y of an altitude (km)."""
+        return self.y_g - self.S * h
+
+    def _t_front(self, h):
+        """Show time at which the front of the shower passes altitude h."""
+        e = self.world.events[0]
+        return e["t0"] + e["t1"] + max(0.0, e["h1"] - h) / (e["speed"] * self.c_zen)
+
+    # ------------------------------------------------------------------ draw
     def draw(self, f, t, ctx):
-        w, st = self.world, self.st
+        w, st, lay = self.world, self.st, self.lay
         view = st.view
         e = w.events[0]
         gx, gz = float(e["G"][0]), float(e["G"][2])
         age, alive, env = w.state(t)
         a = float(age[0])
-        top = t >= self.t_land
-        two = self.clip2 is not None
         kick = min(1.5, ctx.cues.kick(t))
-        views, lay = self._views(ctx, t, a, top)
-        cam1 = views[0][1]
-        # Nothing of the instrument pops in or fades in: it is CONSTRUCTED during the first second of the scene
-        # (age0, each block a little after the other); what the plan view brings is constructed on that cut.
+        cam0 = self.cam0
+        # Nothing of the instrument pops in or fades in: it is CONSTRUCTED during the first half second of the
+        # scene (age0, each block a little after the other), before the primary meets the air.
         age0 = t - self.t_in
-        age_v = (t - self.t_land) if top else age0 - 0.05
-        age_id, age_depth = age0 - 0.15, age0 - 0.1
-        if top:                                   # what the plan view had to move is made again where it is now
-            before = self._views(ctx, t, a, False)[1]
-            if lay["b"] and before["b"] != lay["b"]:
-                age_id = age_v
-            if before["xr"] != lay["xr"]:
-                age_depth = age_v
-        # altitude rules: across the wall while both views are elevations, then only under the second one
+        front = w.front(0, a)
         f.set_clip(*view)
-        if not top:
-            altitude_rules(f, ctx, st, cam1, gx, gz, lay, front=w.front(0, a), age=age0 - 0.1, wave=0.35)
-        elif two:
-            altitude_rules(f, ctx, st, views[1][1], gx, gz, lay, span=(self.clip2[0], self.clip2[2]),
-                           label_x=col_of(ctx, self.x2)[0] + 4, age=age0 - 0.1, label_age=age_v, depth_age=age_depth,
-                           wave=0.25)
+        w.draw_ground(f, cam0, "side", view)
+        altitude_rules(f, ctx, st, cam0, gx, gz, lay, hmax=16, front=front if 0 < front < e["h1"] else None,
+                       age=age0 - 0.1, wave=0.35)
+        self._front_line(f, ctx, t, a, front, age0)
         fixed = tower_boxes(ctx) + lay["boxes"]
-        for j, (kind, cam, clip) in enumerate(views):
+        g = 1.0 + 0.12 * kick
+        # plate 00: everything, with the data of the event
+        f.set_clip(*self.clip0)
+        w.draw_cascades(f, cam0, age, alive, env, gain=g, floor=KEEP)
+        w.draw_hits(f, cam0, age, alive)
+        w.draw_splash(f, cam0, age)
+        self._axis(f, cam0, self.clip0, age0, 72)
+        boxes = w.draw_interaction(f, cam0, age, self.clip0, ctx, avoid=lay["boxes"],
+                                   extra=("P + AIR NUCLEUS (N, O)", "-> PI+-  PI0  K  N"))
+        box = self._the_muon(f, ctx, cam0, t, a, boxes + lay["boxes"], self.clip0, tag=True)
+        if box:
+            boxes.append(box)
+        w.draw_labels(f, cam0, age, alive, self.clip0, avoid=fixed + boxes + [self._head_box(self.clip0)], limit=6)
+        self._plate_head(f, ctx, self.clip0, "00", "AIR SHOWER // ALL OF IT", age0 - 0.05, 60)
+        # plates 01 - 03: the same instant, one component each
+        shower_only = alive.copy()
+        shower_only[1:] = False                           # (the lone muons of the rain fall in plate 00 only)
+        for j, ((name, sl), cam) in enumerate(zip(self.plates, self.cams)):
+            num, title, kinds, says = PLATES[name]
+            clip = (sl[0], view[1], sl[1], view[3])
             f.set_clip(*clip)
-            w.draw_ground(f, cam, kind, clip)
-            w.draw_cascades(f, cam, age, alive, env, gain=1.0 + 0.12 * kick)
-            w.draw_hits(f, cam, age, alive)
-            w.draw_splash(f, cam, age)
-            if j == 0:
-                self._overlay(f, ctx, lay, cam, kind, t, a, clip, age0)
-                boxes = w.draw_interaction(f, cam, age, clip, ctx, avoid=lay["boxes"])
-                box = self._the_muon(f, ctx, cam, kind, t, a, boxes + lay["boxes"], clip)
-                if box:
-                    boxes.append(box)
-                w.draw_labels(f, cam, age, alive, clip, avoid=fixed + boxes, limit=7)
-            else:
-                w.draw_interaction(f, cam, age, clip, tags=False)
-                self._second(f, ctx, cam, t, a, clip, age0)
-                w.draw_labels(f, cam, age, alive, clip, avoid=fixed, limit=4)
+            w.draw_cascades(f, cam, age, shower_only, env, gain=g * (1.25 if name == "had" else 1.0), kinds=kinds,
+                            floor=KEEP)
+            self._axis(f, cam, clip, age0 - 0.05 * (j + 1), 73 + j)
+            w.draw_interaction(f, cam, age, clip, tags=False, cross=False)
+            if name == "mu":
+                w.draw_hits(f, cam, age, shower_only)
+                self._the_muon(f, ctx, cam, t, a, (), clip, tag=False)
+            self._plate_head(f, ctx, clip, num, title, age0 - 0.1 - 0.06 * j, 61 + j, says=says,
+                             age_says=t - self.t_int - 1.0 - 0.25 * j, count=self._count(name, a), red=name == "mu")
+        f.set_clip(*view)
+        self._refs(f, ctx, t, age0)
         f.set_clip()
-        w.draw_column(f, 0, a, st.col, age=age0 - 0.1)
-        w.draw_strip(f, 0, a, label="LONGITUDINAL_PROFILE // SHOWER 01 // ABOVE THIS CITY", pulse=kick, age=age0)
+        w.draw_strip(f, 0, a, label="LONGITUDINAL_PROFILE // SHOWER 01 // ALL (WHITE) // MUONS (RED)", pulse=kick,
+                     age=age0, muons=True)
         self._bottom(f, ctx, t, a, age0)
-        draw_info(f, ctx, lay, age=age_v, age_id=age_id)
+        draw_info(f, ctx, lay, age=age0 - 0.15)
         return {"invert": 0.0 <= t - self.t_int < 0.05, "invert_rect": view}
 
-    def _overlay(self, f, ctx, lay, cam, kind, t, a, clip, age0):
-        w, st = self.world, self.st
-        view = st.view
-        e = w.events[0]
-        front = w.front(0, a)
-        if kind == "side":
-            f.set_clip(*view)
-            if 0 < front < e["h1"]:                                   # the front: one red line across the wall
-                P = np.array([[float(e["G"][0]), front, float(e["G"][2])]], np.float32)
-                y = float(cam.project(P)[1][0])
-                # drawn by a pen from the left when the primary interacts; its tag is made when the pen gets there
-                with f.build(a - e["t1"], (view[0], y - 34.0, view[2], y + 8.0), flow="lr", wave=0.3, marks=False, key=70):
-                    f.segments("r", [view[0]], [y], [view[2]], [y], 0.9, width=L.LW)
-                    put_right(f, ctx, st, lay, "r", y - 9, f"FRONT {front:06.3f} KM", size=L.T_LABEL, pad=5)
-            gy = float(cam.project(e["G"][None].astype(np.float32))[1][0])
-            age_g = a - self._ground_in()                             # the ground has come up into the view
-            if view[1] < gy < view[3]:
-                with f.build(age_g, (view[0], gy - 34.0, view[2], gy + 8.0), flow="rl", wave=0.1, marks=False, key=71):
-                    put_right(f, ctx, st, lay, "w", gy - 9, f"GROUND // {CITY}", size=L.T_SMALL, pad=4)
-            f.set_clip(*clip)
-            ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
-            with f.build(age0 - 0.1, clip, flow="bt", wave=0.2, marks=False, key=72):      # the axis of the shower
-                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5)
-            if self.clip2 is not None and view[1] < float(ay[0]) < view[3]:
-                with f.build(age_g, tbox(float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION X", L.T_SMALL), wave=0.05,
-                             marks=False, key=73):
-                    put_text(f, ctx, "w", float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION X", size=L.T_SMALL, alpha=0.7)
-        else:
-            gx, gy, _, _ = cam.project(e["G"][None].astype(np.float32))
-            X, Y = float(gx[0]), float(gy[0])
-            # the plan view brings its own marks: cross-hair, range rings and their labels grow out of the core
-            with f.build(t - self.t_land, clip, flow="out", origin=(X, Y), wave=0.3, marks=False, key=74):
-                f.segments("r", [X, X, X, X], [Y, Y, Y, Y], [clip[0], clip[2], X, X], [Y, Y, clip[1], clip[3]], 0.45)
-                sc = cam.scale
-                f.rings("w", [X] * 4, [Y] * 4, [sc * r for r in (1, 2, 4, 8)], 0.25)
-                for r in (1, 2, 4, 8):
-                    if X + sc * r + 70 < min(clip[2], st.tx1):
-                        put_text(f, ctx, "w", X + sc * r + 7, Y - 8, f"{r} KM", size=L.T_SMALL, alpha=0.6)
-                put_tag(f, ctx, "r", X - 12, Y - 14, "CORE", size=L.T_SMALL, pad=4, anchor="rs")
+    # ------------------------------------------------------------------ the plates
+    @staticmethod
+    def _head_box(clip):
+        return (clip[0], PLATE_Y - 30.0, clip[2], PLATE_Y + 8.0)
 
-    def _second(self, f, ctx, cam, t, a, clip, age0):
-        """The second elevation: no tags, only its name and the tagged muon as a bolder track."""
+    def _plate_head(self, f, ctx, clip, num, title, age, key, says=(), age_says=None, count=None, red=False):
+        """Title of a plate: a rule across its bay with its number and name sitting on it, its live count at the
+        right end; under it, what the plate says (age_says = seconds since those lines started to be written:
+        they come once the burst of the first interaction has cleared). Constructed, never faded."""
+        x0, x1 = clip[0] + 14.0, clip[2] - 14.0
+        if x1 - x0 < 120.0:
+            return
+        with f.build(age, (x0 - 6, PLATE_Y - 34, x1 + 6, PLATE_Y + 8), flow="lr", wave=0.25, marks=False, key=key):
+            f.rects("w", x0, PLATE_Y, x1, PLATE_Y + 4, 0.95)
+            f.tag("r" if red else "w", x0 + 4, PLATE_Y - 10, f"{num} // {title}", size=L.T_LABEL, pad=4)
+            if count is not None and x1 - x0 > 330.0:
+                f.text("r" if red else "w", x1 - 2, PLATE_Y - 9, f"N {count:05d}", size=L.T_SMALL, alpha=0.9, anchor="rs")
+        if not says:
+            return
+        with f.build(age_says, (x0 - 6, PLATE_Y + 10, x1 + 6, PLATE_Y + 14 + 21 * len(says)), flow="tb", wave=0.3,
+                     marks=False, cps=70.0, key=key + 20):
+            for k, s in enumerate(says):
+                last = k == len(says) - 1
+                put_text(f, ctx, "r" if (red and last) else "w", x0 + 4, PLATE_Y + 28 + 21 * k, s, size=L.T_MICRO,
+                         alpha=0.95 if last else 0.7)
+
+    def _count(self, name, a):
+        c = {lab: n for lab, n, _ in self.world.counts(0, a)}
+        return {"had": c["HADRON"], "em": c["E+-"] + c["GAMMA"], "mu": c["MU+-"]}[name]
+
+    def _axis(self, f, cam, clip, age, key):
+        """The axis of the shower in a plate: a thin red line from the ground to the first interaction."""
         e = self.world.events[0]
         ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
-        with f.build(age0 - 0.15, clip, flow="bt", wave=0.2, marks=False, key=75):          # the axis of the shower
-            f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5)
-        if clip[1] < float(ay[0]) < clip[3]:
-            with f.build(a - self._ground_in(), tbox(float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION Z", L.T_SMALL),
-                         wave=0.05, marks=False, key=76):
-                put_text(f, ctx, "w", float(ax[0]) + 44, float(ay[0]) - 14, "ELEVATION Z", size=L.T_SMALL, alpha=0.7)
-        y = self.world.you
-        if y is None or a < y["t0"]:
-            return
-        prog = float(np.clip((a - y["t0"]) / (y["t1"] - y["t0"]), 0.0, 1.0))
-        A, B_ = y["a"], y["b"]
-        sx, sy, _, ok = cam.project(np.stack([A, A + (B_ - A) * prog]).astype(np.float32))
-        if ok.all():
-            f.segments("r", sx[:1], sy[:1], sx[1:], sy[1:], 1.0, width=L.LW_BOLD)
-            if prog < 1.0:
-                f.rings("r", sx[1:], sy[1:], [13.0], 0.9, width=L.LW)
+        with f.build(age, clip, flow="tb", wave=0.2, marks=False, key=key):          # drawn the way it will come
+            f.segments("r", [ax[1]], [ay[1]], [ax[0]], [ay[0]], 0.4)
 
-    def _the_muon(self, f, ctx, cam, kind, t, a, avoid, clip):
-        """The tagged muon: a brighter red track, a tag that follows its head, a red target where it lands."""
+    def _front_line(self, f, ctx, t, a, front, age0):
+        """The front: one red line across every plate, at the same altitude in all of them; the ground and its
+        name under them."""
+        st, lay = self.st, self.lay
+        view = st.view
+        e = self.world.events[0]
+        if 0 < front < e["h1"]:
+            y = self._y(front)
+            # drawn by a pen from the left when the primary interacts; its tag is made when the pen gets there
+            with f.build(a - e["t1"], (view[0], y - 34.0, view[2], y + 8.0), flow="lr", wave=0.3, marks=False, key=70):
+                f.segments("r", [view[0]], [y], [view[2]], [y], 0.9, width=L.LW)
+                put_right(f, ctx, st, lay, "r", y - 9, f"FRONT {front:06.3f} KM", size=L.T_LABEL, pad=5)
+        with f.build(age0 - 0.3, (view[0], self.y_g - 34.0, view[2], self.y_g + 8.0), flow="rl", wave=0.2, marks=False,
+                     key=71):
+            put_right(f, ctx, st, lay, "w", self.y_g - 9, f"GROUND // {CITY}", size=L.T_SMALL, pad=4)
+
+    def _refs(self, f, ctx, t, age0):
+        """What stands at these altitudes: a tick and two words in the free place at the end of the plates (or
+        nothing, when the towers leave none). Each one turns red while the front goes by."""
+        if self.ref_slot is None:
+            return
+        x0 = self.ref_slot[0] + 22.0
+        for k, (h, name, alt) in enumerate(REFS):
+            y = self._y(h)
+            hot = 0.0 <= t - self._t_front(h) < 0.7
+            box = (x0 - 4, y - 24, x0 + 14 + text_w(name, L.T_MICRO), y + 22)
+            if hidden(ctx, *box):
+                continue
+            with f.build(age0 - 0.25 - 0.08 * k, box, flow="lr", wave=0.15, marks=False, key=66 + k):
+                f.segments("r" if hot else "w", [x0], [y], [x0 + 46], [y], 1.0, width=L.LW_BOLD)
+                f.text("r" if hot else "w", x0, y - 8, name, size=L.T_MICRO, alpha=0.9)
+                f.text("w", x0, y + 18, alt, size=L.T_MICRO, alpha=0.6)
+
+    def _the_muon(self, f, ctx, cam, t, a, avoid, clip, tag=True):
+        """The tagged muon: a brighter red track, a ring on its head, a red target where it lands - on the x of
+        ctx.focus, at the feet of the figure of the next scene. tag=False (the muon plate): the track only."""
         y = self.world.you
         if y is None or a < y["t0"]:
             return None
         prog = float(np.clip((a - y["t0"]) / (y["t1"] - y["t0"]), 0.0, 1.0))
         A, B_ = y["a"], y["b"]
-        head = A + (B_ - A) * prog
-        P = np.stack([A, head, B_]).astype(np.float32)
+        P = np.stack([A, A + (B_ - A) * prog, B_]).astype(np.float32)
         sx, sy, _, ok = cam.project(P)
         if not ok.all():
             return None
-        f.segments("r", sx[:1], sy[:1], sx[1:2], sy[1:2], 1.2, width=L.LW_BOLD)
+        f.segments("r", sx[:1], sy[:1], sx[1:2], sy[1:2], 1.25 if tag else 1.0, width=L.LW_BOLD)
         hx, hy = float(sx[1]), float(sy[1])
+        tx_, ty_ = float(sx[2]), float(sy[2])
+        if prog < 1.0:
+            f.rings("r", [hx], [hy], [15.0 if tag else 12.0], 0.9, width=L.LW)
+        if not tag:
+            return None
         gam = y["E"] / 0.10566
         t_lab = float(np.linalg.norm(B_ - A)) / 299792.458 * 1e6          # us
-        if kind == "side":
-            tx_, ty_ = float(sx[2]), float(sy[2])                        # where it is going: a red target
-            if clip[1] < ty_ < clip[3]:
-                f.rings("r", [tx_], [ty_], [16.0], 0.9, width=L.LW)
-                f.crosses("r", [tx_], [ty_], 26.0, 0.9)
+        f.rings("r", [tx_], [ty_], [16.0], 0.9, width=L.LW)              # where it is going: a red target
+        f.crosses("r", [tx_], [ty_], 26.0, 0.9)
+        if prog < 1.0:
             if not (clip[1] + 30 < hy < clip[3] - 10):
                 return None
             f.dots("r", [hx], [hy], 5.0, 1.8)
             f.dots("w", [hx], [hy], 2.0, 1.2)
-            f.rings("r", [hx], [hy], [15.0], 0.9, width=L.LW)
             return auto_callout(f, ctx, clip, hx, hy, "MU- 0001",
                                 [f"E {y['E']:.3f} GEV", f"GAMMA {gam:.1f}", f"T-{max(0.0, self.t_land - t):05.3f} S"],
                                 red=True, avoid=avoid, prefer=(1, -1), build=a - y["t0"])
-        al = max(0.0, t - self.t_land)
+        al = max(0.0, t - self.t_land)                                   # landed: a ring runs out of the point
         u = min(1.0, al / 0.9)
-        f.rings("r", [hx, hx], [hy, hy], [14.0, 14.0 + 90.0 * (1 - (1 - u) ** 3)], [1.0, 0.9 * (1 - u)],
-                width=L.LW_BOLD)
-        f.crosses("r", [hx], [hy], 34.0, 1.0, width=L.LW)
-        f.dots("w", [hx], [hy], 3.4, 1.5)
-        return auto_callout(f, ctx, clip, hx, hy, "MU- 0001",
+        ang = np.linspace(0.0, 2 * np.pi, 97)
+        rr = 16.0 + 90.0 * (1 - (1 - u) ** 3)
+        f.polyline("r", tx_ + rr * np.cos(ang), ty_ + rr * np.sin(ang), 0.9 * (1 - u), width=L.LW_BOLD)
+        f.dots("w", [tx_], [ty_], 3.4, 1.5)
+        return auto_callout(f, ctx, clip, tx_, ty_, "MU- 0001",
                             ["ARRIVED", f"T {t_lab:.1f} US", f"TAU' {t_lab / gam:.2f} US", ">> THROUGH..."],
-                            red=True, avoid=avoid, prefer=(1, 1), dx=40.0, dy=64.0, build=al)
+                            red=True, avoid=avoid, prefer=(1, -1), dx=44.0, dy=170.0, build=al)
 
+    # ------------------------------------------------------------------ bottom band
     def _bottom(self, f, ctx, t, a, age0):
         """Bottom band, before the detectors are revealed: the blocks flow into the panels between the towers.
         Each panel is constructed at the start of the scene, one after the other."""
@@ -1474,7 +1544,8 @@ class Shower(Scene):
         sl = ctx.slots_pre
         y0, y1 = sl["y0"], sl["y1"]
         place = flow(bottom_panels(ctx, pre=True),
-                     [("time", 400.0, 610.0), ("count", 200.0, 470.0), ("bar", 160.0, 0.0, True)])
+                     [("time", 400.0, 610.0), ("mix", 250.0, 470.0), ("depth", 220.0, 0.0, True)])
+        front = w.front(0, a)
         if "time" in place:
             x0, x1 = place["time"]
             wide = x1 - x0 >= 560
@@ -1485,7 +1556,7 @@ class Shower(Scene):
                 if rem > 0:
                     f.text("w", x0 + 2, y0 + 96, f"T-{rem:06.3f} S", size=size)
                     if wide:
-                        f.text("w", x1 - 4, y0 + 46, f"ALT {min(w.front(0, a), 99.0):06.3f} KM", size=L.T_SMALL, alpha=0.8,
+                        f.text("w", x1 - 4, y0 + 46, f"ALT {min(front, 99.0):06.3f} KM", size=L.T_SMALL, alpha=0.8,
                                anchor="rs")
                         f.text("w", x1 - 4, y0 + 72, "V 0.9998 C", size=L.T_SMALL, alpha=0.6, anchor="rs")
                         slow = (self.t_land - self.t_int) / (w.events[0]["h1"] / 299792.458)
@@ -1499,7 +1570,47 @@ class Shower(Scene):
                            size=L.T_SMALL, anchor="rs")
                     f.text("w", x1 - 4, y0 + 72, B.resolve(CITY, al, 70.0, 0.25, key=80, pad=True), size=L.T_SMALL,
                            alpha=0.7, anchor="rs")
-        if "count" in place:
-            w.draw_counters(f, 0, a, place["count"][0], place["count"][1], y0, age=age0 - 0.3)
-        if "bar" in place:
-            w.draw_barcode(f, t, place["bar"][0], place["bar"][1], y0, y1, age=age0 - 0.4)
+        if "mix" in place:
+            self._mix(f, a, place["mix"][0], place["mix"][1], y0, y1, age0 - 0.3)
+        if "depth" in place:
+            self._depth(f, front, place["depth"][0], place["depth"][1], y0, y1, age0 - 0.4)
+
+    def _mix(self, f, a, x0, x1, y0, y1, age):
+        """What the shower is made of: tracks born so far per component, on a log scale (a decade per tick)."""
+        with f.build(age, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), wave=0.3, key=51):
+            hud.panel_header(f, x0, x1, y0, "COMPOSITION // TRACKS // LOG" if x1 - x0 >= 330 else "COMPOSITION")
+            bx0, bx1 = x0 + 122.0, x1 - 86.0
+            dec = 4.0                                      # the bar is full at 10 000
+            for r, (lab, name) in enumerate((("HADRONS", "had"), ("E+- GAMMA", "em"), ("MU+-", "mu"))):
+                n = self._count(name, a)
+                lay = "r" if name == "mu" else "w"
+                yy = y0 + 30 + r * 31
+                f.text(lay, x0 + 2, yy + 13, lab, size=L.T_MICRO, alpha=0.9)
+                f.segments("w", [bx0], [yy + 18], [bx1], [yy + 18], 0.35)
+                xt = bx0 + np.arange(0, dec + 0.01) / dec * (bx1 - bx0)
+                f.segments("w", xt, np.full_like(xt, yy + 18), xt, np.full_like(xt, yy + 12), 0.6)
+                if n > 0:
+                    hud.bars(f, lay, bx0, yy + 2, bx0 + min(1.0, math.log10(n + 1.0) / dec) * (bx1 - bx0), yy + 14, 0.95)
+                f.text(lay, x1 - 2, yy + 14, f"{n:05d}", size=L.T_SMALL, alpha=0.95, anchor="rs")
+
+    def _depth(self, f, front, x0, x1, y0, y1, age):
+        """How much air the front has gone through: the atmosphere as an absorber, in g/cm2. A long tick per
+        nuclear interaction length (11 of them down to the ground), a short one per radiation length (28)."""
+        X = X_AIR * math.exp(-min(front, 40.0) / 8.4)
+        with f.build(age, (x0 - 8, y0 - 24, x1 + 8, y1 + 8), wave=0.3, key=52):
+            hud.panel_header(f, x0, x1, y0, "AIR ABOVE THE FRONT // G/CM2" if x1 - x0 >= 300 else "AIR // G/CM2")
+            rx0, rx1 = x0 + 4.0, x1 - 4.0
+            yr = y0 + 64.0
+            px = lambda v: rx0 + np.asarray(v, np.float64) / X_AIR * (rx1 - rx0)
+            f.segments("w", [rx0], [yr], [rx1], [yr], 0.8)
+            xs = px(np.arange(0.0, X_AIR + 0.1, X0_AIR))
+            f.segments("w", xs, np.full_like(xs, yr), xs, np.full_like(xs, yr - 7), 0.6)
+            xl = px(np.arange(0.0, X_AIR + 0.1, L_INT))
+            f.segments("w", xl, np.full_like(xl, yr), xl, np.full_like(xl, yr - 20), 0.9)
+            xc = float(px(X))
+            hud.bars(f, "w", rx0, yr + 5, xc, yr + 11, 0.9)          # the air it has crossed
+            f.segments("r", [xc], [yr - 28], [xc], [yr + 16], 1.2, width=L.LW)
+            f.text("w", x0 + 2, y0 + 34, f"X {X:06.1f}", size=L.T_SMALL, alpha=0.95)
+            f.text("w", x1 - 2, y0 + 34, f"OF {X_AIR:.0f}", size=L.T_MICRO, alpha=0.6, anchor="rs")
+            f.text("w", x0 + 2, y0 + 100, f"{X / L_INT:04.1f} INTERACTION LENGTHS", size=L.T_MICRO, alpha=0.8)
+            f.text("w", x0 + 2, y0 + 120, f"{X / X0_AIR:04.1f} RADIATION LENGTHS", size=L.T_MICRO, alpha=0.8)

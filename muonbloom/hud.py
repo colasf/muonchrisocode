@@ -68,10 +68,14 @@ def _is_hero(cue):
     return cue.text.lower().strip(". ") in HERO
 
 
+BOX_HOLD = 1.2                        # s: a pause shorter than this leaves no time to close the box and open it again
+
+
 def subtitle_box_alpha(t):
     """The box is there while somebody speaks (and across short pauses inside a paragraph).
     0..1 = how far it is open: it slides open from the right edge of the frame before the first word and
-    closes again after the last one (it does not fade)."""
+    closes again after the last one (it does not fade). Between two lines less than BOX_HOLD apart it stays
+    open whatever the paragraph: it would only start to close and come back (and the score strip with it)."""
     cues = [c for c in sd.subtitles() if not _is_hero(c)]         # the single words are set as tags, no box
     a = 0.0
     for k, c in enumerate(cues):
@@ -79,7 +83,8 @@ def subtitle_box_alpha(t):
             a = max(a, float(smoothstep(c.t - 0.35, c.t - 0.1, t) * (1 - smoothstep(c.end + 0.2, c.end + 0.7, t))))
         if k + 1 < len(cues):
             n = cues[k + 1]
-            if c.end <= t < n.t and n.group == c.group and n.t - c.end < 4.0:
+            gap = n.t - c.end
+            if c.end <= t < n.t and ((n.group == c.group and gap < 4.0) or gap < BOX_HOLD):
                 a = 1.0
     return a
 
@@ -293,15 +298,68 @@ def rows(f, x, y, lines, size=L.T_SMALL, lead=1.5, alpha=0.9, layer="w", red=())
     return y + len(lines) * size * lead
 
 
-def barcode_lanes(f, x0, x1, y0, y1, density, keys, lanes=3, seed=0, layer="w", inten=0.95):
-    """Scrolling 'test pattern' barcode: one column per key, lit with the given density (0..1)."""
-    n = len(keys)
+def bars(f, layer, x0, y0, x1, y1, i):
+    """Filled bars that slide smoothly. Frame.rects snaps to whole pixels: a bar that moves by a fraction of a
+    pixel per frame would advance in uneven jumps and change width on the way. Here the two edge columns of
+    a bar are lit by the fraction of the pixel it covers, so it glides at any speed (its top and bottom stay
+    snapped: a barcode does not move up or down)."""
+    x0, x1 = np.atleast_1d(np.asarray(x0, np.float64)), np.atleast_1d(np.asarray(x1, np.float64))
+    shape = np.broadcast_shapes(x0.shape, x1.shape, np.shape(y0), np.shape(y1), np.shape(i))
+    if len(shape) != 1 or shape[0] == 0:
+        return
+    x0, x1, y0, y1, i = (np.broadcast_to(np.asarray(v, np.float64), shape) for v in (x0, x1, y0, y1, i))
+    k = f.s * f.vz
+    off = f.vsx * f.s - f.vcx * k               # Frame.tx(x) = x * k + off
+    a, b = x0 * k + off + 0.5, x1 * k + off + 0.5       # window coordinates: pixel j covers [j, j + 1)
+    m = b > a
+    if not m.any():
+        return
+    a, b, y0, y1, i = a[m], b[m], y0[m], y1[m], i[m]
+    pa, pb = np.floor(a), np.floor(b)
+    one = pa == pb                              # the whole bar inside one pixel column
+    px0 = np.concatenate([pa, pa[~one] + 1.0, pb[~one]])
+    px1 = np.concatenate([pa + 1.0, pb[~one], pb[~one] + 1.0])
+    cov = np.concatenate([np.where(one, b - a, pa + 1.0 - a), np.ones(int((~one).sum())), (b - pb)[~one]])
+    pick = np.concatenate([np.arange(len(a)), np.nonzero(~one)[0], np.nonzero(~one)[0]])
+    f.rects(layer, (px0 - off) / k, y0[pick], (px1 - off) / k, y1[pick], i[pick] * cov)
+
+
+def barcode_keys(t, span, n):
+    """Time slots of a barcode that shows the last `span` seconds in n columns: (keys, frac, dt).
+    keys = n + 1 slot numbers (slot k covers k * dt .. (k + 1) * dt; the newest one is being written at the
+    right edge), frac = how far the pattern has slid towards the next slot (0..1), dt = seconds per slot.
+    Give `frac` to barcode_lanes / barcode_cols: the bars then slide instead of jumping a column at a time."""
+    dt = span / n
+    u = (t - span) / dt
+    kf = math.floor(u)
+    return kf + np.arange(n + 1), u - kf, dt
+
+
+def barcode_cols(x0, x1, n, frac):
+    """Left and right x of the n + 1 columns of a sliding barcode (see barcode_keys), kept inside x0 .. x1:
+    the oldest column leaves under the left edge while the newest one is written at the right edge."""
     cw = (x1 - x0) / n
+    xa = x0 + (np.arange(n + 1) - frac) * cw
+    return np.maximum(xa, x0), np.minimum(xa + cw, x1)
+
+
+def barcode_lanes(f, x0, x1, y0, y1, density, keys, lanes=3, seed=0, layer="w", inten=0.95, frac=None):
+    """Scrolling 'test pattern' barcode: one column per key, lit with the given density (0..1).
+    frac (with the keys of barcode_keys: one more key than columns) = how far the pattern has slid since the
+    last whole column: the bars glide to the left instead of jumping one column at a time."""
+    n = len(keys)
     lane_h = (y1 - y0) / lanes
-    xs = x0 + np.arange(n) * cw
+    if frac is None:
+        cw = (x1 - x0) / n
+        xs = x0 + np.arange(n) * cw
+        for ln in range(lanes):
+            on = hash01(keys, ln + 3 + seed) < np.asarray(density) * (1.0 - 0.18 * ln)
+            f.rects(layer, xs[on], y0 + ln * lane_h, xs[on] + cw, y0 + (ln + 1) * lane_h - 3, inten)
+        return
+    xl, xr = barcode_cols(x0, x1, n - 1, frac)
     for ln in range(lanes):
-        on = hash01(keys, ln + 3 + seed) < np.asarray(density) * (1.0 - 0.18 * ln)
-        f.rects(layer, xs[on], y0 + ln * lane_h, xs[on] + cw, y0 + (ln + 1) * lane_h - 3, inten)
+        on = (hash01(keys, ln + 3 + seed) < np.asarray(density) * (1.0 - 0.18 * ln)) & (xr > xl)
+        bars(f, layer, xl[on], y0 + ln * lane_h, xr[on], y0 + (ln + 1) * lane_h - 3, inten)
 
 
 def barcode_burst(f, rect, t, u, lanes=8, seed=0):

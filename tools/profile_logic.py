@@ -2,6 +2,7 @@
 
   python tools/profile_logic.py              the whole show, one frame every 0.25 s
   python tools/profile_logic.py --step 0.1   finer
+  python tools/profile_logic.py --look dance glitch      only these looks (names of showdata.SECTIONS)
 
 The frame used here only counts what the scenes ask it to draw (no splats, no PIL, no bloom): what is left
 is the Python / numpy time a scene needs to decide what to draw - the part a GPU renderer does not replace -
@@ -94,6 +95,7 @@ class NullFrame(engine.Frame):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--step", type=float, default=0.25, help="seconds between the frames that are timed")
+    ap.add_argument("--look", nargs="*", default=None, help="only these looks")
     a = ap.parse_args()
     show_mod.Frame = NullFrame
     hud.finish = lambda f, **kw: None
@@ -104,6 +106,8 @@ def main():
             looks.append([look, t0, t1])
         else:
             looks[-1][2] = t1
+    if a.look:
+        looks = [k for k in looks if k[0] in a.look]
     print(f"{'look':<13} {'frames':>6} {'median':>8} {'p95':>8} {'max':>8}   {'segments':>9} {'dots':>8} {'pixels':>8} "
           f"{'rects':>7} {'glyphs':>7}   (ms per frame; items = largest frame of the scene)")
     allms = []

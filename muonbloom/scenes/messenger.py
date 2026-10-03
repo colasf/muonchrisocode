@@ -11,7 +11,9 @@ to us - where the atmosphere waits at 01:07.
                      what happened on Earth meanwhile, the two clocks (Earth / on board)
   00:56  DRUMS       red rings pulse around it on every accent ("travelling close to the speed of light")
   01:02  GALAXIES    the last galaxies fall behind (M87, M101, Andromeda ...), then darkness, then the limb
-                     of the atmosphere rises from the bottom of the wall
+                     of the atmosphere rises from the bottom of the wall. A galaxy that is named keeps its
+                     name ON ONE SIDE for its whole life: its lane, the side and the moments its name is made
+                     and taken apart are planned once from the towers (_plan_tags), not tested frame by frame
 
 THE TOWERS stand in front of the wall for the whole show, nobody knows yet where: all the geometry comes
 from origin.Lay (ctx.focus, ctx.cols, ctx.slots_pre, ctx.cell_r). The messenger, its trail and its red
@@ -34,8 +36,8 @@ from .. import layout as L
 from .. import showdata as sd
 from ..engine import Camera, smoothstep, text_w
 from ..show import Scene
-from .origin import (FOCAL, FOV, FRAME_CLIP, T_END, T_HERE, YEAR0, Lay, Nova, Ripples, card, cell_right, header_gap,
-                     hero_note, note, title_fit)
+from .origin import (CARD_Y, FOCAL, FOV, FRAME_CLIP, T_END, T_HERE, YEAR0, Lay, Nova, Ripples, _note_col, card, cell_right,
+                     header_gap, hero_note, note, swell, title_fit)
 
 T0, T1 = 44.0, 67.0
 T_ALONE = 47.97                      # the triplet pulse starts: only the messenger is left
@@ -46,6 +48,14 @@ T_GALAX = sd.said("Through galaxies", 62.97)
 ACCENTS = np.array([56.0, 58.64, 61.30, 63.97, 66.63])      # the drum accents of 1.2
 GAMMA = 3.4e6                        # a 3.2E15 eV proton
 GAL_LIFE = 2.3                       # seconds a galaxy stays in the picture
+TAG_AGES = (0.2, GAL_LIFE - 0.5)     # a galaxy may wear its name between these ages
+TAG_MIN = 0.8                        # ... if it can keep it that long on one side; else it goes by unnamed
+TAG_GOOD = 1.0                       # a lane where it keeps it this long (and is seen) is taken as it is
+TAG_MAX = 3                          # names on the wall at a time
+MARKS = (1, 2)                       # the distance marks of the trail that may carry a figure (150 px apart)
+LIMB = ((0.0, "100 KM // KARMAN LINE"), (46.0, "50 KM // STRATOPAUSE"), (84.0, "15 KM // TROPOPAUSE"),
+        (112.0, "CINCINNATI 0.147 KM"))      # the lines of the limb (px under its top) and their names
+LANES = (0.0, 0.04, -0.04, 0.08, -0.08, 0.12, -0.12)      # how far a galaxy may be moved (in wall position u)
 
 # years before now on a log scale: slow among the billions, a plunge at the end (TD: one decade every 5 s)
 _YT = [44.0, 48.4, 56.6, 62.3, 63.5, 64.1, 65.4, 66.3, 66.8, 67.0]
@@ -109,6 +119,11 @@ class Messenger(Scene):
         self.g_ell = e[np.hypot(e[:, 0], e[:, 1]) < 1.0]
         c = np.array([[-0.35, 0.1], [0.25, -0.15], [0.05, 0.3]])
         self.g_irr = c[g.integers(0, 3, 500)] + g.normal(0, 0.2, (500, 2))
+        self.gal_x = [self._gal_x(p[4]) for p in PASSED]              # where each galaxy comes up (its lane)
+        self.tag_plan = self._plan_tags()
+        self.mark_plan = {j: self._spans(lambda t, j=j: self._mark_free(j, t), T_ALONE + 0.09 * (j + 1) + 0.1, T1, 2.0)
+                          for j in MARKS}                             # when a mark of the trail can be read
+        self.limb_in = self._plan_limb()                              # when each label of the limb is written
 
     # ------------------------------------------------------------------ geometry
     def _travel(self, t):
@@ -167,9 +182,10 @@ class Messenger(Scene):
             g = 1.0 - float(smoothstep(T_ALONE - 1.6, T_ALONE + 0.2, t))
             self.nova.draw_plane(f, cam, self.rip, t, gain=g)
             near = FOCAL * 1.5 / (FOCAL * 1.5 + self._travel(t))
-            f.dots("w", [V[0]], [V[1]], 36.0 * near + 5.0, 1.6)
-            f.dots("w", [V[0]], [V[1]], 120.0 * near, 0.10 * g)
-            self.nova.draw_rays(f, cam, t, gain=1.0)
+            c = ctx.cues                        # as in origin._nova: the music swells the glare, it does not make it jump
+            beat = 1.6 * swell(c.onset_t, c.onset_a, t, 0.1, 0.12) + swell(c.kick_t, c.kick_a, t, 0.1, 0.12)
+            self.nova.draw_core(f, V[0], V[1], t, beat=beat * g, scale=near, gain=g)      # the star left behind
+            self.nova.draw_rays(f, cam, t, gain=1.0 + 0.35 * g)
         gal = self._galaxies(f, t, V)
         self._limb(f, t, T)
         self._messenger(f, t, ctx, T, V)
@@ -238,6 +254,167 @@ class Messenger(Scene):
         d = u * (la + lb)
         return a0 + d if d < la else b0 + (d - la)
 
+    def _gal_at(self, k, a, xt=None):
+        """Where galaxy k is `a` seconds after it came up under the wall (at xt: its lane), and its radius: it
+        falls back up towards the star and shrinks."""
+        tp, size = PASSED[k][0], PASSED[k][5]
+        V = self._vanish(tp + a)
+        xt, yt = self.gal_x[k] if xt is None else xt, L.FY1 + 160.0
+        s = 1.0 / (1.0 + a / 4.0)
+        return V[0] + (xt - V[0]) * s, V[1] + (yt - V[1]) * s, size * 230.0 / (1.0 + a / 1.1)
+
+    # -- the names of the galaxies ---------------------------------------------------------
+    # A galaxy crosses the wall in two seconds, and what stands in its way (a tower, the card, a note, the
+    # messenger, the header) is known in advance: so which galaxy is named, ON WHICH SIDE and from when to when
+    # is decided once, here, not at every frame. A name keeps its side for its whole life and travels with its
+    # galaxy; it is constructed when its way is clear and taken apart before it would run into something
+    # (asking "is the right free? else the left" at every frame made the names hop from one side to the other).
+    # The lane of a galaxy is chosen with it: where it would rise behind a tower, or where its name would find
+    # no room, it comes up a little further along the wall.
+    @staticmethod
+    def _tag_text(k):
+        name, dist = PASSED[k][1], PASSED[k][2]
+        lines = [dist + " FROM HERE", "FALLING BEHIND"]
+        return name, lines, max(text_w(name, L.T_TAG) + 12.0, max(text_w(s, L.T_SMALL) for s in lines))
+
+    @staticmethod
+    def _tag_geom(x, y, R, side, w):
+        """Anchor of the name on its galaxy, and the rectangle the name takes on that side."""
+        ax, ay = x + side * R * 0.45, y - R * 0.2
+        tx = ax + side * 88.0
+        return ax, ay, (min(tx, tx + side * w) - 8.0, ay - 38.0 - 24.0, max(tx, tx + side * w) + 8.0, ay - 38.0 + 70.0)
+
+    def _taken(self, t):
+        """What stands on the wall at t, where a name must not go: the messenger, the card, the note."""
+        lay = self.lay
+        T = self._tip(t)
+        out = [(T[0] - 255.0, T[1] - 255.0, T[0] + 255.0, T[1] + 255.0)]
+        if lay.card is not None:
+            out.append((lay.card[0] + 2.0, CARD_Y - 46.0, lay.card[1] + 10.0, CARD_Y + 36.0 + 8 * 26.0))
+        col, _ = _note_col(lay)                             # (a note is gone when it has been taken apart: _notes)
+        if col is not None and (T_INVISIBLE + 0.3 <= t < T_SPEED - 0.3 or T_SPEED <= t < T_GALAX - 0.4):
+            out.append((col[0], self.C[1] - 290.0, col[1], self.C[1] - 62.0))
+        return out
+
+    @staticmethod
+    def _spans(ok, t0, t1, min_len, dt=1.0 / 60.0):
+        """[(from, to)]: the stretches of [t0, t1] of at least min_len seconds during which ok(t) holds. What a
+        label that travels needs to know once, so that it is made when it has room and taken apart before it
+        loses it - instead of being switched on and off by a test at every frame."""
+        out, a = [], None
+        n = int(round((t1 - t0) / dt))
+        for i in range(n + 2):
+            t = t0 + i * dt
+            good = i <= n and ok(t)
+            if good and a is None:
+                a = t
+            elif not good and a is not None:
+                if t - dt - a >= min_len:
+                    out.append((a, t - dt))
+                a = None
+        return out
+
+    def _tag_rects(self, t):
+        """The rectangles of the galaxy names on the wall at t."""
+        out = []
+        for j, (sj, a0, a1) in self.tag_plan.items():
+            aj = t - PASSED[j][0]
+            if a0 <= aj <= a1:
+                out.append(self._tag_geom(*self._gal_at(j, aj), sj, self._tag_text(j)[2])[2])
+        return out
+
+    def _room(self, rect, t, pad=10.0):
+        """True if a text rect is clear, at t, of the towers and the bands, of the messenger, the card, the note
+        and of the galaxy names."""
+        self.lay.avoid = []
+        if not self.lay.free(*rect, pad=pad):
+            return False
+        x0, y0, x1, y1 = rect
+        return not any(x1 > r[0] - 8.0 and x0 < r[2] + 8.0 and y1 > r[1] - 8.0 and y0 < r[3] + 8.0
+                       for r in self._taken(t) + self._tag_rects(t))
+
+    def _seen(self, k, xt):
+        """Share of its life a galaxy coming up at xt spends in the open: not behind a tower, the card or a note."""
+        n = ok = 0
+        for a in np.arange(0.3, 1.91, 0.1):
+            x, y, _ = self._gal_at(k, float(a), xt)
+            if not (L.FX0 < x < L.FX1 and L.HEAD_Y < y < L.VIEW[3]):
+                continue
+            n += 1
+            hid = any(a_ < x < b_ and top < y < bot for a_, top, b_, bot in self.lay.towers) or any(
+                r[0] < x < r[2] and r[1] < y < r[3] for r in self._taken(PASSED[k][0] + float(a))[1:])
+            ok += not hid
+        return ok / max(n, 1)
+
+    def _tag_free(self, k, side, w, a, plan, xt=None):
+        """True if the name of galaxy k (coming up at xt) can stand on that side at age a."""
+        lay = self.lay
+        t = PASSED[k][0] + a
+        x, y, R = self._gal_at(k, a, xt)
+        ax, ay, (x0, y0, x1, y1) = self._tag_geom(x, y, R, side, w)
+        if R <= 40.0 or x0 < L.COL_X0 or x1 > L.COL_X1 or y0 < L.HEAD_Y + 10.0 or y1 > L.VIEW[3]:
+            return False
+        if not (L.FX0 + 8.0 < ax < L.FX1 - 8.0 and L.HEAD_Y + 14.0 < ay < L.VIEW[3] - 4.0):
+            return False
+        for a_, top, b_, bot in lay.towers:                 # neither the name nor its anchor behind a tower
+            if (x1 > a_ - 16.0 and x0 < b_ + 16.0 and y1 > top - 16.0 and y0 < bot + 16.0) or (
+                    a_ - 6.0 < ax < b_ + 6.0 and top - 6.0 < ay < bot + 6.0):
+                return False
+        hit = lambda r, pad: x1 > r[0] - pad and x0 < r[2] + pad and y1 > r[1] - pad and y0 < r[3] + pad
+        if any(hit(r, 8.0) for r in self._taken(t)):
+            return False
+        there = 0
+        for j, (sj, a0, a1) in plan.items():                # the names already given: not on them, not too many
+            aj = t - PASSED[j][0]
+            if a0 <= aj <= a1:
+                there += 1
+                if there >= TAG_MAX or hit(self._tag_geom(*self._gal_at(j, aj), sj, self._tag_text(j)[2])[2], 12.0):
+                    return False
+        return True
+
+    def _plan_tags(self):
+        """Sets the lane of every galaxy (self.gal_x) and returns {galaxy: (side, age at which its name is made,
+        age at which it is gone)} for those that can keep a name at least TAG_MIN seconds on one side.
+        The larger galaxy has the priority (Andromeda first), then the earlier one. A galaxy keeps the lane of
+        the list if it is seen there and named for TAG_GOOD seconds; else the nearest lane that does better.
+        The right side is preferred unless the left one stays free clearly longer."""
+        da = 1.0 / 60.0
+        ages = np.arange(TAG_AGES[0], TAG_AGES[1] + 1e-9, da)
+        plan = {}
+        for k in sorted(range(len(PASSED)), key=lambda j: (-PASSED[j][5], PASSED[j][0])):
+            w = self._tag_text(k)[2]
+            best = None
+            for du in LANES:
+                uu = PASSED[k][4] + du
+                if not 0.0 <= uu <= 1.0:
+                    continue
+                xt = self._gal_x(uu)
+                seen = self._seen(k, xt)
+                tag = None
+                for side in (1.0, -1.0):
+                    ok = [self._tag_free(k, side, w, float(a), plan, xt) for a in ages]
+                    i0 = n = i = 0
+                    while i < len(ok):                      # the longest stretch during which that side is free
+                        j = i
+                        while j < len(ok) and ok[j]:
+                            j += 1
+                        if j - i > n:
+                            i0, n = i, j - i
+                        i = j + 1
+                    if tag is None or n > tag[2] + 15:
+                        tag = (side, i0, n)
+                good = tag[2] * da >= TAG_GOOD and seen >= 0.85
+                score = min(tag[2] * da, TAG_GOOD) + 0.6 * seen - 0.5 * abs(du)
+                if good or best is None or score > best[0] + 1e-9:
+                    best = (score, xt, tag)
+                if good:
+                    break
+            self.gal_x[k] = best[1]
+            side, i0, n = best[2]
+            if (n - 2) * da >= TAG_MIN:                     # (one frame of margin at each end)
+                plan[k] = (side, float(ages[i0 + 1]), float(ages[i0 + n - 2]))
+        return plan
+
     def _galaxies(self, f, t, V):
         """Galaxies falling behind: each enters under the wall when the distance left equals its distance from
         here, and falls back up towards the star. Returns what may be tagged."""
@@ -246,11 +423,7 @@ class Messenger(Scene):
             a = t - tp
             if a < 0.0 or a > GAL_LIFE:
                 continue
-            xt = self._gal_x(u)
-            yt = L.FY1 + 160.0
-            s = 1.0 / (1.0 + a / 4.0)
-            x, y = V[0] + (xt - V[0]) * s, V[1] + (yt - V[1]) * s
-            R = size * 230.0 / (1.0 + a / 1.1)
+            x, y, R = self._gal_at(k, a)
             if not (L.FX0 - R < x < L.FX1 + R and L.FY0 - R < y < L.FY1 + R):
                 continue
             P = {"spiral": self.g_spiral, "ell": self.g_ell, "irr": self.g_irr, "edge": self.g_ell}[kind]
@@ -266,28 +439,25 @@ class Messenger(Scene):
             core = np.exp(-np.hypot(P[:, 0], P[:, 1]) * 2.6)
             f.dots("w", gx, gy, np.clip(R / 80.0, 1.0, 2.6), al * (0.28 + 0.9 * core))
             f.dots("w", [x], [y], max(2.5, R * 0.05), 1.3 * al)
-            if R > 40 and 0.2 < a < GAL_LIFE - 0.5:
-                out.append((x, y, R, name, dist, a, al))
+            if k in self.tag_plan:
+                out.append((k, x, y, R, a))
         return out
 
     def _galaxy_tags(self, f, gal):
-        lay = self.lay
-        shown = 0
-        for x, y, R, name, dist, a, al in gal:
-            lines = [dist + " FROM HERE", "FALLING BEHIND"]
-            w = max(text_w(name, L.T_TAG) + 12.0, max(text_w(s, L.T_SMALL) for s in lines))
-            for side in (1.0, -1.0):
-                ax, ay = x + side * R * 0.45, y - R * 0.2
-                tx = ax + side * 88.0
-                rect = (min(tx, tx + side * w) - 8.0, ay - 38.0 - 24.0, max(tx, tx + side * w) + 8.0, ay - 38.0 + 70.0)
-                if lay.free(*rect):
-                    lay.take(rect)
-                    hud.callout(f, ax, ay, side * 44.0, -38.0, name, lines, side=int(side),
-                                build=B.io(a - 0.2, GAL_LIFE - 0.5 - a, out=0.3))
-                    shown += 1
-                    break
-            if shown >= 3:
-                break
+        """The names, as planned (_plan_tags): each on its one side, made when its way is clear, travelling
+        with its galaxy, taken apart before it would meet a tower, the card, the messenger or the header."""
+        for k, x, y, R, a in gal:
+            side, a0, a1 = self.tag_plan[k]
+            if not (a0 <= a < a1):
+                continue
+            name, lines, w = self._tag_text(k)
+            ax, ay, rect = self._tag_geom(x, y, R, side, w)
+            self.lay.take(rect)
+            # (a quick build: the name has about a second on the wall - leader, tag and lines in half of one)
+            with f.build(B.io(a - a0, a1 - a, out=0.25, span=0.5), (min(ax, rect[0]) - 6.0, rect[1] - 6.0,
+                                                                   max(ax, rect[2]) + 6.0, max(ay, rect[3]) + 6.0),
+                         flow="out", origin=(ax, ay), wave=0.14, line=0.1, cps=200.0, marks=False, key=31 + k):
+                hud.callout(f, ax, ay, side * 44.0, -38.0, name, lines, side=int(side))
 
     def _limb_geom(self, t):
         u = float(smoothstep(65.2, T1, t)) ** 0.8
@@ -311,28 +481,53 @@ class Messenger(Scene):
         f.segments("r", [T[0]], [T[1] + 40.0], [T[0]], [T[1] + 40.0 + (yh - T[1] - 40.0) * p], 0.0, 0.8 * p, width=1.3)
         f.crosses("r", [T[0]], [yh], 14.0, 1.2, width=L.LW)
 
+    def _limb_label_at(self, j, t):
+        """Baseline of label j of the limb at t, and its rectangle (None without a column for it)."""
+        col = self.lay.note or self.lay.card
+        if col is None:
+            return None
+        u, R, top = self._limb_geom(t)
+        xl = col[0] + 24.0
+        yl = top + LIMB[j][0] + R - math.sqrt(max(R * R - (xl - self.C[0]) ** 2, 1.0))
+        return xl, yl, (xl - 4.0, yl - 30.0, xl + text_w(LIMB[j][1], L.T_SMALL) + 6.0, yl - 6.0)
+
+    def _plan_limb(self):
+        """When each label of the limb, and the tag of the first interaction, start to be written: when their
+        line has come up into the view (the limb rises from under the bottom band). They used to be decoded
+        from a fixed time, out of sight, and to come up already written. None = never."""
+        dt = 1.0 / 60.0
+        ts = [65.2 + i * dt for i in range(int(round((T1 - 65.2) / dt)) + 1)]
+        out = {}
+        for j in range(len(LIMB)):
+            ok = [self._limb_label_at(j, t) is not None and self._room(self._limb_label_at(j, t)[2], t) for t in ts]
+            last_no = max([i for i, v in enumerate(ok) if not v], default=-1)       # free from there to the end
+            out[j] = max(ts[last_no + 1], 65.5 + 0.12 * j) if last_no + 1 < len(ts) else None
+        ok = [self._limb_geom(t)[0] > 0.4 and self._limb_geom(t)[2] + 84.0 + 12.0 < L.VIEW[3] for t in ts]
+        last_no = max([i for i, v in enumerate(ok) if not v], default=-1)
+        out["hit"] = max(ts[last_no + 1], 65.85) if last_no + 1 < len(ts) else None
+        return out
+
     def _limb_labels(self, f, t, T):
         u, R, top = self._limb_geom(t)
         if u <= 0:
             return
-        lay, C = self.lay, self.C
-        col = lay.note or lay.card
-        if col is not None:
-            xl = col[0] + 24.0
-            for j, (dy, lab) in enumerate(((0.0, "100 KM // KARMAN LINE"), (46.0, "50 KM // STRATOPAUSE"),
-                                           (84.0, "15 KM // TROPOPAUSE"), (112.0, "CINCINNATI 0.147 KM"))):
-                yl = top + dy + R - math.sqrt(max(R * R - (xl - C[0]) ** 2, 1.0))
-                rect = (xl - 4.0, yl - 30.0, xl + text_w(lab, L.T_SMALL) + 6.0, yl - 6.0)
-                txt = B.resolve(lab, t - 65.5 - 0.12 * j, 70.0, key=j)       # decoded on its line as the limb rises
-                if txt.strip() and lay.free(*rect, pad=10.0):
-                    f.occlude(*rect)
-                    f.text("w", xl, yl - 10.0, txt, size=L.T_SMALL, alpha=0.9)
+        lay = self.lay
+        for j, (dy, lab) in enumerate(LIMB):                # each is decoded on its line once the line is in the view
+            t_in = self.limb_in[j]
+            if t_in is None or t < t_in:
+                continue
+            xl, yl, rect = self._limb_label_at(j, t)
+            txt = B.decode(lab, t - t_in, cps=90.0, key=j)   # (no spinning figures: the scene ends in a second)
+            if txt.strip():
+                f.occlude(rect[0], rect[1], xl + text_w(txt, L.T_SMALL) + 6.0, rect[3])
+                f.text("w", xl, yl - 10.0, txt, size=L.T_SMALL, alpha=0.9)
         yh = top + 84.0
-        if u > 0.4:
+        if self.limb_in["hit"] is not None and t >= self.limb_in["hit"]:
             for s in ("FIRST INTERACTION // T-" + f"{max(T1 + 0.55 - t, 0):.2f} S", "T-" + f"{max(T1 + 0.55 - t, 0):.2f} S"):
                 w = text_w(s, L.T_SMALL) + 12.0
-                if T[0] + 22.0 + w < lay.focus_col[1] and yh + 12.0 < L.VIEW[3]:
-                    B.tag(f, "r", T[0] + 22.0, yh + 6.0, s, t - 65.85, size=L.T_SMALL, pad=4, bold=True, cps=70.0, key=6)
+                if T[0] + 22.0 + w < lay.focus_col[1]:
+                    B.tag(f, "r", T[0] + 22.0, yh + 6.0, s, t - self.limb_in["hit"], size=L.T_SMALL, pad=4, bold=True,
+                          cps=70.0, key=6)
                     break
 
     def _messenger(self, f, t, ctx, T, V):
@@ -375,21 +570,31 @@ class Messenger(Scene):
             B.tag(f, "r", x + sd_ * 42.0, y + 54.0, "P+", an, t0=0.12, size=L.T_TAG, pad=5, bold=True,
                   anchor="ls" if sd_ > 0 else "rs", key=3)
 
+    def _mark_at(self, j, t):
+        """Where mark j of the trail is at t, and the rectangle of its figure."""
+        x, y = self._tip(t)
+        V = self._vanish(t)
+        d = math.hypot(V[0] - x, V[1] - y)
+        mx, my = x + (V[0] - x) / d * 150.0 * (j + 1), y + (V[1] - y) / d * 150.0 * (j + 1)
+        return mx, my, (mx + 14.0, my - 12.0, mx + 26.0 + text_w("0.00E9 LY BEHIND", L.T_MICRO), my + 12.0)
+
+    def _mark_free(self, j, t):
+        return self._room(self._mark_at(j, t)[2], t)
+
     def _marks(self, f, t, T, V):
-        """Light-years behind, written along the trail where the wall is free."""
+        """Light-years behind, written along the trail while the wall is free there (mark_plan): the figure is
+        decoded when it has room for two seconds at least and taken apart before the trail carries it under
+        the header or behind something - it does not come on written, nor go out in one frame."""
         if t <= T_ALONE:
             return
-        x, y = T
-        d = math.hypot(V[0] - x, V[1] - y)
-        ux, uy = (V[0] - x) / d, (V[1] - y) / d
         done = YEAR0 - years(t)
-        for j in (2, 4):
-            mx, my = x + ux * 150.0 * (j + 1), y + uy * 150.0 * (j + 1)
-            s = f"{done * (1 - 0.11 * (j + 1)):.2E} LY BEHIND".replace("E+0", "E")
-            rect = (mx + 14.0, my - 12.0, mx + 26.0 + text_w(s, L.T_MICRO), my + 12.0)
-            if self.lay.free(*rect, pad=10.0):
-                f.text("w", mx + 20.0, my + 6.0, B.resolve(s, t - T_ALONE - 0.09 * (j + 1) - 0.1, 80.0, key=j), size=L.T_MICRO,
-                       alpha=0.75)
+        for j in MARKS:
+            for t0, t1 in self.mark_plan[j]:
+                if t0 <= t < t1:
+                    mx, my, _ = self._mark_at(j, t)
+                    s = f"{done * (1 - 0.11 * (j + 1)):.2E} LY BEHIND".replace("E+0", "E")
+                    f.text("w", mx + 20.0, my + 6.0, B.resolve(s, B.io(t - t0, t1 - t, out=0.25, span=0.5), 80.0, key=j),
+                           size=L.T_MICRO, alpha=0.75)
 
     # ------------------------------------------------------------------ HUD
     def _strip(self, f, t, ctx):

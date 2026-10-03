@@ -733,11 +733,9 @@ class Outlast(Scene):
             with f.build(sa - 0.65, box(x0, x1), key=89):
                 hud.panel_header(f, x0, x1, y0, "DECAY_BARCODE")
                 cols = int(np.clip((x1 - x0) / 3.2, 40, 150))
-                dt = 6.0 / cols
-                kf = math.floor((t - 6.0) / dt)
-                kk = kf + np.arange(cols)
+                kk, frac, dt = hud.barcode_keys(t, 6.0, cols)
                 tt = kk * dt
-                dens = np.zeros(cols)
+                dens = np.zeros(len(kk))
                 for q in range(max(0, p - 1), p + 1):
                     rr = tt - self.starts[q]
                     for which in (0, 1):
@@ -745,7 +743,7 @@ class Outlast(Scene):
                         rd = np.sort(S["r_dec"][S["dec"] < ATM])
                         dens += np.where(rr >= 0, np.searchsorted(rd, rr + dt) - np.searchsorted(rd, rr), 0)
                 dens = 0.05 + 0.9 * np.tanh(dens / 2.0)
-                hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5)
+                hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5, frac=frac)
         if self.pan_cnt:                          # totals
             x0, x1 = self.pan_cnt
             with f.build(sa - 0.8, box(x0, x1), key=90):

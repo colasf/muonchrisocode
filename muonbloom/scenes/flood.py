@@ -17,7 +17,7 @@ LAYOUT. Nothing has a fixed x: the towers can stand anywhere (see you.Plan).
   focus bay   the figure and the rain (the only texture: it is clipped to that bay)
   side col    the count: this show as a bar, so far, by the end, every time scale
   title col   FLOOD, the parameters, the entry log
-  data col    the entry map seen from above, entries per part of the body
+  data col    the entry map seen from above, entries per part of the body, the energy of the muons
   bottom      ctx.slots panels (between the scopes of the towers)
 A column that does not exist with a placement drops its block; type sizes follow the widths. The
 count never drops: without a side column it shares the focus bay with the figure, or takes the
@@ -51,6 +51,26 @@ SHOW = sd.SHOW_END
 Y_TOP, Y_BOT = 240.0, 1190.0
 GROUPS = [("HEAD", ("HEAD", "NECK")), ("TORSO", ("TORSO",)), ("ARMS", ("ARM_L", "ARM_R")),
           ("HANDS", ("HAND_L", "HAND_R")), ("LEGS", ("LEG_L", "LEG_R")), ("FEET", ("FOOT_L", "FOOT_R"))]
+# The energy of the muons at the ground (sea level, vertical): Gaisser's formula with the low-energy correction
+# of Guan et al. 2015,  dN/dE ~ (E + 3.64)^-2.7 [1 / (1 + 1.1 E / 115) + 0.054 / (1 + 1.1 E / 850)],  E in GeV.
+# Its mean is a little over 4 GeV and half of the muons are under 2 GeV: the histogram of the data column.
+E_LO, E_HI, E_BINS = 0.1, 100.0, 24             # three decades on a log axis, eight bins each
+E_FALL, E_SPAN = 0.3, 10.0                      # s an entry takes to fall into its bin / s it stays in the count
+
+
+def _spectrum(E):
+    return (E + 3.64) ** -2.7 * (1.0 / (1.0 + 1.1 * E / 115.0) + 0.054 / (1.0 + 1.1 * E / 850.0))
+
+
+def _energy_law():
+    """(energies, their cumulative distribution above E_LO, expected share of every bin of the histogram)."""
+    E = np.geomspace(E_LO, 1000.0, 4000)
+    sp = _spectrum(E)
+    c = np.concatenate([[0.0], np.cumsum(0.5 * (sp[1:] + sp[:-1]) * np.diff(E))])
+    c /= c[-1]
+    share = np.diff(np.interp(np.geomspace(E_LO, E_HI, E_BINS + 1), E, c))
+    share[-1] += 1.0 - float(np.interp(E_HI, E, c))             # the few above 100 GeV count in the last bin
+    return E, c, share
 
 
 class Flood(Scene):
@@ -92,6 +112,10 @@ class Flood(Scene):
             elif self.map_col is not None:
                 self.count_col, self.map_col = self.map_col, None
         self._build_rain(np.random.default_rng(seed))
+        # the energy of every muon of the rain, drawn from the spectrum at the ground (its own generator: the
+        # rain itself does not change)
+        self.e_grid, self.e_cdf, self.e_share = _energy_law()
+        self.h_E = np.interp(np.random.default_rng(seed + 101).random(len(self.h_t)), self.e_cdf, self.e_grid)
 
     # ------------------------------------------------------------------ rain
     def _build_rain(self, rng, K=170):
@@ -450,6 +474,68 @@ class Flood(Scene):
         if gone > 0.98:
             f.text("r", xa, yb + 10 + len(GROUPS) * 34 + 22, B.decode("NOTHING IN THE WAY", t - self.t_absent, cps=50.0,
                                                                       key=62), size=L.T_SMALL, alpha=0.9)
+        # the energy of the muons, under the list (dropped when the towers leave no room for it)
+        y_e = yb + 10 + len(GROUPS) * 34 + 56
+        if Y_BOT - y_e >= 126.0 and xb - xa >= 300.0:
+            self._draw_energy(f, t, xa, xb, y_e, age0 - 0.6)
+
+    def _draw_energy(self, f, t, xa, xb, y_t, age):
+        """MUON_ENERGY: the energy of every muon of the last ten seconds, as a histogram on a log axis.
+        An entry falls into its bin as a red drop and its bar takes it; the stepped line is what the law
+        gives (the spectrum of the muons at the ground: see _spectrum), and the bars settle on it as the count
+        grows. It does not change when the body leaves: the rain is the same."""
+        j0, j1 = np.searchsorted(self.h_t, t - E_SPAN - 0.3), np.searchsorted(self.h_t, t)
+        sel = j0 + np.nonzero(self.h_has[j0:j1])[0]
+        a = t - self.h_t[sel]
+        E = self.h_E[sel]
+        le = np.clip(np.log10(E / E_LO) / math.log10(E_HI / E_LO), 0.0, 0.9999)      # place on the axis, 0..1
+        b = (le * E_BINS).astype(np.int64)
+        w = np.asarray(smoothstep(E_FALL - 0.04, E_FALL + 0.1, a) * (1.0 - smoothstep(E_SPAN, E_SPAN + 0.3, a)), np.float64)
+        n_eff = float(w.sum())
+        top = float(self.e_share.max()) * 1.35                  # share of the tallest bin of the law = 74 % of the plot
+        h = np.clip(np.bincount(b, weights=w, minlength=E_BINS) / math.hypot(n_eff, 40.0) / top, 0.0, 1.0)
+        x0, x1 = xa + 2.0, xb - 2.0
+        bw = (x1 - x0) / E_BINS
+        y0 = y_t + 16.0
+        y1 = min(Y_BOT - 30.0, y0 + 150.0)                      # it takes the room the column leaves, up to 150 px
+        H = y1 - y0
+        xs = x0 + np.arange(E_BINS) * bw
+        yt = y1 - h * H                                         # top of every bar
+        with f.build(age, (xa - 6.0, y_t - 22.0, xb + 6.0, y1 + 28.0), flow="tb", wave=0.3, key=63):
+            f.tag("w", xa, y_t, fit_text(["MUON_ENERGY // GEV // LAST 10 S", "MUON_ENERGY // GEV", "ENERGY // GEV"],
+                                         xb - xa - 12.0, L.T_MICRO), size=L.T_MICRO, pad=3)
+            f.rects("w", xs + 1.5, yt, xs + bw - 1.5, y1, 0.92)
+            # the law, as the outline of the histogram it predicts
+            yl = y1 - self.e_share / top * H
+            f.segments("w", xs, yl, xs + bw, yl, 0.5)
+            f.segments("w", xs[1:], yl[:-1], xs[1:], yl[1:], 0.5)
+            # log axis: 0.1 - 1 - 10 - 100 GeV
+            f.segments("w", [x0], [y1 + 1.0], [x1], [y1 + 1.0], 0.7)
+            dec = np.arange(4) / 3.0
+            mn = (np.arange(3)[:, None] + np.log10(np.arange(2, 10))[None, :]).ravel() / 3.0
+            f.segments("w", x0 + dec * (x1 - x0), np.full(4, y1 + 1.0), x0 + dec * (x1 - x0), np.full(4, y1 + 10.0), 0.8)
+            f.segments("w", x0 + mn * (x1 - x0), np.full(len(mn), y1 + 1.0), x0 + mn * (x1 - x0), np.full(len(mn), y1 + 5.0), 0.6)
+            for k, (lab, anc) in enumerate((("0.1", "ls"), ("1", "ms"), ("10", "ms"), ("100", "rs"))):
+                f.text("w", x0 + dec[k] * (x1 - x0), y1 + 26.0, lab, size=L.T_MICRO, alpha=0.7, anchor=anc)
+            # read-outs, over the high energies (their bars are low)
+            if len(sel):
+                f.text("r", x1, y0 + 12.0, f"LAST {float(E[-1]):6.2f} GEV", size=L.T_MICRO, alpha=0.95, anchor="rs")
+            if n_eff > 0.5:
+                f.text("w", x1, y0 + 30.0, f"MEAN {float((w * E).sum() / n_eff):6.2f} GEV", size=L.T_MICRO, alpha=0.85,
+                       anchor="rs")
+            f.text("w", x1, y0 + 48.0, f"N {int(round(n_eff)):04d}", size=L.T_MICRO, alpha=0.6, anchor="rs")
+        if age < 0.3:
+            return
+        # every entry: a red drop falling on its bin (it speeds up on the way), a red cap where it lands
+        fall = a < E_FALL
+        if fall.any():
+            af = a[fall]
+            xd = x0 + le[fall] * (x1 - x0)
+            yd = (y0 + 10.0) + (yt[b[fall]] - y0 - 10.0) * (af / E_FALL) ** 2
+            f.segments("r", xd, yd - 10.0 * np.minimum(af / 0.06, 1.0), xd, yd, 0.15, 1.3, width=1.6)
+        hot = np.bincount(b, weights=np.where(fall, 0.0, np.exp(-(a - E_FALL) / 0.12)), minlength=E_BINS)
+        m = hot > 0.03
+        f.rects("r", xs[m] + 1.5, yt[m] - 3.0, xs[m] + bw - 1.5, yt[m], np.minimum(hot[m], 1.0))
 
     # ------------------------------------------------------------------ bottom band
     def _draw_bottom(self, f, t, ctx):
@@ -472,20 +558,22 @@ class Flood(Scene):
                 for k, (lab, val) in enumerate(cols):
                     f.text("w", x0 + k * cw + 4, y0 + 36, lab, size=L.T_MICRO, alpha=0.75)
                     f.text("r" if lab == "IN A LIFE" else "w", x0 + k * cw + 2, y0 + 96, val, size=40, alpha=0.97)
-        if len(wide) > 1:
-            x0, x1 = wide[1]
-            with block(wide[1], 1):
+        bar = wide[1] if len(wide) > 1 else None
+        rest = small + wide[2:]
+        if not rest and bar and width(bar) >= 520.0:        # two panels only: the rate takes the end of the barcode's
+            bar, rest = (bar[0], bar[1] - 196.0), [(bar[1] - 170.0, bar[1])]
+        if bar:
+            x0, x1 = bar
+            with block(bar, 1):
                 hud.panel_header(f, x0, x1, y0, "ENTRY_BARCODE // 3 S")
                 n = int(np.clip((x1 - x0) / 3.2, 40, 200))
-                dt = 3.0 / n
-                kf = math.floor((t - 3.0) / dt)
-                kk = kf + np.arange(n)
+                kk, frac, dt = hud.barcode_keys(t, 3.0, n)
                 tt = kk * dt
                 lo, hi = np.searchsorted(self.h_t, tt), np.searchsorted(self.h_t, tt + dt)
                 dens = 0.04 + 0.92 * np.tanh((hi - lo) / 3.2 * (150.0 / n))
                 quiet = float(smoothstep(self.t_leave, self.t_gone, t))
-                hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5, inten=0.95 - 0.5 * quiet)
-        rest = small + wide[2:]
+                hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5, inten=0.95 - 0.5 * quiet,
+                                  frac=frac)
         if rest:
             x0, x1 = rest[0]
             with block(rest[0], 2):

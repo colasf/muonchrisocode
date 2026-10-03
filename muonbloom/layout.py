@@ -59,11 +59,14 @@ class Tower:
         return (self.cx, self.top)
 
 
-# placeholder placement, measured on the TouchDesigner 'bloom' scene. CENTRE = hero (tallest)
+# the placement of the Site 3.1 drawing (4Wall scaffold towers, estimates to confirm on site): the towers stand
+# on the sixths of the wall, a 550 mm core with a 400 mm detector box at its head, 3.45 m tall on the sides and
+# 6.5 m in the centre (CENTRE = hero). Same data as data/towers.json; the placement measured on the
+# TouchDesigner 'bloom' scene, used until 2026-10-03, is kept in data/towers_td_placeholder.json
 DEFAULT_TOWERS = {
-    "L": Tower("L", 523.0, 618.0, 688.0),
-    "C": Tower("C", 1441.0, 1536.0, 390.0, det_h=175.0),
-    "R": Tower("R", 2359.0, 2455.0, 688.0),
+    "L": Tower("L", 459.3, 518.7, 1043.1, det_h=43.3),
+    "C": Tower("C", 1459.3, 1518.7, 713.4, det_h=43.3),
+    "R": Tower("R", 2459.3, 2518.7, 1043.1, det_h=43.3),
 }
 ORDER = ("L", "C", "R")
 NAMES = {"L": "DET_L", "C": "DET_C", "R": "DET_R"}

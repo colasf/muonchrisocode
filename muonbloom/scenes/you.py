@@ -501,8 +501,8 @@ class You(Scene):
         if not micro:
             scan_y = None
             if kind == "ortho":
-                w = ((t - CUTS[0]) / BAR) % 2.0
-                scan_y = 0.03 + 1.76 * (1 - w if w < 1 else w - 1)
+                w = (t - CUTS[0]) / BAR             # down in one bar, up in the next: it slows down to turn round
+                scan_y = 0.03 + 1.76 * (0.5 + 0.5 * math.cos(math.pi * w))
             for cam, clip, col, label in self._cams(kind, t, u):
                 f.set_clip(*clip)
                 self._draw_world(f, cam, t, ages, kind, scan_y, col, clip, label)
@@ -553,9 +553,10 @@ class You(Scene):
         top = label == "TOP"
         hot_pts, hot_lev = self._hot(t, ages)
         if kind == "build":
-            # drum roll: the slices come on around the heart, a step per 16th note
+            # drum roll: the slices come on around the heart, a surge per 16th note (the figure grows without a
+            # halt: it only breathes with the roll)
             k = max(0.0, (t - self.t_you) / STEP)
-            hh = 0.05 + 0.1 * (math.floor(k) + min(1.0, (k % 1.0) / 0.25))
+            hh = 0.05 + 0.1 * (math.floor(k) + 0.5 * (k % 1.0) + 0.5 * float(smoothstep(0.0, 1.0, k % 1.0)))
             b.draw(f, cam, hot_pts=hot_pts, hot_lev=hot_lev, cloud=0.0, slices=1.25 if t >= self.t_you else 0.0,
                    reveal=(HEART[1], hh))
             m0 = self.mus[0]
@@ -792,8 +793,12 @@ class You(Scene):
                 yy = y + 30 + k * 36
                 v = dep.get(p, 0.0)
                 f.text("r" if p == "HEART" and v > 1 else "w", x0 + 2, yy + 16, f"{p:<7}", size=L.T_SMALL, alpha=0.85)
-                f.rects("r" if p == "HEART" else "w", x0 + 92, yy + 2, x0 + 92 + min(bw, v * bw / 260.0), yy + 17, 0.95)
                 f.text("w", x1, yy + 16, f"{v:5.1f}", size=L.T_SMALL, alpha=0.8, anchor="rs")
+            yy = y + 30 + np.arange(len(self.PARTS)) * 36.0             # the bars glide as the energy drains
+            vv = np.array([dep.get(p, 0.0) for p in self.PARTS])
+            heart = np.array([p == "HEART" for p in self.PARTS])
+            for lay, m in (("r", heart), ("w", ~heart)):
+                hud.bars(f, lay, x0 + 92, yy[m] + 2, x0 + 92 + np.minimum(bw, vv[m] * bw / 260.0), yy[m] + 17, 0.95)
         y2 = y + 30 + len(self.PARTS) * 36 + 56
         s = min(64.0, (x1 - x0 - 10) / (6 * 0.61))
         with f.build(since - 0.5, (x0 - 8, y2 - 24, x1 + 8, y2 + 124 + s), flow="tb", wave=0.3, key=42):
@@ -802,6 +807,69 @@ class You(Scene):
             f.text("w", x0 + 2, y2 + 68 + s, "MUONS, DAY AND NIGHT", size=L.T_SMALL, alpha=0.8)
             f.text("w", x0 + 2, y2 + 94 + s, "1 /CM2 /MIN AT THE GROUND", size=L.T_MICRO, alpha=0.6)
             f.text("w", x0 + 2, y2 + 116 + s, "ROOFS AND WALLS DO NOT STOP THEM", size=L.T_MICRO, alpha=0.6)
+        y3 = y2 + 124 + s + 46
+        if Y_BOT - 4 - y3 >= 150.0:                 # room left under it: where the one we follow comes from
+            self._draw_source(f, t, x0, x1, y3, Y_BOT - 4.0, since - 0.85)
+
+    def _draw_source(self, f, t, x0, x1, y0, y1, age):
+        """ORIGIN: the star of the story, after the user's sketch - a disc, rays leaving it all around, each one
+        ending in a dot. It is alive: every ray is sent again in its turn (its dot leaves the disc and draws the
+        ray behind it, waits at the end, then the ray is reeled in), the disc rings on the half bars, and one
+        ray is red: the one that ends in YOU. It is the star behind the muon this scene follows, not the source
+        of every muon through the body, and the title says so."""
+        P = self.P
+        w = x1 - x0
+        left = 0.5 * (x0 + x1) > P.fx               # the figure stands on the left of this column: the red ray points there
+        tw = 134.0                                  # room the read-outs take beside the star
+        text = w >= tw + 16.0 + 140.0
+        R = min(0.5 * (y1 - y0 - 24.0) - 4.0, 0.5 * (w - tw - 16.0) if text else 0.5 * w - 12.0, 96.0)
+        cy_ = y0 + 24.0 + 0.5 * (y1 - y0 - 24.0)
+        cx_ = 0.5 * (x0 + x1) if not text else (x1 - R - 4.0 if left else x0 + R + 4.0)
+        rd = 0.34 * R
+        with f.build(age, (x0 - 8, y0 - 24, x1 + 8, y1), flow="tb", wave=0.35, key=47):
+            hud.panel_header(f, x0, x1, y0, fit_text(["ORIGIN // THE STAR BEHIND MU- 0001", "ORIGIN // ONE STAR", "ORIGIN"],
+                                                     w, L.T_MICRO))
+            # the disc: it rings (a shell leaves it on every half bar), its core beats with the kicks
+            ring = np.linspace(0, 2 * np.pi, 49)
+            kick = math.exp(-self.ctx.cues.since_kick(t) / 0.12)
+            f.polyline("w", cx_ + rd * np.cos(ring), cy_ + rd * np.sin(ring), 1.05, width=2.2)
+            ab = np.linspace(0, 2 * np.pi, 40, endpoint=False) + 0.25 * t       # its shell: a ring of bars, turning
+            f.segments("w", cx_ + 0.52 * rd * np.cos(ab), cy_ + 0.52 * rd * np.sin(ab), cx_ + 0.82 * rd * np.cos(ab),
+                       cy_ + 0.82 * rd * np.sin(ab), 0.5)
+            f.polyline("w", cx_ + 0.4 * rd * np.cos(ring), cy_ + 0.4 * rd * np.sin(ring), 0.5)
+            f.dots("r", [cx_], [cy_], 4.0 + 1.8 * kick, 1.5)
+            ph = ((t - BAR0) % (BAR / 2)) / (BAR / 2)
+            rs = rd + (0.85 * R - rd) * (1 - (1 - ph) ** 2)
+            f.polyline("w", cx_ + rs * np.cos(ring), cy_ + rs * np.sin(ring), 0.42 * (1 - ph) ** 1.5)
+            # the rays: 28 of them, as drawn. One is red, aimed at the figure
+            th, ln = self.src_th.copy(), self.src_len.copy()
+            aim = math.pi if left else 0.0
+            kr = int(np.argmin(np.abs(np.angle(np.exp(1j * (th - aim))))))
+            th[kr], ln[kr] = aim, 1.0
+            T = self.src_T.copy()
+            tau = (t + self.src_off) % T
+            T[kr], tau[kr] = BAR, (t - BAR0) % BAR                # the red one leaves on every bar
+            head = 1.0 - (1.0 - np.clip(tau / 0.9, 0.0, 1.0)) ** 3            # its dot runs out and draws the ray
+            tail = np.clip((tau - (T - 0.7)) / 0.55, 0.0, 1.0) ** 2             # ... which is reeled in before the next
+            dot = np.clip((T - tau) / 0.15, 0.0, 1.0)
+            uu = tail[:, None] + (head - tail)[:, None] * np.linspace(0.0, 1.0, 7)[None, :]
+            rr = (rd + 3.0) + (ln[:, None] * R - rd - 3.0) * uu
+            lat = 2.2 * uu * np.sin(2.6 * math.pi * uu + self.src_wav[:, None] + 0.8 * t)     # the hand of the sketch
+            ct, st = np.cos(th)[:, None], np.sin(th)[:, None]
+            X, Y = cx_ + rr * ct - lat * st, cy_ + rr * st + lat * ct
+            red = np.arange(len(th)) == kr
+            for lay, m, gain in (("w", ~red, 0.8), ("r", red, 1.3)):
+                f.segments(lay, X[m, :-1].ravel(), Y[m, :-1].ravel(), X[m, 1:].ravel(), Y[m, 1:].ravel(), gain,
+                           width=L.LW if lay == "w" else 2.0)
+                f.dots(lay, X[m, -1], Y[m, -1], (3.1 if lay == "w" else 4.2) * dot[m], 1.35)
+            f.dots("w", X[red, -1], Y[red, -1], 1.6 * dot[red], 1.1)
+            if text:
+                xt, anc = (cx_ - R - 10.0, "rs") if left else (cx_ + R + 10.0, "ls")
+                for yy, lab, val in ((cy_ - 64.0, "COLLAPSED", "4.8E9 YR AGO"), (cy_ + 44.0, "SENT OUT", "P+ 3.2E15 EV")):
+                    f.text("w", xt, yy, lab, size=L.T_MICRO, alpha=0.6, anchor=anc)
+                    f.text("w", xt, yy + 21, val, size=L.T_SMALL, alpha=0.9, anchor=anc)
+                f.text("r", xt, cy_ - 18.0, "ONE RAY ENDS IN", size=L.T_MICRO, alpha=0.9, anchor=anc)
+                f.tag("r", xt - (5 if left else -5), cy_ + 9.0, "YOU", size=L.T_TAG, pad=5, anchor=anc, bold=True)
 
     def _draw_strip(self, f, t):
         ta, tb = t - 5.5, t + 2.0
@@ -811,6 +879,7 @@ class You(Scene):
         X = lambda tt: x0 + (np.asarray(tt) - ta) / (tb - ta) * (x1 - x0)
         placed = []
         with f.build(age - 0.3, L.STRIP, flow="lr", wave=0.5, marks=False, bars="centre", key=43):
+            comb = {"w": [], "r": []}               # the bars of the two combs: x, top, bottom, intensity
             for m in self.mus:
                 tt = m["t_hit"] if m["t_hit"] is not None else m["t"]
                 if not (ta - 0.2 <= tt <= tb + 0.2) or tt < T_IN:
@@ -821,10 +890,11 @@ class You(Scene):
                 bx = xe + np.arange(n) * 4.0
                 ok = (bx > x0) & (bx < x1 - 3)
                 hh = (8 + 10 * math.log1p(m["E"])) * (0.3 + 0.7 * hash01(key, np.arange(n)))
-                f.rects("w", bx[ok], y0 + 1, bx[ok] + 2, y0 + 1 + hh[ok], 0.95 if tt <= t else 0.4)
+                one = np.ones(int(ok.sum()))
+                comb["w"].append((bx[ok], (y0 + 1) * one, y0 + 1 + hh[ok], (0.95 if tt <= t else 0.4) * one))
                 if m["part"]:
                     hb = (6 + 60 * m["dE"]) * (0.3 + 0.7 * hash01(key, np.arange(n) + 9))
-                    f.rects("r", bx[ok], y1 - hb[ok], bx[ok] + 2, y1 - 1, 0.9 if tt <= t else 0.4)
+                    comb["r"].append((bx[ok], y1 - hb[ok], (y1 - 1) * one, (0.9 if tt <= t else 0.4) * one))
                     if m["hero"] and x0 + 10 < xe < x1 - 110:
                         row = 1 if any(abs(p - xe) < 120 for p in placed) else 0
                         placed.append(xe)
@@ -834,6 +904,10 @@ class You(Scene):
                         B.tag(f, "r" if tt <= t else "w", xe, yb + 26 + row * 24, m["part"],
                               B.io(min((x1 - 110 - xe) / v, age - 0.5), (xe - x0 - 10) / v, out=0.25, span=0.3),
                               size=L.T_MICRO, pad=4, alpha=1.0 if tt <= t else 0.5, cps=60.0, key=key & 0xFFF)
+            for lay, lst in comb.items():           # the strip scrolls: its bars glide (hud.bars), in one go
+                if lst:
+                    bx, ya_, yb_, ii = (np.concatenate(v) for v in zip(*lst))
+                    hud.bars(f, lay, bx, ya_, bx + 2, yb_, ii)
             hud.strip_cursor(f, float(X(t)), y0, y1, f"T {sd.tc(t)}")
 
     SCALES = {"bone": -2.0, "cells": -4.7, "dna": -8.7, "atoms": -9.5, "track": -15.0}
@@ -844,7 +918,7 @@ class You(Scene):
                  "DEPTH       0.062 M"],
         "cells": ["MEDIUM      MYOCARDIUM", "CELL          ~20 UM", "DE/DX     0.20 KEV/UM", "FIELD         650 UM",
                   "ION PAIRS   ~6.6 /UM"],
-        "dna": ["MEDIUM       CHROMATIN", "HELIX         2.0 NM", "TURN          3.4 NM", "FIELD         130 NM",
+        "dna": ["MEDIUM       CHROMATIN", "HELIX         2.0 NM", "TURN          3.4 NM", "FIELD          30 NM",
                 "MEAN FREE    ~150 NM"],
         "atoms": ["MEDIUM   WATER  H2O", "O-H        0.096 NM", "IONISATION   12.6 EV", "FIELD          10 NM",
                   "MUON      POINT-LIKE"],
@@ -890,7 +964,7 @@ class You(Scene):
         panels of the bottom band, widest first."""
         P = self.P
         y0, y1 = P.py0, P.py1
-        panels = [p for p in P.panels if width(p) >= 200.0]
+        panels = sorted([p for p in P.panels if width(p) >= 200.0], key=lambda p: (-round(width(p)), p[0]))
         since = t - BAR0                            # the panels are constructed at the drop, one after the other
         block = lambda k: f.build(since - 0.2 - 0.15 * k, (panels[k][0] - 8, y0 - 24, panels[k][1] + 8, y1 + 8), wave=0.4,
                                   key=45 + k)
@@ -913,14 +987,12 @@ class You(Scene):
             with block(1):
                 hud.panel_header(f, bx0, bx1, y0, "HIT_BARCODE")
                 n = int(np.clip((bx1 - bx0) / 3.9, 40, 200))
-                dt = 3.0 / n
-                kf = math.floor((t - 3.0) / dt)
-                kk = kf + np.arange(n)
+                kk, frac, dt = hud.barcode_keys(t, 3.0, n)
                 tt = kk * dt
                 lo = np.searchsorted(self.hit_t, tt)
                 hi = np.searchsorted(self.hit_t, tt + dt * 3)
                 dens = np.where(tt >= self.t_you - 0.1, 0.05 + 0.9 * np.tanh((hi - lo) / 1.5), 0.0)
-                hud.barcode_lanes(f, bx0, bx1, y0 + 12, y1, dens, kk, lanes=3, seed=7)
+                hud.barcode_lanes(f, bx0, bx1, y0 + 12, y1, dens, kk, lanes=3, seed=7, frac=frac)
         if len(panels) > 2 and P.data is not None:
             with block(2):
                 self._draw_sequence(f, panels[2], t)
@@ -955,7 +1027,7 @@ class You(Scene):
             if k + 1 < idx:
                 f.rects("w", xx + 6, y + 4, xx + w - 9, y + 36, 0.9)
             elif k + 1 == idx:
-                f.rects("r", xx + 6, y + 4, xx + 6 + (w - 15) * max(0.08, u), y + 36, 0.95)
+                hud.bars(f, "r", xx + 6, y + 4, xx + 6 + (w - 15) * max(0.08, u), y + 36, 0.95)
             if w >= 46:
                 f.text("r" if k + 1 == idx else "w", xx + 3, y + 64, name, size=L.T_MICRO,
                        alpha=0.95 if k + 1 <= idx else 0.5)
@@ -974,10 +1046,99 @@ class You(Scene):
         self.skin = rng.uniform(0, 1, (3200, 2))
         self.marrow = rng.uniform(-1, 1, (1500, 2))
         self.water = rng.uniform(0, 1, (1400, 2))
-        self.helix = [(-34.0, -7.0, 0.42, 0.3), (10.0, 9.0, -0.3, 1.9), (40.0, -12.0, 1.25, 4.0),
-                      (-16.0, 13.0, 2.6, 2.2), (24.0, -2.0, -1.2, 0.9), (-52.0, 4.0, -0.9, 3.1),
-                      (58.0, 10.0, 0.2, 5.0)]                                  # x, y (nm), angle, phase
         self.delta = np.cumsum(rng.normal(0, 1, (26, 2)) * np.array([1.0, 0.6]) + np.array([0.55, -0.3]), 0)
+        self._build_bone()
+        self._build_cells()
+        self._build_source()
+
+    def _build_bone(self):
+        """What moves in the BONE view, and does not depend on t: the speed of the ripple of every fibre, the
+        pulses that run along some of them, the nodes of the trabecular network, the ion pairs of the track."""
+        n = len(self.fib_y)
+        k = np.arange(n)
+        self.fib_w = 0.9 + 0.9 * hash01(k, 61)                       # rad / s
+        self.fib_i = 0.2 + 0.16 * hash01(k, 3)
+        nd = 18                                                      # pulses travelling along a fibre
+        d = np.arange(nd)
+        self.dash_k = (hash01(d, 62) * n).astype(int)
+        self.dash_v = 0.45 + 0.5 * hash01(d, 63)                     # cm / s
+        self.dash_o = hash01(d, 64)
+        # trabecular network: a jittered lattice inside the rib, linked to its neighbours
+        i, j = np.meshgrid(np.arange(-9, 10), np.arange(-6, 7))
+        jx, jy = _jit(i, j, 21, 0.03)
+        self.tr_x, self.tr_y = (i * 0.085 + jx).ravel(), (j * 0.085 + jy).ravel()      # cm from the centre of the rib
+        self.tr_ph = 2 * np.pi * np.stack([hash01(i, j, 22), hash01(i, j, 23)]).reshape(2, -1)
+        ok = (self.tr_x / (0.98 * 0.76)) ** 2 + (self.tr_y / (0.6 * 0.76)) ** 2 < 1.0
+        self.tr_ok = ok
+        idx = np.arange(i.size).reshape(i.shape)
+        ok2 = ok.reshape(i.shape)
+        la, lb = [], []
+        for di, dj, sd_ in ((1, 0, 31), (0, 1, 32), (1, 1, 33)):
+            a_ = (slice(None, -dj or None), slice(None, -di or None))
+            b_ = (slice(dj, None), slice(di, None))
+            link = ok2[a_] & ok2[b_] & (hash01(i[a_], j[a_], sd_) < (0.72 if sd_ < 33 else 0.3))
+            la.append(idx[a_][link])
+            lb.append(idx[b_][link])
+        self.tr_a, self.tr_b = np.concatenate(la), np.concatenate(lb)
+        self.marrow_ph = 2 * np.pi * hash01(np.arange(len(self.marrow)), 24)
+        # ion pairs along the track (cm from the centre of the view): about twice as dense in the bone
+        s, x = [], -2.6
+        q = 0
+        while x < 2.6:
+            bone = self.RIB[0] <= x <= self.RIB[1]
+            x += (0.03 if bone else 0.062) * (0.6 + 0.8 * float(hash01(q, 25)))
+            s.append(x)
+            q += 1
+        self.ion_s = np.array(s)
+        q = np.arange(len(s))
+        self.ion_bone = (self.ion_s >= self.RIB[0]) & (self.ion_s <= self.RIB[1])
+        self.ion_d = (7.0 + 19.0 * hash01(q, 26)) * np.where(hash01(q, 27) < 0.5, -1.0, 1.0)     # px, to one side
+
+    def _build_cells(self):
+        """The cells of the CELLS view: seeds on a jittered triangular lattice (um, from the centre of the view),
+        the way each one wanders, and the cells the track goes through, in the order it meets them."""
+        P = self.P
+        a = self.CELL
+        ppu = self.CELL_PPU
+        half_w = max(P.fx - WALL[0], WALL[2] - P.fx)
+        nj = int((WALL[3] - WALL[1]) / ppu / (a * 0.866) / 2) + 3
+        ni = int(half_w / ppu / a) + nj // 2 + 4
+        i, j = np.meshgrid(np.arange(-ni, ni + 1), np.arange(-nj, nj + 1))
+        jx, jy = _jit(i, j, 41, 0.2 * a)
+        self.c_shape = i.shape
+        self.c_x, self.c_y = (i + 0.5 * j) * a + jx, j * a * 0.866 + jy          # where each seed rests
+        self.c_ph = 2 * np.pi * np.stack([hash01(i, j, 51), hash01(i, j, 52), hash01(i, j, 56), hash01(i, j, 57)])
+        self.c_om = 1.3 + 1.3 * np.stack([hash01(i, j, 53), hash01(i, j, 54)])   # rad / s
+        self.c_amp = 0.03 * a * (0.3 + 0.7 * hash01(i, j, 55))
+        self.c_nr = 2.6 + 1.2 * hash01(i, j, 43)                                 # nucleus: radius, place in its cell
+        self.c_nx, self.c_ny = _jit(i, j, 47, 2.2)
+        # the cells on the track = nearest seed of its points (at rest, over the field of the first frame of
+        # the view): the list does not change while the seeds move, only the length of the path in each cell
+        S = 560.0 / ppu
+        self.c_S = S
+        s = np.arange(-S, S, 4.0 / ppu)
+        tx, ty = math.sin(self.TILT) * s, math.cos(self.TILT) * s
+        X, Y = self.c_x.ravel(), self.c_y.ravel()
+        near_ok = np.nonzero(np.abs(X) < 420.0 / ppu)[0]
+        near = near_ok[np.argmin((tx[:, None] - X[None, near_ok]) ** 2 + (ty[:, None] - Y[None, near_ok]) ** 2, 1)]
+        order = []
+        for n_ in near:
+            if n_ not in order:
+                order.append(int(n_))
+        self.c_order = np.array(order)
+        ys = Y_MID + Y[self.c_order] * ppu
+        self.c_tags = [(r, int(n_)) for r, n_ in enumerate(order) if r in (1, 5, 9) and Y_TOP + 130 < ys[r] < Y_BOT - 150]
+
+    def _build_source(self):
+        """The rays of the SOURCE block (the star of the story, after the user's sketch: a disc, rays all
+        around it, each one ending in a dot): direction, length, and the rhythm on which each ray is sent again."""
+        n = 28
+        k = np.arange(n)
+        self.src_th = 2 * np.pi * (k + 0.55 * (hash01(k, 91) - 0.5)) / n
+        self.src_len = 0.68 + 0.3 * hash01(k, 92)
+        self.src_T = 5.5 + 3.5 * hash01(k, 93)                       # s between two departures
+        self.src_off = hash01(k, 94) * self.src_T
+        self.src_wav = 2 * np.pi * hash01(k, 95)
 
     def _track_pt(self, s):
         """Screen point at distance s (px) along the track from the centre of the view."""
@@ -1049,17 +1210,24 @@ class You(Scene):
             y += h
 
     # -- bone ------------------------------------------------------------------------
+    RIB = (-0.63, 0.52)                       # cm along the track, from the centre of the view: its path in the rib
+
     def _micro_bone(self, f, t, u):
+        """The rib in section, alive: the fibres ripple and carry pulses, the skin and the pleura breathe, the
+        hatching of the cortical ring travels, the trabecular network works, the marrow glitters, and the muon
+        leaves its ion pairs behind it on every pass (the read-outs count them)."""
         P = self.P
         fit = min(1.0, (P.half - 30.0) / 361.0)              # the rib has to fit between two towers
-        ppu = 300.0 * fit * (1.0 + 0.16 * u)                 # px per cm
+        ppu0 = 300.0 * fit
+        ppu = ppu0 * (1.0 + 0.16 * u)                        # px per cm
         cx, cy = P.fx, Y_MID
         X = lambda wx: cx + np.asarray(wx) * ppu
         Y = lambda wy: cy + np.asarray(wy) * ppu
         wx = np.linspace((WALL[0] - cx) / ppu, (WALL[2] - cx) / ppu, 320)
+        br = 2 * math.pi * (t - CUTS[2]) / 3.4               # one breath in 3.4 s
 
-        def wavy(y, k=0):
-            return y + 0.028 * np.sin(1.3 * wx + k) + 0.012 * np.sin(3.7 * wx + 2.1 * k)
+        def wavy(y, k=0, w=wx):
+            return y + 0.028 * np.sin(1.3 * w + k + 0.45 * t) + 0.012 * np.sin(3.7 * w + 2.1 * k - 0.8 * t)
 
         ex, ey, ea, eb = 0.0, -0.06, 0.98, 0.6    # the rib
         inside = lambda x, y, s=1.0: ((x - ex) / (ea * s)) ** 2 + ((y - ey) / (eb * s)) ** 2 < 1.0
@@ -1068,96 +1236,155 @@ class You(Scene):
         f.polyline("w", X(wx), Y(wavy(-1.34, 1)), 0.6, width=L.LW)
         sx_ = wx[0] + self.skin[:, 0] * (wx[-1] - wx[0])
         f.pixels("w", X(sx_), Y(-1.49 + 0.14 * self.skin[:, 1]), 0.55)
-        # fat: lobules
+        # fat: lobules, each one swelling a little on its own
         ni = int((wx[-1] - wx[0]) / 0.125 / 2) + 2
         i, j = np.meshgrid(np.arange(-ni, ni + 1), np.arange(0, 3))
         jx, jy = _jit(i, j, 5, 0.035)
         fx_, fy_ = i * 0.125 + (j % 2) * 0.06 + jx, -1.27 + j * 0.105 + jy
-        f.rings("w", X(fx_.ravel()), Y(fy_.ravel()), 0.05 * ppu, 0.3)
+        fph = 6.2832 * hash01(i, j, 6)
+        fx_, fy_ = fx_ + 0.007 * np.sin(1.3 * t + fph), fy_ + 0.007 * np.sin(1.05 * t + 1.7 * fph)
+        f.rings("w", X(fx_.ravel()), Y(fy_.ravel()), (0.05 * ppu * (1.0 + 0.07 * np.sin(1.6 * t + 2.3 * fph))).ravel(), 0.3)
         f.polyline("w", X(wx), Y(wavy(-1.02, 2)), 0.6, width=L.LW)
-        # muscle fibres, parting around the bone
-        for k, y0 in enumerate(self.fib_y):
-            ph = self.fib_ph[k]
-            yy = y0 + 0.02 * np.sin(2.2 * wx + ph[0]) + 0.008 * np.sin(7.0 * wx + ph[1])
-            push = np.exp(-((wx - ex) / (ea * 1.25)) ** 2)
+        # muscle fibres, parting around the bone: a ripple runs along each of them, at its own speed
+        def fibre(k, w):
+            """y of fibres k at the abscissas w (broadcast), and whether it is outside the bone."""
+            y0, ph = self.fib_y[k], self.fib_ph[k]
+            yy = y0 + 0.028 * np.sin(2.2 * w + ph[..., 0] - self.fib_w[k] * t) + 0.013 * np.sin(
+                7.0 * w + ph[..., 1] - 2.3 * self.fib_w[k] * t)
+            push = np.exp(-((w - ex) / (ea * 1.25)) ** 2)
             yy = yy + np.sign(y0 - ey + 1e-6) * push * np.clip(eb * 1.12 - np.abs(y0 - ey), 0, None)
-            m = ~inside(wx, yy, 1.08)
-            xs, ys = X(wx), Y(yy)
-            seg = m[:-1] & m[1:]
-            f.segments("w", xs[:-1][seg], ys[:-1][seg], xs[1:][seg], ys[1:][seg], 0.2 + 0.16 * hash01(k, 3))
-        # bone: cortical shell, trabecular sponge, marrow
+            return yy, ~inside(w, yy, 1.08)
+
+        kf = np.arange(len(self.fib_y))[:, None]
+        yy, m = fibre(kf, wx[None, :])
+        seg = m[:, :-1] & m[:, 1:]
+        xs, ys = np.broadcast_to(X(wx)[None, :], yy.shape), Y(yy)
+        f.segments("w", xs[:, :-1][seg], ys[:, :-1][seg], xs[:, 1:][seg], ys[:, 1:][seg],
+                   np.broadcast_to(self.fib_i[:, None], seg.shape)[seg])
+        # ... and pulses travel along some of them (a short bright stretch of the fibre, its head leading)
+        w0, w1 = (WALL[0] - cx) / ppu0, (WALL[2] - cx) / ppu0
+        head = w0 + ((self.dash_v * (t - T_IN) + self.dash_o * (w1 - w0)) % (w1 - w0))
+        dw = head[:, None] - 0.2 * np.linspace(1.0, 0.0, 9)[None, :]                   # 0.2 cm long
+        dy, dm = fibre(self.dash_k[:, None], dw)
+        dseg = dm[:, :-1] & dm[:, 1:]
+        di = np.broadcast_to(np.linspace(0.0, 1.0, 9)[None, :], dw.shape)
+        f.segments("w", X(dw)[:, :-1][dseg], Y(dy)[:, :-1][dseg], X(dw)[:, 1:][dseg], Y(dy)[:, 1:][dseg],
+                   0.75 * di[:, :-1][dseg], 0.75 * di[:, 1:][dseg], width=1.5)
+        hm = dm[:, -1]
+        f.dots("w", X(dw)[:, -1][hm], Y(dy)[:, -1][hm], 1.7, 1.2)
+        # bone: cortical shell (its hatching travels round the ring), trabecular sponge, marrow
         a = np.linspace(0, 2 * np.pi, 200)
         f.polyline("w", X(ex + ea * np.cos(a)), Y(ey + eb * np.sin(a)), 1.0, width=L.LW_BOLD + 0.6)
         f.polyline("w", X(ex + ea * 0.8 * np.cos(a)), Y(ey + eb * 0.74 * np.sin(a)), 0.75, width=L.LW)
-        ah = np.linspace(0, 2 * np.pi, 150, endpoint=False)
+        ah = np.linspace(0, 2 * np.pi, 150, endpoint=False) + 0.2 * t
         f.segments("w", X(ex + ea * 0.97 * np.cos(ah)), Y(ey + eb * 0.97 * np.sin(ah)), X(ex + ea * 0.83 * np.cos(ah)),
                    Y(ey + eb * 0.77 * np.sin(ah)), 0.5)
-        i, j = np.meshgrid(np.arange(-9, 10), np.arange(-6, 7))
-        jx, jy = _jit(i, j, 21, 0.03)
-        nx_, ny_ = ex + i * 0.085 + jx, ey + j * 0.085 + jy
-        ok = inside(nx_, ny_, 0.76)
-        for di, dj, sd_ in ((1, 0, 31), (0, 1, 32), (1, 1, 33)):
-            a_ = (slice(None, -dj or None), slice(None, -di or None))
-            b_ = (slice(dj, None), slice(di, None))
-            link = ok[a_] & ok[b_] & (hash01(i[a_], j[a_], sd_) < (0.72 if sd_ < 33 else 0.3))
-            f.segments("w", X(nx_[a_][link]), Y(ny_[a_][link]), X(nx_[b_][link]), Y(ny_[b_][link]), 0.6, width=1.3)
-        f.dots("w", X(nx_[ok]), Y(ny_[ok]), 1.8, 0.8)
+        swell = 1.0 + 0.012 * math.sin(br)
+        nx_ = ex + self.tr_x * swell + 0.012 * np.sin(1.9 * t + self.tr_ph[0])
+        ny_ = ey + self.tr_y * swell + 0.012 * np.sin(1.5 * t + self.tr_ph[1])
+        f.segments("w", X(nx_[self.tr_a]), Y(ny_[self.tr_a]), X(nx_[self.tr_b]), Y(ny_[self.tr_b]), 0.6, width=1.3)
+        ok = self.tr_ok
+        f.dots("w", X(nx_[ok]), Y(ny_[ok]), 1.8 + 0.5 * np.sin(2.6 * t + self.tr_ph[0][ok]), 0.8)
         mk = inside(ex + self.marrow[:, 0] * ea, ey + self.marrow[:, 1] * eb, 0.74)
-        f.pixels("w", X(ex + self.marrow[mk, 0] * ea), Y(ey + self.marrow[mk, 1] * eb), 0.45)
-        # pleura + lung
-        f.polyline("w", X(wx), Y(wavy(0.95, 3)), 0.8, width=L.LW)
-        f.polyline("w", X(wx), Y(wavy(1.0, 3)), 0.55)
+        f.pixels("w", X(ex + self.marrow[mk, 0] * ea), Y(ey + self.marrow[mk, 1] * eb),
+                 0.45 * (0.55 + 0.45 * np.sin(2.4 * t + self.marrow_ph[mk])))
+        # pleura + lung: the alveoli fill and empty, a wave of it running along the lung
+        lift = -0.012 * math.sin(br)
+        f.polyline("w", X(wx), Y(wavy(0.95, 3) + lift), 0.8, width=L.LW)
+        f.polyline("w", X(wx), Y(wavy(1.0, 3) + lift), 0.55)
         ni = int((wx[-1] - wx[0]) / 0.09 / 2) + 2
         i, j = np.meshgrid(np.arange(-ni, ni + 1), np.arange(0, 7))
         jx, jy = _jit(i, j, 9, 0.02)
         lx, ly = i * 0.09 + (j % 2) * 0.045 + jx, 1.07 + j * 0.08 + jy
         vis = (Y(ly) < Y_BOT + 20).ravel()
-        f.rings("w", X(lx.ravel()[vis]), Y(ly.ravel()[vis]), 0.036 * ppu, 0.26)
+        lr = 0.036 * ppu * (1.0 + 0.11 * np.sin(br - 1.1 * lx + 0.6 * j))
+        f.rings("w", X(lx.ravel()[vis]), Y(ly.ravel()[vis] + lift), lr.ravel()[vis], 0.26)
         # the track
         self._lattice(f)
         self._track(f, t, tick=15.0)
-        x0_, y0_ = self._track_pt(-0.63 * ppu)
-        x1_, y1_ = self._track_pt(0.52 * ppu)
+        s0, s1 = self.RIB[0] * ppu, self.RIB[1] * ppu
+        x0_, y0_ = self._track_pt(s0)
+        x1_, y1_ = self._track_pt(s1)
         f.rings("r", [x0_, x1_], [y0_, y1_], [11.0, 11.0], 1.0, width=1.8)
         f.segments("r", [x0_], [y0_], [x1_], [y1_], 1.2, width=4.0)
+        # the ion pairs it leaves: each one is set free when the pulse of the track passes (once a beat), its
+        # electron thrown to one side; they are about twice as many in the bone
+        beat = BAR / 4
+        sp = -560.0 + 1120.0 * (((t - BAR0) % beat) / beat)          # where the pulse is, px along the track
+        si = self.ion_s * ppu
+        age = ((sp - si) % 1120.0) / 1120.0 * beat
+        g = np.exp(-age / 0.25) * np.where(self.ion_bone, 1.0, 0.7)
+        on = (np.abs(si) < 554.0) & (g > 0.03)
+        bx, by = self._track_pt(si[on])
+        off = self.ion_d[on] * (1.0 - np.exp(-age[on] / 0.05))
+        qx, qy = bx + math.cos(self.TILT) * off, by - math.sin(self.TILT) * off
+        f.segments("r", bx, by, qx, qy, 0.7 * g[on])
+        f.dots("r", qx, qy, 1.3 + 1.5 * g[on], 1.7 * g[on])
+        f.dots("w", bx, by, 1.5, 1.3 * np.exp(-age[on] / 0.07))
+        # the read-outs of the rib count while the pulse crosses it, and hold until it comes back
+        q = float(np.clip((sp - s0) / (s1 - s0), 0.0, 1.0)) if sp >= s0 else 1.0
         age = t - CUTS[2]
         xe, ye = self._track_pt(0.82 * ppu)
-        callout(f, xe, ye, "RIB_3", ["PATH 1.15 CM", "DE 3.9 MEV", "~130 000 IONS"], col=P.fcol, dy=44.0, red=True,
-                age=age)
-        # tissues on the track + their energy loss: rows at the height of each tissue, in the side column
+        callout(f, xe, ye, "RIB_3", [f"PATH {1.15 * q:4.2f} CM", f"DE {3.9 * q:3.1f} MEV",
+                                    f"~{int(130.0 * q) * 1000:07,d} IONS".replace(",", " ")], col=P.fcol, dy=44.0,
+                red=True, age=age)
+        # tissues on the track + their energy loss: rows at the height of each tissue, in the side column. The
+        # bar of the tissue the pulse is in lights up
         if P.side is not None:
             sx0, sx1 = P.side
             bw = max(60.0, sx1 - sx0 - 330.0)
+            ct = math.cos(self.TILT)
+            spw = sp / ppu                      # cm along the track
             with f.build(age - 0.15, (sx0 - 10, Y_TOP + 16, sx1, Y_BOT), flow="tb", wave=0.45, marks=False, key=50) as blk:
                 f.tag("w", sx0 + 6, Y_TOP + 36, "ON THE TRACK // RHO G/CM3 // DE/DX MEV/CM", size=L.T_MICRO, pad=3)
-                for y_, name, rho, de in ((-1.18, "FAT", "0.95", 1.8), (-0.5, "MUSCLE", "1.05", 2.1),
-                                          (ey, "BONE", "1.92", 3.4), (1.3, "LUNG", "0.26", 0.5)):
+                for y_, name, rho, de, spans in ((-1.18, "FAT", "0.95", 1.8, ((-1.34 / ct, -1.02 / ct),)),
+                                                 (-0.5, "MUSCLE", "1.05", 2.1, ((-1.02 / ct, self.RIB[0]),
+                                                                                (self.RIB[1], 0.95 / ct))),
+                                                 (ey, "BONE", "1.92", 3.4, (self.RIB,)),
+                                                 (1.3, "LUNG", "0.26", 0.5, ((1.0 / ct, 560.0 / ppu),))):
                     yy = float(Y(y_))
                     if not (Y_TOP + 70 < yy < Y_BOT - 30):
                         continue
+                    # seconds since the pulse was in this tissue (0 while it is there)
+                    since = min(0.0 if a_ <= spw <= b_ else ((spw - b_) % (1120.0 / ppu)) / (1120.0 / ppu) * beat
+                                for a_, b_ in spans)
+                    lit = math.exp(-since / 0.18)
                     # its plate opens from the tick on the left when the wave gets to this row
                     plate(f, (sx0 - 10, yy - 24, sx0 + 266 + de / 3.4 * bw, yy + 24), float(blk.la(sx0, yy)), 0.2, "lr")
-                    f.segments("w", [sx0 - 8], [yy], [sx0 + 10], [yy], 0.9, width=L.LW)
+                    f.segments("w", [sx0 - 8], [yy], [sx0 + 10], [yy], 0.9 + 0.8 * lit, width=L.LW)
                     f.tag("r" if name == "BONE" else "w", sx0 + 20, yy + 8, name, size=L.T_LABEL, pad=4)
                     f.text("w", sx0 + 130, yy + 7, rho, size=L.T_SMALL, alpha=0.8)
-                    f.rects("r" if name == "BONE" else "w", sx0 + 200, yy - 7, sx0 + 200 + de / 3.4 * bw, yy + 7, 0.95)
+                    f.rects("r" if name == "BONE" else "w", sx0 + 200, yy - 7, sx0 + 200 + de / 3.4 * bw, yy + 7,
+                            0.8 + 0.75 * lit)
                     f.text("w", sx0 + 210 + de / 3.4 * bw, yy + 7, f"{de:.1f}", size=L.T_SMALL, alpha=0.85)
         self._scale_bar(f, ppu, 1.0, "1 CM", t - self._cut(t))
 
     # -- cells -----------------------------------------------------------------------
+    CELL = 20.0                               # um between two seeds
+    CELL_PPU = 4.6                            # px per um at the cut
+    # the tissue moves as one: slow waves several cells long. (amplitude / CELL, kx, ky in rad / um, rad / s,
+    # phase, direction of the displacement)
+    CELL_WAVES = ((0.05, 0.0335, 0.0251, 2.0, 0.0, 0.6, -0.8), (0.04, -0.0286, 0.0495, 1.5, 1.9, 0.866, 0.5),
+                  (0.03, 0.0286, 0.0, 2.6, 4.1, 1.0, 0.0))
+
+    def _cell_seeds(self, t):
+        """Where the seeds are at t (um): waves run through the tissue and every seed wanders a little on its
+        own. All of it stays small against the pitch of the lattice: neighbours stay neighbours, so the walls
+        (which are computed from the seeds at every frame) lean and stretch without a jump."""
+        x0, y0 = self.c_x, self.c_y
+        dx = self.c_amp * np.sin(self.c_om[0] * t + self.c_ph[0])
+        dy = self.c_amp * np.sin(self.c_om[1] * t + self.c_ph[1])
+        for amp, kx, ky, w, ph, ux, uy in self.CELL_WAVES:
+            s = amp * self.CELL * np.sin(kx * x0 + ky * y0 - w * t + ph)
+            dx, dy = dx + ux * s, dy + uy * s
+        return x0 + dx, y0 + dy
+
     def _micro_cells(self, f, t, u):
         P = self.P
-        ppu = 4.6 * (1.0 + 0.16 * u)              # px per um
-        a = 20.0
+        ppu = self.CELL_PPU * (1.0 + 0.16 * u)             # px per um
         cx, cy = P.fx, Y_MID
-        half_w = max(cx - WALL[0], WALL[2] - cx)
-        nj = int((WALL[3] - WALL[1]) / ppu / (a * 0.866) / 2) + 3
-        ni = int(half_w / ppu / a) + nj // 2 + 4
-        i, j = np.meshgrid(np.arange(-ni, ni + 1), np.arange(-nj, nj + 1))
-        jx, jy = _jit(i, j, 41, 0.2 * a)
-        px = (i + 0.5 * j) * a + jx
-        py = j * a * 0.866 + jy
-        # Voronoi from the (jittered) triangular lattice: circumcentres of its two triangle families
+        px, py = self._cell_seeds(t)
+        # Voronoi from the (jittered, moving) triangular lattice: circumcentres of its two triangle families
         A = (slice(None, -1), slice(None, -1))
         Bx, By = px[:-1, 1:], py[:-1, 1:]           # P(i+1, j)
         Cx, Cy = px[1:, :-1], py[1:, :-1]           # P(i, j+1)
@@ -1170,54 +1397,50 @@ class You(Scene):
             X0, Y0 = S(x0.ravel(), y0.ravel())
             X1, Y1 = S(x1.ravel(), y1.ravel())
             f.segments("w", X0, Y0, X1, Y1, 0.5, width=1.3)
+        # the nuclei: the points the walls follow (each one sits a little off the seed of its cell)
         NX, NY = S(px.ravel(), py.ravel())
-        nr = (2.6 + 1.2 * hash01(i, j, 43)).ravel() * ppu
+        UX, UY = NX + self.c_nx.ravel() * ppu, NY + self.c_ny.ravel() * ppu
+        nr = self.c_nr.ravel() * ppu
         vis = (NX > WALL[0] - 30) & (NX < WALL[2] + 30) & (NY > WALL[1] - 30) & (NY < WALL[3] + 30)
-        ox, oy = _jit(i, j, 47, 2.2)
-        f.rings("w", NX[vis] + ox.ravel()[vis] * ppu, NY[vis] + oy.ravel()[vis] * ppu, nr[vis], 0.42)
-        f.dots("w", NX[vis] + ox.ravel()[vis] * ppu, NY[vis] + oy.ravel()[vis] * ppu, 1.8, 0.7)
-        # cells the track goes through = nearest seed of the points of the track
-        s = np.arange(-560.0, 560.0, 4.0)
-        tx_, ty_ = self._track_pt(s)
-        near_ok = np.nonzero(np.abs(NX - cx) < 420)[0]
-        d2 = (tx_[:, None] - NX[None, near_ok]) ** 2 + (ty_[:, None] - NY[None, near_ok]) ** 2
-        near = near_ok[np.argmin(d2, 1)]
-        order, first = [], {}
-        for k, n_ in enumerate(near):
-            if n_ not in first:
-                first[n_] = k
-                order.append(n_)
-        path = {n_: int((near == n_).sum()) * 4.0 / ppu for n_ in order}
+        f.rings("w", UX[vis], UY[vis], nr[vis], 0.42)
+        f.dots("w", UX[vis], UY[vis], 1.8, 0.7)
+        # the path of the track in each cell it meets, from wall to wall: the wall between two cells is where
+        # the track is as far from one seed as from the other, so the lengths follow the seeds without a step
+        o = self.c_order
+        ox_, oy_ = px.ravel()[o], py.ravel()[o]
+        dx_, dy_ = math.sin(self.TILT), math.cos(self.TILT)
+        den = 2.0 * (dx_ * (ox_[1:] - ox_[:-1]) + dy_ * (oy_[1:] - oy_[:-1]))
+        b = ((ox_[1:] ** 2 + oy_[1:] ** 2) - (ox_[:-1] ** 2 + oy_[:-1] ** 2)) / np.where(np.abs(den) < 1e-6, 1e-6, den)
+        edges = np.r_[-self.c_S, np.maximum.accumulate(np.clip(b, -self.c_S, self.c_S)), self.c_S]
+        path = edges[1:] - edges[:-1]                              # um, in the order the muon meets the cells
         self._lattice(f)
+        # the cells on the track: each one lights up when the pulse of the track goes through it
         beat = BAR / 4
         lead = -560.0 + 1120.0 * (((t - BAR0) % beat) / beat)
-        ii, jj = i.ravel(), j.ravel()
-        I0, J0 = int(i.min()), int(j.min())
-        tags = []
-        for rank, n_ in enumerate(order):
-            r, c = jj[n_] - J0, ii[n_] - I0
-            if not (1 <= r < c1x.shape[0] and 1 <= c < c1x.shape[1]):
-                continue
-            vx = np.array([c1x[r, c], c2x[r, c - 1], c1x[r, c - 1], c2x[r - 1, c - 1], c1x[r - 1, c], c2x[r - 1, c]])
-            vy = np.array([c1y[r, c], c2y[r, c - 1], c1y[r, c - 1], c2y[r - 1, c - 1], c1y[r - 1, c], c2y[r - 1, c]])
-            VX, VY = S(vx, vy)
-            s_mid = s[first[n_]] + path[n_] * ppu / 2
-            glow = math.exp(-max(0.0, lead - s_mid) / 260.0) if lead >= s_mid - 30 else 0.25
-            f.polyline("r", VX, VY, 0.5 + 0.9 * glow, width=2.4, closed=True)
-            f.rings("r", [NX[n_] + ox.ravel()[n_] * ppu], [NY[n_] + oy.ravel()[n_] * ppu], [nr[n_]], 0.5 + 0.6 * glow)
-            if rank in (1, 5, 9) and Y_TOP + 130 < NY[n_] < Y_BOT - 150:
-                tags.append((rank, n_))
+        since = ((lead - 0.5 * (edges[1:] + edges[:-1]) * ppu) % 1120.0) / 1120.0 * beat
+        glow = np.maximum(0.25, np.exp(-since / 0.16))
+        nc = self.c_shape[1]
+        r, c = o // nc, o % nc
+        ok = (r >= 1) & (r < c1x.shape[0]) & (c >= 1) & (c < c1x.shape[1])
+        r, c = r[ok], c[ok]
+        vx = np.stack([c1x[r, c], c2x[r, c - 1], c1x[r, c - 1], c2x[r - 1, c - 1], c1x[r - 1, c], c2x[r - 1, c]], 1)
+        vy = np.stack([c1y[r, c], c2y[r, c - 1], c1y[r, c - 1], c2y[r - 1, c - 1], c1y[r - 1, c], c2y[r - 1, c]], 1)
+        VX, VY = S(vx, vy)
+        gl = np.broadcast_to(glow[ok][:, None], VX.shape)
+        f.segments("r", VX.ravel(), VY.ravel(), np.roll(VX, -1, 1).ravel(), np.roll(VY, -1, 1).ravel(),
+                   (0.5 + 0.9 * gl).ravel(), width=2.4)
+        f.rings("r", UX[o[ok]], UY[o[ok]], nr[o[ok]], 0.5 + 0.6 * glow[ok])
         self._track(f, t, width_=2.6)
-        for q, (rank, n_) in enumerate(tags):
+        for q, (rank, n_) in enumerate(self.c_tags):
             side = 1 if q % 2 == 0 else -1
             callout(f, float(NX[n_]) + side * 34, float(NY[n_]), f"CELL {rank + 1:02d}",
-                    [f"PATH {path[n_]:.1f} UM", f"DE {path[n_] * 0.2:.2f} KEV", f"{int(path[n_] * 6.6):d} ION PAIRS"],
+                    [f"PATH {path[rank]:4.1f} UM", f"DE {path[rank] * 0.2:.2f} KEV", f"{int(path[rank] * 6.6):03d} ION PAIRS"],
                     col=P.fcol, prefer=side, dy=-46.0 * side, red=True, age=t - CUTS[3] - 0.15 * q, elbow=36.0)
         # ion pairs per crossed cell, in the order the muon met them (side column)
         if P.side is not None:
             sx0, sx1 = P.side
             yt = Y_TOP + 96
-            n_show = min(len(order), 22)
+            n_show = min(len(o), 22)
             plate(f, (sx0, yt - 58, sx1, yt + n_show * 17 + 136), t - CUTS[3] - 0.15, 0.4)
             with f.build(t - CUTS[3] - 0.15, (sx0, yt - 58, sx1, yt + n_show * 17 + 136), flow="tb", wave=0.5, key=51):
                 f.rect("w", sx0, yt - 58, sx1, yt + n_show * 17 + 136, 0.4)
@@ -1225,62 +1448,156 @@ class You(Scene):
                 f.tag("w", sx0 + 6, yt - 26, fit_text(["ION PAIRS PER CELL // IN THE ORDER IT MET THEM",
                                                        "ION PAIRS PER CELL"], sx1 - sx0, L.T_MICRO), size=L.T_MICRO, pad=3)
                 bw = sx1 - sx0 - 60
-                for rank, n_ in enumerate(order[:n_show]):
-                    v = path[n_] * 6.6
-                    f.rects("r", sx0 + 44, yt + rank * 17, sx0 + 44 + min(bw, v * bw / 190.0), yt + rank * 17 + 10, 0.95)
+                rk = np.arange(n_show)
+                hud.bars(f, "r", sx0 + 44, yt + rk * 17, sx0 + 44 + np.minimum(bw, path[:n_show] * 6.6 * bw / 190.0),
+                         yt + rk * 17 + 10, 0.75 + 0.6 * (glow[:n_show] - 0.25))
+                for rank in range(n_show):
                     f.text("w", sx0 + 34, yt + rank * 17 + 11, f"{rank + 1:02d}", size=L.T_MICRO, alpha=0.7, anchor="rs")
                 yn = yt + n_show * 17 + 44
-                for k, ln in enumerate([f"{len(order)} CELLS ON THE TRACK", f"{sum(path.values()) * 6.6:.0f} ION PAIRS",
+                for k, ln in enumerate([f"{len(o)} CELLS ON THE TRACK", f"{path.sum() * 6.6:.0f} ION PAIRS",
                                         "NO CELL NOTICED"]):
                     f.text("r" if k == 2 else "w", sx0 + 6, yn + k * 32, ln, size=L.T_TAG, alpha=0.92)
         self._scale_bar(f, ppu, 50.0, "50 UM", t - self._cut(t))
 
     # -- dna ---------------------------------------------------------------------------
+    DNA_PPU = 100.0                           # px per nm at the cut
+    DNA_AXIS = 1.3                            # nm: the axis of the helix runs under the centre of the view
+    DNA_PITCH, DNA_RISE = 3.4, 0.34           # nm per turn, nm per base pair: 10 pairs a turn
+    DNA_MINOR = 1.2                           # nm between the two strands along the axis (minor groove; major: 2.2)
+    DNA_SEQ = "TTAGGG"                        # the repeat at the end of every human chromosome (telomere)
+    DNA_PAIR = {"A": "T", "T": "A", "G": "C", "C": "G"}
+    DNA_TURN = 0.85                           # rad / s: it turns about its axis
+
+    def _delta(self, n):
+        """The first n (fractional) steps of the path of the electron that was set free: it grows smoothly."""
+        n = float(np.clip(n, 1.0, len(self.delta)))
+        k = int(n)
+        d = self.delta[:k]
+        if k < len(self.delta) and n > k:
+            d = np.vstack([d, self.delta[k - 1] + (self.delta[k] - self.delta[k - 1]) * (n - k)])
+        return d
+
     def _micro_dna(self, f, t, u):
+        """DNA as a diagram: ONE double helix across the field, flat. Two strands (the one in front heavy, the
+        one behind light) between two rules; a rung per base pair, purine heavy and pyrimidine light, with its
+        two letters; the hydrogen bonds as a lane of bars; the grooves named as they pass; dimension lines for
+        the figures of the panel. It turns slowly about its axis, a read head runs along the sequence, and the
+        muon crosses between two pairs."""
         P = self.P
-        ppu = 23.0 * (1.0 + 0.16 * u)             # px per nm
+        ppu = self.DNA_PPU * (1.0 + 0.16 * u)             # px per nm
         cx, cy = P.fx, Y_MID
-        f.pixels("w", WALL[0] + self.water[:, 0] * (WALL[2] - WALL[0]),
-                 WALL[1] + self.water[:, 1] * (WALL[3] - WALL[1]), 0.4)
-        for k, (hx, hy, ang, ph) in enumerate(self.helix):
-            s = np.arange(-110.0, 110.0, 0.085)                  # nm along the axis
-            th = 2 * np.pi * s / 3.4 + ph + 0.5 * t * (1 if k % 2 else -1)
-            ca, sa = math.cos(ang), math.sin(ang)
-            axx, axy = hx + ca * s, hy + sa * s
-            vis = (np.abs(cy + axy * ppu - Y_MID) < 520) & (cx + axx * ppu > WALL[0] - 40) & (cx + axx * ppu < WALL[2] + 40)
-            if vis.sum() < 4:
-                continue
-            s, th, axx, axy = s[vis], th[vis], axx[vis], axy[vis]
-            brk = np.diff(s) > 0.2
-            for dphi in (0.0, 2.44):
-                off = np.cos(th + dphi)
-                depth = 0.55 + 0.45 * np.sin(th + dphi)
-                X_ = cx + (axx - sa * off) * ppu
-                Y_ = cy + (axy + ca * off) * ppu
-                ok = ~brk
-                f.segments("w", X_[:-1][ok], Y_[:-1][ok], X_[1:][ok], Y_[1:][ok], 0.85 * depth[:-1][ok],
-                           0.85 * depth[1:][ok], width=1.8)
-            r = np.arange(0, len(s), 4)
-            o1, o2 = np.cos(th[r]), np.cos(th[r] + 2.44)
-            f.segments("w", cx + (axx[r] - sa * o1) * ppu, cy + (axy[r] + ca * o1) * ppu,
-                       cx + (axx[r] - sa * o2) * ppu, cy + (axy[r] + ca * o2) * ppu, 0.42)
-        self._lattice(f)
         age = t - CUTS[4]
+        ya, R = cy + self.DNA_AXIS * ppu, 1.0 * ppu
+        top, bot = ya - R, ya + R
+        w0, w1 = P.win[0] + 8.0, P.win[1] - 8.0           # the helix crosses the whole field window
+        k = 2 * math.pi / self.DNA_PITCH
+        dg = k * self.DNA_MINOR
+        phi = self.DNA_TURN * age + 0.6
+        # the two strands
+        s = np.arange((w0 - cx) / ppu, (w1 - cx) / ppu, 0.04)          # nm along the axis
+        xs = cx + s * ppu
+        for d in (0.0, dg):
+            z = 0.5 + 0.5 * np.sin(k * s + phi + d)                    # 1 = in front
+            y = ya - R * np.cos(k * s + phi + d)
+            f.segments("w", xs[:-1], y[:-1], xs[1:], y[1:], 0.4 + 0.85 * z[:-1], 0.4 + 0.85 * z[1:],
+                       width=1.4 + 2.6 * z[:-1])
+        f.segments("w", [w0, w0], [top, bot], [w1, w1], [top, bot], 0.3)
+        # a rung per base pair: the purine (A, G) is the heavy, longer half, the pyrimidine (T, C) the light one
+        sp = self.DNA_RISE * ppu
+        n = np.arange(int(math.ceil((w0 + 6 - cx) / sp - 0.5)), int(math.floor((w1 - 6 - cx) / sp - 0.5)) + 1)
+        xn = cx + (n + 0.5) * sp
+        a1 = k * (n + 0.5) * self.DNA_RISE + phi
+        y1, y2 = ya - R * np.cos(a1), ya - R * np.cos(a1 + dg)
+        zz = 0.5 + 0.25 * (np.sin(a1) + np.sin(a1 + dg))
+        b1 = np.array(list(self.DNA_SEQ))[n % len(self.DNA_SEQ)]
+        b2 = np.array([self.DNA_PAIR[c] for c in b1])
+        pur = (b1 == "A") | (b1 == "G")
+        ym = y1 + (y2 - y1) * np.where(pur, 0.58, 0.42)
+        gap = np.clip(0.5 * (y2 - y1), -3.0, 3.0)
+        # the read head runs along the sequence from the left of the focus bay; the pair it is on is red
+        n_first = int(math.ceil((P.win[0] + 14.0 - cx) / (self.DNA_RISE * self.DNA_PPU) - 0.5))      # pair 0000
+        h = (P.fcol[0] + 30.0 - cx) / (self.DNA_RISE * self.DNA_PPU) + 10.5 * max(0.0, age - 0.5)
+        cur = int(math.floor(h))
+        on = (n == cur) & (age >= 0.5)
+        for lay, m, gain in (("w", ~on, 1.0), ("r", on, 1.5)):
+            f.segments(lay, xn[m], y1[m], xn[m], (ym - gap)[m], gain * (0.45 + 0.55 * zz[m]), width=np.where(pur, 5.0, 2.0)[m])
+            f.segments(lay, xn[m], (ym + gap)[m], xn[m], y2[m], gain * (0.45 + 0.55 * zz[m]), width=np.where(pur, 2.0, 5.0)[m])
+        self._lattice(f)
+        # what is written on it is made at the cut, from the left: letters, bonds, dimensions
+        fs = 24.0
+        with f.build(age - 0.1, (w0, top - 70.0, w1, bot + 124.0), flow="lr", wave=0.55, marks=False, key=57):
+            xa, xb = P.fcol[0] + 4, P.fcol[1] - 4
+            for xx, c1, c2, o in zip(xn, b1, b2, on):
+                if xa - 12 < xx < xa + 32 or xb - 32 < xx < xb + 12:           # the ends of the rows carry their marks
+                    continue
+                f.text("r" if o else "w", xx, top - 14, str(c1), size=fs, alpha=1.0 if o else 0.82, anchor="ms", bold=True)
+                f.text("r" if o else "w", xx, bot + 14 + fs, str(c2), size=fs, alpha=1.0 if o else 0.82, anchor="ms",
+                       bold=True)
+            # hydrogen bonds, one line each: two between A and T, three between G and C
+            gc = (b1 == "G") | (b1 == "C")
+            yb = bot + 22 + fs
+            for row in range(3):
+                for lay, m in (("w", ~on & (gc | (row < 2))), ("r", on & (gc | (row < 2)))):
+                    hud.bars(f, lay, xn[m] - 0.3 * sp, yb + 5 * row, xn[m] + 0.3 * sp, yb + 5 * row + 3, 0.95)
+            # the two strands run opposite ways
+            for yy, left, right in ((top - 14, "5'", "3'"), (bot + 14 + fs, "3'", "5'")):
+                f.tag("w", xa, yy, left, size=L.T_MICRO, pad=3)
+                f.tag("w", xb, yy, right, size=L.T_MICRO, pad=3, anchor="rs")
+            f.tag("w", xa, yb + 12, "H-BONDS", size=L.T_MICRO, pad=3)
+            # 2.0 nm wide
+            xd = xa + 82.0
+            f.segments("w", [xd, xd - 7, xd - 7], [top, top, bot], [xd, xd + 7, xd + 7], [bot, top, bot], 0.95, width=L.LW)
+            f.tag("w", xd + 8, ya + 6, "2.0 NM", size=L.T_MICRO, pad=3)
+            # one turn = 10 pairs = 3.4 nm, and the rise from a pair to the next: measured on the rungs
+            yd = yb + 40
+            sp1 = self.DNA_RISE * self.DNA_PPU * 1.16                # the pitch of the rungs at the end of the view
+            if cx - P.fcol[0] >= 9.5 * sp1 + 6.0 and P.fcol[1] - cx >= 5.5 * sp1 + 160.0:
+                x0_, x1_ = cx - 9.5 * sp, cx + 0.5 * sp
+                f.segments("w", [x0_, x0_, x1_], [yd, yd - 16, yd - 16], [x1_, x0_, x1_], [yd, yd + 7, yd + 7], 0.95, width=L.LW)
+                f.text("w", 0.5 * (x0_ + x1_), yd + 24, fit_text(["ONE TURN // 3.4 NM // 10 PAIRS", "3.4 NM // 10 PAIRS", "3.4 NM"],
+                                                                 x1_ - x0_, L.T_MICRO), size=L.T_MICRO, alpha=0.9, anchor="ms")
+                x0_, x1_ = cx + 3.5 * sp, cx + 4.5 * sp
+                f.segments("w", [x0_ - 26, x0_, x1_], [yd, yd - 16, yd - 16], [x1_ + 26, x0_, x1_], [yd, yd + 7, yd + 7], 0.95,
+                           width=L.LW)
+                f.text("w", x1_ + 34, yd + 5, "0.34 NM A PAIR", size=L.T_MICRO, alpha=0.9)
+        # the grooves, named as they go by: between the two strands 1.2 nm one way (minor), 2.2 nm the other
+        # (major). The marks ride on the top rule with the turning helix; each is made as it comes in on the
+        # right of the window and taken apart before it leaves on the left
+        v = self.DNA_TURN / k * ppu                        # px / s
+        yg = top - 18 - fs
+        m0 = math.floor((k * (w0 - cx) / ppu + phi) / (2 * math.pi))
+        for m in range(m0, m0 + int((w1 - w0) / (self.DNA_PITCH * ppu)) + 3):
+            x1_ = cx + (2 * math.pi * m - phi) / k * ppu           # the first strand touches the top rule
+            for xa_, xb_, word in ((x1_ - self.DNA_MINOR * ppu, x1_, "MINOR 1.2 NM"),
+                                   (x1_, x1_ + (self.DNA_PITCH - self.DNA_MINOR) * ppu, "MAJOR 2.2 NM")):
+                if xa_ < w0 + 4 or xb_ > w1 - 4:
+                    continue
+                with f.build(B.io(min((w1 - 4 - xb_) / v, age - 0.3), (xa_ - w0 - 4) / v, out=0.3, span=0.5),
+                             (xa_, yg - 26, xb_, yg + 8), flow="lr", wave=0.12, marks=False, key=58):
+                    f.segments("w", [xa_ + 3, xa_ + 3, xb_ - 3], [yg, yg - 5, yg - 5], [xb_ - 3, xa_ + 3, xb_ - 3],
+                               [yg, yg + 6, yg + 6], 0.7)
+                    f.text("w", 0.5 * (xa_ + xb_), yg - 8, word if xb_ - xa_ > 112 else word[:5], size=L.T_MICRO,
+                           alpha=0.85, anchor="ms")
+        # the read head
+        xh = cx + h * sp
+        if age >= 0.5 and w0 + 10 < xh < w1 - 10:
+            c1 = self.DNA_SEQ[cur % len(self.DNA_SEQ)]
+            f.segments("r", [xh], [yg - 54], [xh], [yb + 16], 0.9)
+            f.tag("r", xh + 5, yg - 40, f"PAIR {cur - n_first:04d} {c1}-{self.DNA_PAIR[c1]}", size=L.T_MICRO, pad=3)
         self._track(f, t, width_=2.0)
-        # one ionisation in the field: on average they are 150 nm apart
-        px, py = self._track_pt(150.0)
+        # one ionisation in the field (in the water over the helix): on average they are 150 nm apart
+        px, py = self._track_pt(-1.9 * ppu)
         a = age % (BAR / 2)
         uu = min(1.0, a / 0.9)
-        f.rings("r", [px], [py], [9 + 60 * (1 - (1 - uu) ** 3)], (1 - uu) ** 1.4, width=1.8)
+        ring = np.linspace(0, 2 * np.pi, 49)
+        rr = 9 + 60 * (1 - (1 - uu) ** 3)
+        f.polyline("r", px + rr * np.cos(ring), py + rr * np.sin(ring), (1 - uu) ** 1.4, width=1.8)
         f.dots("r", [px], [py], 5.0, 1.6)
-        n = int(min(len(self.delta), 3 + a * 40))
-        dx_, dy_ = px + self.delta[:n, 0] * 9.0, py + self.delta[:n, 1] * 9.0
+        dl = self._delta(3 + a * 40)
+        dx_, dy_ = px + dl[:, 0] * 9.0, py + dl[:, 1] * 9.0
         f.polyline("r", np.r_[px, dx_], np.r_[py, dy_], 0.9, width=1.6)
         f.dots("r", dx_[-1:], dy_[-1:], 3.0, 1.5)
-        hxp, hyp = cx + (10.0 - 6.0 * math.cos(-0.3)) * ppu, cy + (9.0 - 6.0 * math.sin(-0.3) + 1.0) * ppu
         solo = P.side is None           # no list beside the view: the tags carry the data themselves
-        callout(f, hxp, hyp, "DNA", ["HELIX 2.0 NM", "3.4 NM A TURN"] if solo else [], col=P.fcol, prefer=1, dy=70.0,
-                age=age)
         callout(f, px, py, "ION PAIR", ["~33 EV", "NEXT +148 NM"] if solo else [], col=P.fcol, prefer=-1, dy=56.0,
                 red=True, age=age - 0.3)
         qx, qy = self._track_pt(-330.0)
@@ -1292,7 +1609,7 @@ class You(Scene):
             ("ION PAIR", ["ONE ELECTRON SET FREE // ~33 EV", "THE NEXT ONE: 148 NM FURTHER"], True, age - 0.3),
             ("MU-", ["PASSES BETWEEN THE TURNS", "MEAN FREE PATH ~150 NM", "THE HELIX DOES NOT NOTICE"], True,
              age - 0.6)])
-        self._scale_bar(f, ppu, 10.0, "10 NM", t - self._cut(t))
+        self._scale_bar(f, ppu, 5.0, "5 NM", t - self._cut(t))
 
     # -- atoms -------------------------------------------------------------------------
     def _micro_atoms(self, f, t, u):
@@ -1309,9 +1626,11 @@ class You(Scene):
         ang = 2 * np.pi * hash01(i, j, 75) + 0.5 * np.sin(t * 2.0 + 6.28 * hash01(i, j, 77))
         OX, OY = cx + ox_.ravel() * ppu, cy + oy_.ravel() * ppu
         ang = ang.ravel()
-        # the molecule on the track gets ionised
+        # the molecule on the track gets ionised: the one that rests nearest to a point beside the track (chosen
+        # where the molecules rest, in nm, so that it stays the same one while they tremble and the view closes in)
         tpx, tpy = self._track_pt(110.0)
-        hit = int(np.argmin((OX - tpx - 34) ** 2 + (OY - tpy) ** 2))
+        rx, ry = (i + 0.5 * (j % 2)) * a + jx, j * a * 0.9 + jy
+        hit = int(np.argmin((rx - (tpx + 34 - cx) / 290.0) ** 2 + (ry - (tpy - cy) / 290.0) ** 2))
         for sgn in (-1.0, 1.0):
             hx_ = OX + 0.096 * ppu * np.cos(ang + sgn * 0.912)
             hy_ = OY + 0.096 * ppu * np.sin(ang + sgn * 0.912)
@@ -1325,13 +1644,15 @@ class You(Scene):
         age = tage % BAR
         uu = min(1.0, age / 1.4)
         f.rings("r", [OX[hit]], [OY[hit]], [0.14 * ppu], 1.0, width=2.0)
-        f.rings("r", [OX[hit]], [OY[hit]], [0.14 * ppu + 150 * (1 - (1 - uu) ** 3)], (1 - uu) ** 1.5, width=1.6)
+        ring = np.linspace(0, 2 * np.pi, 73)
+        rr = 0.14 * ppu + 150 * (1 - (1 - uu) ** 3)
+        f.polyline("r", OX[hit] + rr * np.cos(ring), OY[hit] + rr * np.sin(ring), (1 - uu) ** 1.5, width=1.6)
         f.dots("r", [OX[hit]], [OY[hit]], 6.5, 1.5)
-        n = int(min(len(self.delta), 2 + age * 22))
+        dl = self._delta(2 + age * 22)
         room = P.fcol[1] - OX[hit] - 210
         sc = min(22.0, room / max(1.0, float(np.abs(self.delta[:, 0]).max())))
-        ex_ = OX[hit] + self.delta[:n, 0] * sc
-        ey_ = OY[hit] - np.abs(self.delta[:n, 1]) * 17.0
+        ex_ = OX[hit] + dl[:, 0] * sc
+        ey_ = OY[hit] - np.abs(dl[:, 1]) * 17.0
         f.polyline("r", np.r_[OX[hit], ex_], np.r_[OY[hit], ey_], 0.9, width=1.6)
         f.dots("r", ex_[-1:], ey_[-1:], 4.0, 1.7)
         solo = P.side is None
@@ -1359,7 +1680,7 @@ class You(Scene):
         age = t - CUTS[6]
         x, y = self._track_pt(-150.0)
         lines = ["MOMENTUM   4.02 GEV/C", "SPEED      0.99965 C", "GAMMA      38.1", "DE/DX      2.0 MEV/CM",
-                 "CHARGE     -1 E", "MASS       105.658 MEV/C2", "BORN       15.2 KM UP", "AGE        2.6 US  ITS OWN CLOCK"]
+                 "CHARGE     -1 E", "MASS       105.658 MEV/C2", "BORN       15.2 KM UP", "AGE        1.3 US  ITS OWN CLOCK"]     # 15.2 km at 0.99965 c = 50.7 us, / gamma
         col = P.side if P.side is not None else (P.fx + 150.0, P.fcol[1])
         cw = col[1] - col[0]
         if cw < 345.0:              # no room for the list: the tag carries the essential, the name stays open

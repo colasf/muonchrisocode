@@ -49,17 +49,24 @@ muonbloom/
   build.py       build-up animations: how every data element is constructed and taken apart
   hud.py         frame, subtitles, edge ticks, strips, rulers, tags, barcodes, callouts
   towers.py      tower faces, blooms, strings, scopes, the incoming muon
+  human.py       the figure of YOU / FLOOD / OUTRO (a real mesh, baked in data/human.npz)
+  city.py        downtown Cincinnati around 9th St x Vine St, where the wall is, as line work
   show.py        time -> look -> scene.draw() + towers + frame + subtitles
   scenes/        one module per look
 data/
-  towers.json    tower placement (x0, x1, top, bot, det_h per tower) - placeholder for now
+  towers.json    tower placement (x0, x1, top, bot, det_h per tower): the Site 3.1 drawing since 2026-10-03
+                 (estimates, to confirm on site); towers_td_placeholder.json = the placement used before
   cues.npz       loudness, bands, spectrum, kicks of the music; hits of the muon stem
+  cincinnati.npz streets, buildings and river of downtown Cincinnati, baked by tools/build_city.py
+                 (map data (c) OpenStreetMap contributors, ODbL: the credit line is set in every city view)
 ```
 
 ### The towers
 
 The three towers stand in front of the wall for the whole show. Their position, width and
-height are not known yet, so nothing is placed with fixed coordinates:
+height will only be final on site (`data/towers.json` holds the Site 3.1 drawing: scaffold towers
+on the sixths of the wall, 3.45 m tall on the sides, 6.5 m in the centre), so nothing is placed
+with fixed coordinates:
 
 * `data/towers.json` holds the three rectangles; the realtime app will write the same data
   from its placement tool.

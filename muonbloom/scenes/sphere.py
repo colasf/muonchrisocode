@@ -82,6 +82,10 @@ BUS_Y = {"C": 244.0, "L": 252.0, "R": 260.0}       # the leaders run just under 
 KEY_SEED = {"L": 1, "C": 2, "R": 3}
 TOMO_HALF = 1.25                  # half extent of the tomogram (m)
 VOX = 0.125
+SCAN_T, SCAN_A = 5.2, 0.87        # the scan line of the tomogram: seconds to go across and come back, reach (of the half width)
+SCAN_WAKE = 0.45                  # s: what the scan line has just read glows that long behind it
+DRIFT, DROP = 1.6, 0.5            # DISINTEGRATE: seconds a piece of the contour drifts / a voxel takes to drop out
+SLIDE = 0.22                      # s: a new hit pushes the bars of its detector one place to the left in that time
 
 # vertical layout (the bays are free from the header down to the bottom data band, whatever the towers are)
 TOP, BOT = L.HEAD_Y + 12.0, 1196.0
@@ -247,6 +251,43 @@ def pop(age, dur=0.25):
     return B.spring(np.asarray(age, np.float64) / dur)
 
 
+def tick(value, age, width=3, dur=0.25, key=0, step=1):
+    """A count that changed `age` seconds ago (by `step`): the digits that changed spin before they lock, the
+    others do not move - the figure counts, and what it shows meanwhile is never far from the truth."""
+    s = f"{value:0{width}d}"
+    if age is None or not (0.0 <= age < dur):
+        return s
+    old = f"{max(value - step, 0):0{width}d}"
+    h = B.rnd(len(s), key + 77, B.frame_no(age))
+    return "".join(c if c == o else "0123456789"[int(h[k] * 10)] for k, (c, o) in enumerate(zip(s, old)))
+
+
+def ring(f, layer, x, y, r, inten, n=48, width=L.LW):
+    """A circle whose radius changes from frame to frame: always the same vertices, from its top (Frame.rings
+    takes their number from the radius: a circle that grows would crawl). Traced inside a block being built."""
+    a = -0.5 * np.pi + np.linspace(0.0, 2 * np.pi, n + 1)
+    f.polyline(layer, x + r * np.cos(a), y + r * np.sin(a), inten, width=width)
+
+
+def _path_dist(x, z, pts, prog=1.0):
+    """Distance from the points (x, z) to the part `prog` (0..1 of its length) of the polyline pts (k, 2):
+    how near a place of the tomogram is to a track, as far as the muon has come."""
+    pts = np.asarray(pts, np.float64)
+    seg = np.hypot(np.diff(pts[:, 0]), np.diff(pts[:, 1]))
+    left = prog * float(seg.sum())
+    out = np.full(np.shape(x), 1e9)
+    for k in range(len(seg)):
+        if left <= 0.0 or seg[k] <= 1e-9:
+            break
+        u1 = min(1.0, left / seg[k])                    # how much of this piece is there
+        ax, az = pts[k]
+        dx, dz = (pts[k + 1] - pts[k]) * u1
+        u = np.clip(((x - ax) * dx + (z - az) * dz) / max(dx * dx + dz * dz, 1e-12), 0.0, 1.0)
+        out = np.minimum(out, np.hypot(x - ax - u * dx, z - az - u * dz))
+        left -= seg[k]
+    return out
+
+
 def one_tag(times, t, life, swap=0.2, busy=0.35, t0=None):
     """A stream of items shares one tag: which item has it at t, and at what age (for Frame.build)?
     -> (index, age), or None when there is no tag. The tag is made when an item arrives and taken apart
@@ -294,6 +335,16 @@ def fit_fields(fields, width, size=L.T_MICRO):
             break
         out = nxt
     return out
+
+
+def n_fit(fields, width, size=L.T_MICRO):
+    """How many leading fields fit in `width` px (see fit_fields)."""
+    n, used = int(width / (size * CHAR_W)), 0
+    for k, fld in enumerate(fields):
+        used += len(fld) + (1 if k else 0)
+        if used > n:
+            return k
+    return len(fields)
 
 
 def fit_title(title, width, size=L.T_MICRO, pad=8.0):
@@ -452,7 +503,7 @@ class Lay:
                 self.tg = dict(px0=x0 + 62.0 + 0.5 * (w - 70.0 - sd_), side=sd_, mode="below")
             self.tg.update(py0=363.0, S=sd_ / (2 * TOMO_HALF))
         # bottom band: the free panels, widest first (ties keep their left-to-right order)
-        panels = sorted((tuple(map(float, p)) for p in ctx.slots["panels"]), key=lambda p: -(p[1] - p[0]))
+        panels = sorted((tuple(map(float, p)) for p in ctx.slots["panels"]), key=lambda p: -round(p[1] - p[0]))
         need = (250.0, 180.0, 130.0)
         got = [p if p[1] - p[0] >= n else None for p, n in zip(panels, need)] + [None] * 3
         self.p_num, self.p_bar, self.p_one = got[:3]
@@ -469,19 +520,57 @@ class Lay:
 # the body and its tracks
 # ----------------------------------------------------------------------------
 
-class Body:
-    """The lumpy sphere: fibonacci vertices on a slowly breathing radius field, a surface net and the
-    long struts through the interior that make it a plexus."""
+class Pose:
+    """The shape of the body at one instant (see Body.rho): the clock of its travelling noise, how hard the
+    music drives it, and the waves that are crossing it - one band per kick, climbing from the bottom with
+    the ripple of the halo, and one ring per muon, spreading from where it went in."""
+    __slots__ = ("t", "drive", "kicks", "hits")
 
-    def __init__(self, seed=41, n=1500, amp=0.036):
+    def __init__(self, t, drive=0.0, kicks=(), hits=()):
+        self.t, self.drive = float(t), float(drive)
+        self.kicks = kicks              # [(age s, amplitude)]
+        self.hits = hits                # [(age s, strength, unit vector of the point of entry)]
+
+
+def _attack(age, rise=0.03):
+    """A wave does not start in one frame: it rises in a few hundredths of a second."""
+    return 1.0 - math.exp(-max(age, 0.0) / rise)
+
+
+K_SPEED, K_WIDTH, K_TAU = 5.4, 0.34, 0.7      # the ripple a kick sends up the halo: rad / s, rad, s
+K_AMP, K_BAND = 0.04, 0.5                     # ... and the band it sends up the body with it: height (of the radius), width (rad)
+H_SPEED, H_WIDTH, H_TAU = 2.6, 0.2, 0.75      # the ring of a muon
+H_AMP, H_DENT = 0.05, 0.045
+FOLLOW = 1.25                                 # the halo follows the outline of the body: px of stick per px of bulge
+R_LIMIT = 0.12                                # the radius never leaves 1 +- this (soft limit)
+
+
+class Body:
+    """The lumpy sphere: fibonacci vertices on a radius field that never rests, a surface net and the
+    long struts through the interior that make it a plexus.
+    The radius field is a noise that travels over the surface (large lobes, lumps, a fine crinkle: plane
+    waves of three scales, each on its way), swells with the music, and carries the waves of the kicks and
+    of the muons (Pose). It is a closed form of the pose: any frame draws alone."""
+
+    def __init__(self, seed=41, n=1500, amp=0.04):
         rng = np.random.default_rng(seed)
         m = 18
         self.d = unit(rng.normal(size=(m, 3)))
         self.fr = rng.uniform(3.2, 9.5, m)
         self.ph = rng.uniform(0, 2 * np.pi, m)
         a = rng.uniform(0.4, 1.0, m) / self.fr ** 0.5
-        self.a = a * amp / math.sqrt((a ** 2).sum() / 2)
         self.w = rng.uniform(0.12, 0.4, m) * np.where(rng.random(m) < 0.5, -1.0, 1.0)
+        # (the vertices and the net below keep the draws of `rng`; the travelling noise has its own)
+        r2 = np.random.default_rng(seed + 1000)
+        lo, hi = 5, 6                                   # large lobes that change the outline, a fine crinkle
+        self.d = np.r_[self.d, unit(r2.normal(size=(lo + hi, 3)))]
+        self.fr = np.r_[self.fr, r2.uniform(1.5, 3.0, lo), r2.uniform(10.0, 14.0, hi)]
+        self.ph = np.r_[self.ph, r2.uniform(0, 2 * np.pi, lo + hi)]
+        a = np.r_[a, 0.85 * r2.uniform(0.7, 1.0, lo), 0.12 * r2.uniform(0.6, 1.0, hi)]
+        self.a = a * amp / math.sqrt((a ** 2).sum() / 2)
+        sgn = lambda k: np.where(r2.random(k) < 0.5, -1.0, 1.0)
+        self.w = np.r_[self.w * 4.2, r2.uniform(0.7, 1.5, lo) * sgn(lo), r2.uniform(2.4, 4.2, hi) * sgn(hi)]
+        self.gain = np.r_[np.full(m, 0.55), np.full(lo, 0.35), np.full(hi, 1.6)]     # what the music adds to each scale
         # vertices
         k = np.arange(n) + 0.5
         y = 1 - 2 * k / n
@@ -510,12 +599,50 @@ class Body:
         self.s_var = rng.uniform(0.55, 1.0, len(self.sa)).astype(np.float32)
         self.e_var = rng.uniform(0.75, 1.0, len(self.ea)).astype(np.float32)
 
+    def _dev(self, u, p, grad=False):
+        """What the pose adds to the radius 1 in the directions u, before the limit (and, if asked, the
+        gradient of its noise part in space, (..., 3))."""
+        arg = (u @ self.d.T) * self.fr + self.ph + self.w * p.t
+        amp = self.a * (1.0 + self.gain * p.drive)
+        r = (amp * np.sin(arg)).sum(-1)
+        if p.kicks:                     # a band climbs from the bottom to the top
+            th = np.arccos(np.clip(-u[..., 1], -1.0, 1.0))
+            for age, a in p.kicks:
+                r = r + (K_AMP * a * _attack(age) * math.exp(-age / K_TAU)) * np.exp(-((th - K_SPEED * age) / K_BAND) ** 2)
+        for age, e, c in p.hits:        # a dent where the muon went in, and the ring it sends over the surface
+            ang = np.arccos(np.clip(u @ c, -1.0, 1.0))
+            r = r + e * _attack(age) * (H_AMP * math.exp(-age / H_TAU) * np.exp(-((ang - H_SPEED * age) / H_WIDTH) ** 2)
+                                        - H_DENT * math.exp(-age / 0.22) * np.exp(-(ang / 0.3) ** 2))
+        return (r, ((amp * self.fr) * np.cos(arg)) @ self.d) if grad else r
+
     def rho(self, u, tw):
-        return 1.0 + (self.a * np.sin((u @ self.d.T) * self.fr + self.ph + self.w * tw)).sum(-1)
+        """Radius of the body in the directions u (..., 3). tw = a Pose, or a bare time (the noise alone)."""
+        p = tw if isinstance(tw, Pose) else Pose(tw)
+        return 1.0 + R_LIMIT * np.tanh(self._dev(u, p) / R_LIMIT)       # (however loud it gets, the body stays inside its halo)
+
+    def shape(self, tw, u=None):
+        """(radius, outward unit normal) in the directions u (the vertices by default), in one pass. The normal
+        is that of the travelling noise - radius x direction minus the gradient of the radius along the
+        surface; the waves of the kicks and of the muons are long and low: they are left out of it."""
+        u = self.u if u is None else u
+        p = tw if isinstance(tw, Pose) else Pose(tw)
+        dev, g = self._dev(u, p, grad=True)
+        th = np.tanh(dev / R_LIMIT)
+        rho = 1.0 + R_LIMIT * th
+        g = g * (1.0 - th * th)[:, None]
+        return rho, unit(rho[:, None] * u - (g - (g * u).sum(-1, keepdims=True) * u))
 
     def surface(self, tw, u=None):
         u = self.u if u is None else u
         return u * self.rho(u, tw)[..., None]
+
+    def outline(self, cam, phi, tw):
+        """Radius of the outline of the body, as the camera sees it, in the screen directions phi (rad, 0 =
+        right, counter-clockwise): the radius field on the limb of the unit sphere (to first order)."""
+        r, up, fw = (cam.R[k].astype(np.float64) for k in range(3))
+        s = 1.0 / float(np.linalg.norm(cam.pos))                # the limb leans towards the camera by asin(1 / distance)
+        u = math.sqrt(1.0 - s * s) * (np.cos(phi)[:, None] * r + np.sin(phi)[:, None] * up) - s * fw
+        return self.rho(u, tw)
 
     def normals(self, tw, e=2e-3):
         u = self.u
@@ -528,7 +655,7 @@ class Body:
         """Contour of the body cut by the horizontal plane at height y."""
         a = np.linspace(0, 2 * np.pi, n, endpoint=False)
         uy = np.full(n, y)
-        for _ in range(5):
+        for _ in range(4):
             uy = np.clip(uy, -0.999, 0.999)
             r = np.sqrt(1 - uy ** 2)
             u = np.stack([r * np.cos(a), uy, r * np.sin(a)], 1)
@@ -675,8 +802,69 @@ class Sphere(Scene):
         self.hot_iv = self._hot_intervals()
         self.prim = [tr for tr in self.tracks if not tr["echo"]]
         self.prim_t = np.array([tr["t"] for tr in self.prim])
+        self._init_motion(ctx, T0, T1)
+        # the waves the muons send over the body, and the estimate of the tomogram: where it stands after
+        # every scattered track (it then moves there, it does not jump)
+        self.waves = [(tr["t"], (0.3 if tr["echo"] else 1.0) * (0.55 + 0.6 * tr["e"]), unit(tr["path"][1].astype(np.float64)))
+                      for tr in self.tracks]
+        self.est = self._est_steps([(tr["t"], [q for q in thr if q["t"] <= tr["t"]]) for tr in thr])
 
     T_BUILD = T0                    # the furniture is constructed from here (DISINTEGRATE: from its own start)
+
+    # ------------------------------------------------------------- what moves
+    def _init_motion(self, ctx, t0, t1):
+        """The clock of the travelling noise of the body. It runs with the music - fast when it is loud, slow
+        in the quiet bars: the integral of the loudness, so it never jumps."""
+        self._clock_t = np.arange(t0 - 2.0, t1 + 2.0, 0.02)
+        rate = 0.45 + 1.1 * np.array([ctx.cues.loud(float(v), 0.4) for v in self._clock_t])
+        self._clock = np.r_[0.0, np.cumsum(0.5 * (rate[1:] + rate[:-1]) * 0.02)]
+
+    def _pose(self, t, ctx):
+        """The shape of the body at t: noise clock, drive of the music, the bands of the last kicks, the rings
+        of the last muons (Body.rho)."""
+        kt, ka = ctx.cues.kicks(t - 1.5, t + 1e-6)
+        kicks = [(t - float(th), min(1.5, 2.2 * float(a))) for th, a in zip(kt, ka)]
+        soft = sum(a * _attack(age, 0.04) * math.exp(-age / 0.3) for age, a in kicks)
+        drive = min(1.6, 0.9 * ctx.cues.loud(t, 0.4) + 0.35 * soft)
+        hits = [(t - th, e, c) for th, e, c in self.waves if 0.0 <= t - th < 1.7][-10:]
+        return Pose(float(np.interp(t, self._clock_t, self._clock)), drive, kicks, hits)
+
+    def _slice(self):
+        """Contour of the body in the plane of the core, at this frame (the 3D view and the tomogram share it)."""
+        if self._sl is None:
+            self._sl = self.body.slice(float(CORE[1]), self.pose)
+        return self._sl
+
+    @staticmethod
+    def _est_steps(steps):
+        """[(time, the scattered tracks that count from then on)] -> (times, values): the estimate of the core
+        after every step = mean of the points of closest approach (x, z), its sigma, the number of tracks."""
+        ts, vals = [], []
+        for tk, trs in steps:
+            if len(trs) < 2:
+                continue
+            Kp = np.array([tr["K"] for tr in trs])
+            ts.append(float(tk))
+            vals.append((float(Kp[:, 0].mean()), float(Kp[:, 2].mean()),
+                         float(np.sqrt(Kp[:, [0, 2]].var(0).sum()) / math.sqrt(len(trs))) + 0.02))
+        return np.array(ts), np.array(vals).reshape(-1, 3)
+
+    def _estimate(self, t, loose=0.0, move=0.45):
+        """(x, z, sigma) of the estimate at t, or None before there is one. A track that comes in (or decays)
+        moves it: it travels to its new place in `move` seconds, with an ease. It also wanders inside its
+        own uncertainty (0.5 sigma, more when `loose`): the less the tracks say, the less it holds still."""
+        ts, vals = self.est
+        k = int(np.searchsorted(ts, t, side="right"))
+        if k == 0:
+            return None
+        j0 = max(1, int(np.searchsorted(ts, t - move, side="right")))       # the steps from j0 on are still on their way
+        v = vals[min(j0, k) - 1].copy()
+        for j in range(j0, k):
+            v = v + (vals[j] - vals[j - 1]) * float(smoothstep(0.0, move, t - ts[j]))
+        amp = (0.5 + loose) * v[2]
+        wx = 0.6 * math.sin(1.9 * t + 0.4) + 0.4 * math.sin(4.3 * t + 2.0)
+        wz = 0.6 * math.sin(2.3 * t + 1.7) + 0.4 * math.sin(3.7 * t + 0.3)
+        return float(v[0] + amp * wx), float(v[1] + amp * wz), float(v[2])
 
     # ------------------------------------------------------------- build ages
     def _age0(self, name, t):
@@ -743,19 +931,21 @@ class Sphere(Scene):
     @staticmethod
     def _kicks(ctx, t, phi):
         """What the drums do to the picture at t: (envelope 0..1.2, ripple per halo bin, recent kicks)."""
-        env = min(1.2, ctx.cues.kick(t, tau=0.16))
         kt, ka = ctx.cues.kicks(t - 1.3, t + 1e-6)
+        # (the envelope of ctx.cues.kick, with an attack: the picture answers a kick in three frames, not in one)
+        env = min(1.2, sum(float(a) * _attack(t - float(th), 0.022) * math.exp(-(t - float(th)) / 0.16) for th, a in zip(kt, ka)))
         d = np.abs(np.angle(np.exp(1j * (phi + np.pi / 2))))          # angular distance from the bottom of the halo
         rip = np.zeros(len(phi))
         for th, a in zip(kt, ka):
             age = t - float(th)
-            rip += min(float(a), 1.6) * np.exp(-((d - 5.4 * age) / 0.34) ** 2) * math.exp(-age / 0.7)
+            rip += min(float(a), 1.6) * _attack(age, 0.022) * np.exp(-((d - K_SPEED * age) / K_WIDTH) ** 2) * math.exp(-age / K_TAU)
         return env, np.clip(0.5 * env + 0.8 * rip, 0.0, 1.5), [(t - float(th), min(float(a), 1.6)) for th, a in zip(kt, ka)]
 
     # ----------------------------------------------------------------- render
     def draw(self, f, t, ctx):
         lay = self.lay
         cam, yaw = lay.camera(t, T0, T1 - T0)
+        self.pose, self._sl = self._pose(t, ctx), None
         past = self._past(t)
         thr = [tr for tr in past if tr["through"]]
         found, conf = self._conf(t)
@@ -764,18 +954,22 @@ class Sphere(Scene):
         env, pulse, kicks = self._kicks(ctx, t, phi)
         appear = float(smoothstep(T0 - 0.1, T0 + 1.5, t))
         hot_age = self._hot_age(t)
+        # the halo follows the outline of the body: a bulge of the outline lengthens the sticks in front of it
+        follow = FOLLOW * lay.R * (self.body.outline(cam, phi, self.pose) - 1.0)
         f.set_clip(*lay.clip)
         self._lattice(f, kick=env)
-        self._body(f, cam, t, appear, gain=1.0 + 0.4 * env, swell=0.028 * min(1.0, env))
+        self._body(f, cam, t, appear, gain=1.0 + 0.4 * env, swell=0.012 * min(1.0, env))
         self._shock(f, kicks, appear)
-        self._ring(f, phi, v, appear, pulse=pulse, label_age=t - T0 - RING_LAG, peak_age=hot_age)
+        self._ring(f, phi, v, appear, pulse=pulse, label_age=t - T0 - RING_LAG, peak_age=hot_age, follow=follow)
         f.set_clip()
         self._tracks(f, cam, t, past, ctx)
         self._core(f, cam, t, thr, conf=conf if found else 0.0, ring_age=t - self.t_found, cross_age=t - self.t_cross)
         self._callouts(f, cam, t, past, thr, yaw, found, conf)
         self._tomogram(f, t, past, thr, yaw, conf=conf, found=found,
-                       est_age=t - thr[1]["t"] if len(thr) >= 2 else None, core_age=t - self.t_found)
-        self._profile(f, phi, np.clip(v + 0.1 * pulse * appear, 0.0, 1.0), t=t, peak_age=hot_age)
+                       est_age=t - thr[1]["t"] if len(thr) >= 2 else None, core_age=t - self.t_found,
+                       count_age=t - past[-1]["t"] if past else None)
+        self._profile(f, phi, np.clip(v + 0.1 * pulse * appear, 0.0, 1.0), t=t, peak_age=hot_age,
+                      lift=0.45 * follow / (lay.l1 - lay.l0))
         self._left(f, t, past, thr, found)
         self._right(f, t, ctx, past)
         self._spectrum(f, t, past)
@@ -808,15 +1002,16 @@ class Sphere(Scene):
                 continue
             u = age / 0.55
             r = r0 + (r1 - r0) * u ** 0.7
-            n = int(2 * np.pi * r / 11.0)
+            n = int(np.pi * (r0 + r1) / 11.0)           # (the same dots all the way: a count that follows the radius makes them crawl)
             a = np.linspace(0, 2 * np.pi, n, endpoint=False) + 0.4 * age
             f.dots("w", lay.cx + r * np.cos(a), lay.cy + r * np.sin(a), 1.5, 1.2 * min(1.0, amp) * (1.0 - u) ** 1.3 * appear)
 
     def _body(self, f, cam, t, appear, gain=1.0, swell=0.0):
         """The plexus: surface net (rim lit), struts through the interior, vertices. `swell` = breath on a kick."""
         b = self.body
-        P = b.surface(t).astype(np.float32) * np.float32(1.0 + swell)
-        N = b.normals(t).astype(np.float32)
+        rho, N = b.shape(self.pose)
+        P = (b.u * (rho * (1.0 + swell))[:, None]).astype(np.float32)
+        N = N.astype(np.float32)
         sx, sy, _, _ = cam.project(P)
         view = unit(cam.pos.astype(np.float32)[None] - P)
         nv = (N * view).sum(1)
@@ -839,14 +1034,18 @@ class Sphere(Scene):
             vm = vm & ((1.0 - P[:, 1]) / 2.0 < appear * 1.1)
         f.pixels("w", sx[vm], sy[vm], (0.3 + 0.65 * rim[vm]) * gain)
 
-    def _ring(self, f, phi, v, appear, alive=None, gain=1.0, pulse=None, label_age=None, peak_age=None):
+    def _ring(self, f, phi, v, appear, alive=None, gain=1.0, pulse=None, label_age=None, peak_age=None, follow=None):
         """The lollipop halo = polar opacity histogram on a precise base circle. `pulse` (per bin, 0..1.5)
         is the answer to the drums: the sticks jump and their heads brighten as the ripple passes.
+        `follow` (px per bin) = what the outline of the body adds to the sticks in front of it: the halo
+        moves with the body.
         label_age / peak_age = ages (for Frame.build) of the angle labels and of the value of the peak: they
         are constructed, and taken apart when the age comes from build.io (None: there once the halo is whole)."""
         lay = self.lay
         cx, cy, r0 = lay.cx, lay.cy, lay.r0
         Ln = lay.l0 + (lay.l1 - lay.l0) * v
+        if follow is not None:                  # (never shorter than a stub, never far over the top of the scale)
+            Ln = np.clip(Ln + follow, 5.0 * lay.s, lay.l1 + 8.0 * lay.s)
         glow = 1.0
         if pulse is not None:
             Ln = Ln + 22.0 * lay.s * pulse
@@ -869,9 +1068,9 @@ class Sphere(Scene):
             f.dots("w", x1[b], y1[b], 1.8, 1.2 * np.minimum(pulse[b], 1.0))
         # base circle, arc by arc (so it can be taken apart bin by bin)
         da = 2 * np.pi / N_BINS
-        for k in np.nonzero(on)[0]:
-            aa = phi[k] - da / 2 + np.linspace(0, da, 4)
-            f.polyline("w", cx + r0 * np.cos(aa), cy - r0 * np.sin(aa), 0.6 * gain, width=L.LW)
+        aa = phi[on][:, None] - da / 2 + np.linspace(0, da, 4)[None, :]
+        ax, ay = cx + r0 * np.cos(aa), cy - r0 * np.sin(aa)
+        f.segments("w", ax[:, :-1].ravel(), ay[:, :-1].ravel(), ax[:, 1:].ravel(), ay[:, 1:].ravel(), 0.6 * gain, width=L.LW)
         # dotted scale circles at 1.2 / 4.6 / 8 MWE
         for frac, inten in ((0.0, 0.32), (0.5, 0.36), (1.0, 0.6)):
             r = r0 + lay.l0 + (lay.l1 - lay.l0) * frac
@@ -950,7 +1149,7 @@ class Sphere(Scene):
             if hot:
                 f.dots("r", px[2:3], py[2:3], 3.6 if not echo else 2.4, 1.5 * (0.45 + 0.55 * fresh) * persist + 0.3)
                 if fresh > 0.05 and not echo:
-                    f.rings("r", px[2:3], py[2:3], [10 + 34 * (1 - fresh)], 0.9 * fresh, width=L.LW)
+                    ring(f, "r", float(px[2]), float(py[2]), 10 + 34 * (1 - fresh), 0.9 * fresh, n=32)
         # leader: detector -> up to the bus -> over -> down into the track (it may pass behind a tower)
         if leader and not echo and age < 1.9:
             tw = ctx.towers[tr["key"]]
@@ -977,7 +1176,7 @@ class Sphere(Scene):
         (for Frame.build) of the cross at its centre (None = shown when the confidence is above 0.6)."""
         conf = ((min(1.0, len(thr) / 7.0) if len(thr) >= 3 else 0.0) if conf is None else conf) * gain
         # slice through the core height: front half bright, back half faint
-        sl = self.body.slice(float(CORE[1]), t).astype(np.float32)
+        sl = self._slice().astype(np.float32)
         lx, ly, lz, _ = cam.project(sl)
         li = np.where(lz < np.median(lz), 0.75, 0.2) * gain
         f.segments("w", lx, ly, np.roll(lx, -1), np.roll(ly, -1), li, np.roll(li, -1), width=L.LW)
@@ -1069,14 +1268,38 @@ class Sphere(Scene):
                          tag_size=L.T_SMALL, age=got[1])
 
     # ---------------------------------------------------------------- tomogram
+    def _scan(self, t):
+        """The scan line of the tomogram: where it is across the plot (-SCAN_A .. SCAN_A of the half width).
+        It goes across and comes back (a sine: it eases at both ends and never jumps)."""
+        return SCAN_A * math.sin(2 * math.pi * (t - self.T_BUILD) / SCAN_T)
+
+    def _scan_age(self, t, xn):
+        """Seconds since the scan line last passed the positions xn (same unit as _scan): what it has just
+        read still glows behind it."""
+        w = 2 * math.pi / SCAN_T
+        ph = w * (t - self.T_BUILD)
+        th = np.arcsin(np.clip(np.asarray(xn, np.float64) / SCAN_A, -1.0, 1.0))
+        age = np.minimum(np.mod(ph - th, 2 * math.pi), np.mod(ph - (math.pi - th), 2 * math.pi)) / w
+        return np.where(age > t - self.T_BUILD, 99.0, age)          # (it has not been there yet)
+
     def _tomogram(self, f, t, past, thr, yaw, erode=0.0, alive=None, title="TOMOGRAM // TOP VIEW // SLICE THROUGH THE CORE",
-                  erode_txt=None, conf=None, found=None, est_age=None, core_age=None):
+                  erode_txt=None, conf=None, found=None, est_age=None, core_age=None, lost=None, gone=(), loose=0.0,
+                  count_age=None):
         """Top view of the slice through the core, in the tomogram column. `erode` takes the picture apart
         (lattice, contour, voxels), `erode_txt` its lettering. `conf` / `found` override the default
         confidence (track count / 7, core shown from 3 tracks).
         Nothing fades in: the plot is constructed when the scene starts (Sphere._blk), the estimate when the
         tracks give one (`est_age`), the dotted core when it is called (`core_age`) - ages for Frame.build,
-        None = with the plot."""
+        None = with the plot.
+        It is alive: the contour is the slice of the body as it is at this instant (it moves with it); a scan
+        line sweeps the slice, the lattice and the voxels it has just read glow behind it, the chord it cuts
+        in the body is measured; the lattice lights along a track while the muon crosses; the estimate
+        travels to its new place when a track moves it, and wanders inside its own uncertainty (`loose` adds
+        to that).
+        DISINTEGRATE: lost(h) = seconds since the erosion took the items whose hash is h (negative: still
+        there) - a piece of the contour that breaks off drifts away, a voxel drops, a point shrinks, instead
+        of being switched off; gone = [(x, z, seconds since)] of the tracks that have just decayed.
+        count_age = seconds since the number of tracks changed (the figure spins before it locks)."""
         lay = self.lay
         if not lay.tg:
             return
@@ -1085,10 +1308,12 @@ class Sphere(Scene):
         et = erode if erode_txt is None else erode_txt
         S, Hh = lay.tg["S"], TOMO_HALF
         px0, py0 = lay.tg["px0"], lay.tg["py0"]
-        px1, py1 = px0 + lay.tg["side"], py0 + lay.tg["side"]
+        side = lay.tg["side"]
+        px1, py1 = px0 + side, py0 + side
         cx, cy = 0.5 * (px0 + px1), 0.5 * (py0 + py1)
         X = lambda x: cx + np.asarray(x) * S
         Y = lambda z: cy + np.asarray(z) * S
+        since = (lambda h: np.full(np.shape(h), -1.0)) if lost is None else lost
         rect = (x0, Y_PANEL - 26.0, x1, py1 + (44.0 if lay.tg["mode"] == "side" else 140.0))
         a_box = self._age("tomo", t, et)
         ca = math.atan2(math.cos(yaw), math.sin(yaw))        # camera sits at (sin yaw, cos yaw) in x, z
@@ -1102,26 +1327,77 @@ class Sphere(Scene):
             hud.vruler(f, px0, py0, py1, -Hh, Hh, 0.125, 0.5, right=False, inten=0.7)
             f.segments("w", [float(X(rr * math.cos(ca)))], [float(Y(rr * math.sin(ca)))],
                        [float(X((rr + 0.1) * math.cos(ca)))], [float(Y((rr + 0.1) * math.sin(ca)))], 0.9, width=L.LW_BOLD)
-        # 2 - the picture: voxel lattice, contour of the body in the slice plane, tracks, hot voxels, PoCA points
+        # 2 - the picture: voxel lattice, contour of the body in the slice plane, scan line, tracks, voxels, PoCA points
+        xs_n = self._scan(t)
+        xs = cx + xs_n * 0.5 * side                          # the scan line
+        chord = None                                         # (no reading where the line does not cut the contour twice)
         with self._blk(f, "tomo", t, rect):
             k = np.arange(-int(Hh / VOX), int(Hh / VOX) + 1)
             KX, KY = np.meshgrid(k, k)
             keep = np.ones(KX.shape, bool) if erode <= 0 else hash01(KX, KY, 5) > erode
             major = (KX % 4 == 0) & (KY % 4 == 0)
-            f.pixels("w", X(KX * VOX)[keep], Y(KY * VOX)[keep], np.where(major, 0.95, 0.5)[keep])
+            # the lattice answers: it glows behind the scan line, and along a track while the muon crosses
+            lit = np.where(major, 0.95, 0.5) + 1.1 * np.exp(-self._scan_age(t, KX * VOX / Hh) / SCAN_WAKE)
+            if erode <= 0.3:
+                for tr in past[-6:]:
+                    age = t - tr["t"]
+                    if 0.0 <= age < 2.4:
+                        dur = tr["dur"] * (0.6 if tr["echo"] else 1.0)
+                        dist = _path_dist(KX * VOX, KY * VOX, tr["path"][1:4][:, [0, 2]], min(1.0, age / dur))
+                        lit = lit + (0.5 if tr["echo"] else 1.3) * math.exp(-age / 0.7) * np.exp(-(dist / 0.1) ** 2)
+            f.pixels("w", X(KX * VOX)[keep], Y(KY * VOX)[keep], np.minimum(lit, 1.8)[keep])
             f.text("w", px0 - 20, py1 + 30, er("X / M", et, 8, fr), size=L.T_MICRO, alpha=0.6, anchor="rs")
             f.text("w", px0 - 20, py0 + 16, er("Z / M", et, 9, fr), size=L.T_MICRO, alpha=0.6, anchor="rs")
-            sl = self.body.slice(float(CORE[1]), t)
-            m = np.ones(len(sl), bool) if alive is None else alive
-            xs, ys = X(sl[:, 0]), Y(sl[:, 2])
-            if m.all():                                 # whole: one line, traced when the plot is made
-                f.polyline("w", np.r_[xs, xs[0]], np.r_[ys, ys[0]], 0.85, width=L.LW)
+            # the contour: the slice of the body as it is now. DISINTEGRATE: the pieces that break off drift away
+            sl = self._slice()
+            n_c = len(sl)
+            xc, yc = X(sl[:, 0]), Y(sl[:, 2])
+            xn, yn = np.roll(xc, -1), np.roll(yc, -1)
+            if lost is None:
+                m = np.ones(n_c, bool) if alive is None else alive
+                ag = np.where(m, -1.0, 99.0)
             else:
-                xn, yn = np.roll(xs, -1), np.roll(ys, -1)
-                f.segments("w", xs[m], ys[m], xn[m], yn[m], 0.85, width=L.LW)
+                ag = lost(hash01(np.arange(n_c), 21))
+                m = ag < 0.0
+            if m.all():                                 # whole: one line, traced when the plot is made
+                f.polyline("w", np.r_[xc, xc[0]], np.r_[yc, yc[0]], 0.85, width=L.LW)
+            else:
+                f.segments("w", xc[m], yc[m], xn[m], yn[m], 0.85, width=L.LW)
+            f.set_clip(px0, py0, px1, py1)
+            d = (ag >= 0.0) & (ag < DRIFT)
+            if d.any():                                 # they turn, shrink and are gone
+                i, a = np.nonzero(d)[0], ag[d]
+                mx_, my_ = 0.5 * (xc[d] + xn[d]), 0.5 * (yc[d] + yn[d])
+                out = np.arctan2(my_ - cy, mx_ - cx) + 1.7 * (hash01(i, 22) - 0.5)
+                dist = (26.0 + 70.0 * hash01(i, 23)) * (1.0 - np.exp(-a / 0.7))
+                mx_, my_ = mx_ + np.cos(out) * dist, my_ + np.sin(out) * dist
+                ang = np.arctan2(yn[d] - yc[d], xn[d] - xc[d]) + 4.0 * (hash01(i, 24) - 0.5) * a
+                hl = 0.5 * np.hypot(xn[d] - xc[d], yn[d] - yc[d]) * (1.0 - a / DRIFT)
+                f.segments("w", mx_ - np.cos(ang) * hl, my_ - np.sin(ang) * hl, mx_ + np.cos(ang) * hl, my_ + np.sin(ang) * hl,
+                           0.85 * (1.0 - a / DRIFT) ** 0.7, width=L.LW)
+            # the scan line: bright inside the body (the chord it cuts), dim outside; DISINTEGRATE: it loses pieces too.
+            # (It reads the slice itself, not what is left of its drawing: over a gap of a broken contour the
+            # chord would come and go from one frame to the next.)
+            hit = ((xc - xs) * (xn - xs) <= 0.0) & (xn != xc)
+            ycross = yc[hit] + (yn[hit] - yc[hit]) * (xs - xc[hit]) / (xn[hit] - xc[hit])
+            nd = 36
+            ya = py0 + (py1 - py0) * np.arange(nd) / nd
+            yb_ = ya + (py1 - py0) / nd
+            inside = np.zeros(nd, bool)
+            if len(ycross) >= 2:
+                chord = float(ycross.max() - ycross.min()) / S
+                inside = (0.5 * (ya + yb_) > ycross.min()) & (0.5 * (ya + yb_) < ycross.max())
+            on = np.ones(nd, bool) if erode <= 0 else hash01(np.arange(nd), 26) > erode ** 2
+            f.segments("w", np.full(int(on.sum()), xs), ya[on], np.full(int(on.sum()), xs), yb_[on],
+                       np.where(inside, 0.95, 0.3)[on], width=L.LW)
+            if on.any() and len(ycross):
+                f.dots("w", np.full(len(ycross), xs), ycross, 2.6, 1.3)
+            f.set_clip()
             lx = float(X((rr + 0.12) * math.cos(ca)))
             f.text("w", min(lx + 6, px1 - 34), float(Y((rr + 0.12) * math.sin(ca))) + 5, er("CAM", et, 10, fr), size=L.T_MICRO,
                    alpha=0.7)
+            if on.any():                                # ... and its mark on the top edge of the plot
+                f.segments("w", [xs], [py0 - 9.0], [xs], [py0 - 2.0], 0.9, width=L.LW)
             # tracks of the last seconds, projected
             f.set_clip(px0, py0, px1, py1)
             for tr in past[-5:]:
@@ -1132,40 +1408,66 @@ class Sphere(Scene):
                 p = tr["path"]                          # drawn while the muon crosses the body, like its 3D track
                 draw_leader(f, "r", X(p[1:4, 0]), Y(p[1:4, 2]), 0.75 * a, age / (tr["dur"] * (0.6 if tr["echo"] else 1.0)))
             f.set_clip()
-            # hot voxels + PoCA points. A new one does not simply appear: it pops (too large, then it settles)
-            cells = {}
-            for tr in thr:
-                if abs(tr["K"][1] - CORE[1]) < 0.3:
-                    key = (int(math.floor(tr["K"][0] / VOX)), int(math.floor(tr["K"][2] / VOX)))
-                    n, first = cells.get(key, (0, tr["t"]))
-                    cells[key] = (n + 1, first)
+            # voxels: every cell that holds a point of closest approach is read out by the scan line (its
+            # outline glows behind the line) and flashes when a new point falls in it; the cells of the core
+            # are red. A new one does not simply appear: it pops (too large, then it settles)
+            cells, core_cells = {}, {}
+            for tr in past:
+                key = (int(math.floor(tr["K"][0] / VOX)), int(math.floor(tr["K"][2] / VOX)))
+                cells[key] = max(cells.get(key, -1e9), tr["t"])
+                if tr["through"] and abs(tr["K"][1] - CORE[1]) < 0.3:
+                    n_, first = core_cells.get(key, (0, tr["t"]))
+                    core_cells[key] = (n_ + 1, first)
             vs = VOX * S
-            for (ix, iz), (n, first) in cells.items():
-                if erode > 0 and hash01(ix, iz, 11) < erode:
+            if cells:
+                ck = np.array(list(cells.keys()))
+                cl = np.array(list(cells.values()))
+                wake = np.exp(-self._scan_age(t, (ck[:, 0] + 0.5) * VOX / Hh) / SCAN_WAKE)
+                iv = 0.9 * wake + 1.1 * np.exp(-np.maximum(t - cl, 0.0) / 0.6)
+                iv = np.where(since(hash01(ck[:, 0], ck[:, 1], 11)) >= 0.0, 0.0, iv)
+                sel = iv > 0.05
+                if sel.any():
+                    a_, b_ = X(ck[sel, 0] * VOX) + 0.5 * vs, Y(ck[sel, 1] * VOX) + 0.5 * vs
+                    h = 0.5 * vs - 1.0
+                    f.segments("w", np.r_[a_ - h, a_ + h, a_ + h, a_ - h], np.r_[b_ - h, b_ - h, b_ + h, b_ + h],
+                               np.r_[a_ + h, a_ + h, a_ - h, a_ - h], np.r_[b_ - h, b_ + h, b_ + h, b_ - h], np.tile(iv[sel], 4))
+            for (ix, iz), (n_, first) in core_cells.items():
+                va = float(since(hash01(ix, iz, 11)))
+                if va >= DROP:
                     continue
                 a, b = float(X(ix * VOX)) + 0.5 * vs, float(Y(iz * VOX)) + 0.5 * vs
                 h = (0.5 * vs - 2.0) * float(pop(t - first))
-                f.rect("r", a - h, b - h, a + h, b + h, 0.85)
-                if n >= 2:
-                    f.rects("r", a - h + 2, b - h + 2, a + h - 2, b + h - 2, 0.4 + 0.2 * min(n, 4))
+                if va >= 0.0:                           # it drops out: it falls and shrinks to nothing
+                    h *= 1.0 - float(B.ease(va / DROP)) ** 2
+                    b += 520.0 * va * va
+                g = 1.0 + 0.5 * math.exp(-float(self._scan_age(t, (ix + 0.5) * VOX / Hh)) / SCAN_WAKE)
+                f.rect("r", a - h, b - h, a + h, b + h, 0.85 * g)
+                if n_ >= 2 and h > 3.0:
+                    f.rects("r", a - h + 2, b - h + 2, a + h - 2, b + h - 2, (0.4 + 0.2 * min(n_, 4)) * g)
             dot = 0.75 + 0.25 * min(1.0, S / 212.0)
-            for tr in past:
-                if erode > 0 and hash01(tr["id"], 13) < erode:
-                    continue
-                hot = tr["through"] and tr["mrad"] > 28
-                f.dots("r" if hot else "w", [float(X(tr["K"][0]))], [float(Y(tr["K"][2]))],
-                       (3.2 if hot else 2.0) * dot * float(pop(t - tr["t"])), 1.5 if hot else 0.9)
+            if past:
+                Kx = np.array([tr["K"][0] for tr in past])
+                Kz = np.array([tr["K"][2] for tr in past])
+                hot = np.array([bool(tr["through"] and tr["mrad"] > 28) for tr in past])
+                g = pop(t - np.array([tr["t"] for tr in past]))
+                da = since(hash01(np.array([tr["id"] for tr in past]), 13))
+                g = g * np.where(da >= 0.0, np.clip(1.0 - da / 0.35, 0.0, 1.0), 1.0)       # (a point that goes shrinks)
+                wk = np.exp(-self._scan_age(t, Kx / Hh) / SCAN_WAKE)
+                f.dots("w", X(Kx[~hot]), Y(Kz[~hot]), 2.0 * dot * g[~hot], 0.9 * (1.0 + 0.9 * wk[~hot]))
+                f.dots("r", X(Kx[hot]), Y(Kz[hot]), 3.2 * dot * g[hot], 1.5 * (1.0 + 0.4 * wk[hot]))
+            for gx, gz, ga in gone:                     # a track that has just decayed: its point lets go in a ring
+                if 0.0 <= ga < 0.5:
+                    ring(f, "w", float(X(gx)), float(Y(gz)), 3.0 + 15.0 * float(B.ease(ga / 0.5)), 0.75 * (1.0 - ga / 0.5), n=20)
         # 3 - the estimate closing in on the core: made outwards from its centre when the tracks give one
         n = len(thr)
         readout = ["EST X  -.---", "EST Z  -.---", "SIGMA  -.---", "CONF   0.00"]
-        if n >= 2 and erode < 0.9:
-            Kp = np.array([tr["K"] for tr in thr])
-            mx, mz = float(Kp[:, 0].mean()), float(Kp[:, 2].mean())
-            sig = float(np.sqrt(Kp[:, [0, 2]].var(0).sum()) / math.sqrt(n)) + 0.02
+        est = self._estimate(t, loose) if n >= 2 and erode < 0.9 else None
+        if est is not None:
+            mx, mz, sig = est
             ex, ez = float(X(mx)), float(Y(mz))
             with f.build(a_box if est_age is None else min(a_box, est_age), (px0 - 4.0, py0 - 26.0, px1 + 4.0, py1 + 4.0),
                          flow="out", origin=(ex, ez), wave=0.3, marks=False, key=15):
-                f.rings("r", [ex], [ez], [max(8.0, 2.2 * sig * S)], 0.9, width=L.LW)
+                ring(f, "r", ex, ez, max(8.0, 2.2 * sig * S), 0.9, n=48)
                 f.set_clip(px0, py0, px1, py1)
                 f.segments("r", [ex, ex, ex, ex], [ez, ez, ez, ez], [px0, px1, ex, ex], [ez, ez, py0, py1], 0.4)
                 f.set_clip()
@@ -1182,14 +1484,21 @@ class Sphere(Scene):
             a = a[: int(round(60 * float(B.ease(ac / 0.5))))] if ac < 0.5 else a
             f.pixels("w", X(CORE[0] + CORE_R * np.cos(a)), Y(CORE[2] + CORE_R * np.sin(a)), 1.2 * cf)
         # readouts: beside the plot, or under it in two columns when the column is narrow
-        lines = [f"VOXEL  {VOX:.3f} M", f"POCA   {len(past):03d}", f"CORE   {n:03d}"] + readout
+        # (the count ticks when a track comes in, or decays: the digit that changed spins before it locks)
+        poca = "POCA   " + tick(len(past), count_age, key=23, step=-1 if lost is not None else 1)
+        left = [f"VOXEL  {VOX:.3f} M", poca, f"CORE   {n:03d}", f"SCAN X {xs_n * Hh:+.2f}", "CHORD  -.-- M" if chord is None else f"CHORD  {chord:.2f} M"]
         with self._blk(f, "tomo", t, rect):
-            for k, ln in enumerate(lines):
-                if lay.tg["mode"] == "side":
-                    x, y = x0, py0 + 42 + k * 24
-                else:
-                    x, y = (x0 if k < 3 else x0 + max(150.0, 0.5 * (x1 - x0))), py1 + 62 + (k if k < 3 else k - 3) * 22
-                f.text("r" if k >= 3 and n >= 2 else "w", x, y, er(ln, et, 20 + k, fr), size=L.T_MICRO, alpha=0.85)
+            if lay.tg["mode"] == "side":
+                for k, ln in enumerate(left + readout):
+                    f.text("r" if k >= 5 and est is not None else "w", x0, py0 + 42 + k * 24, er(ln, et, 20 + k, fr),
+                           size=L.T_MICRO, alpha=0.85)
+            else:
+                xr = x0 + max(150.0, 0.5 * (x1 - x0))
+                for k, ln in enumerate(left[:4]):
+                    f.text("w", x0, py1 + 62 + k * 22, er(ln, et, 20 + k, fr), size=L.T_MICRO, alpha=0.85)
+                for k, ln in enumerate(readout):
+                    f.text("r" if est is not None else "w", xr, py1 + 62 + k * 22, er(ln, et, 25 + k, fr), size=L.T_MICRO,
+                           alpha=0.85)
 
     def _low_panel(self, f, col, title, erode=0.0, key=31, fr=0, cap=None):
         """Header of a panel in the lower part of a column (y = Y_LOW .. Y_BASE). Returns its x range.
@@ -1200,9 +1509,11 @@ class Sphere(Scene):
         header(f, x0, x1, Y_LOW, fit_title(title, x1 - x0 - 8), erode, key, fr)
         return x0, x1
 
-    def _profile(self, f, phi, v, alive=None, erode=0.0, t=0.0, peak_age=None):
+    def _profile(self, f, phi, v, alive=None, erode=0.0, t=0.0, peak_age=None, lift=None):
         """The opacity histogram, unrolled under the tomogram: one bar per bin, flagged bins red.
-        peak_age = age (for Frame.build) of the PEAK label, negative / None = no flagged bin."""
+        peak_age = age (for Frame.build) of the PEAK label, negative / None = no flagged bin.
+        lift (per bin, in units of v) = what the outline of the body adds to its sticks (Sphere._ring): the
+        bars move with them. The flags stay those of v."""
         lay = self.lay
         if not lay.tomo:
             return
@@ -1211,8 +1522,9 @@ class Sphere(Scene):
         yb, hmax = Y_BASE, 150.0
         on = np.ones(N_BINS, bool) if alive is None else alive
         n = N_BINS
+        vh = v if lift is None else np.clip(v + lift, 0.03, 1.0)
         if (x1 - x0 - 70) / n < 3.2:        # narrow column: pair the bins
-            v, on, n = np.maximum(v[0::2], v[1::2]), on[0::2] | on[1::2], N_BINS // 2
+            v, vh, on, n = np.maximum(v[0::2], v[1::2]), np.maximum(vh[0::2], vh[1::2]), on[0::2] | on[1::2], N_BINS // 2
         bw = (x1 - x0 - 70) / n
         xs = x0 + 60 + np.arange(n) * bw
         hot = v > HOT
@@ -1230,8 +1542,8 @@ class Sphere(Scene):
                 xx = x0 + 60 + k * (x1 - x0 - 70) / step
                 f.segments("w", [xx], [yb + 2], [xx], [yb + 10], 0.8)
         with self._blk(f, "profile", t, rect):                          # its bars and lettering
-            f.rects("w", xs[a], yb - v[a] * hmax, xs[a] + max(2.0, bw - 2.2), yb, 0.92)
-            f.rects("r", xs[b], yb - v[b] * hmax, xs[b] + max(2.0, bw - 2.2), yb, 1.0)
+            f.rects("w", xs[a], yb - vh[a] * hmax, xs[a] + max(2.0, bw - 2.2), yb, 0.92)
+            f.rects("r", xs[b], yb - vh[b] * hmax, xs[b] + max(2.0, bw - 2.2), yb, 1.0)
             for frac in (0.0, 0.5, 1.0):
                 f.text("w", x0, yb - frac * hmax + 5, er(f"{float(mwe(frac)):.1f}", erode, 33, fr), size=L.T_MICRO, alpha=0.7)
             f.text("r", x0 + 62, yt - 8, er(f"FLAG > {float(mwe(HOT)):.2f} MWE", erode, 34, fr), size=L.T_MICRO,
@@ -1272,7 +1584,9 @@ class Sphere(Scene):
         with self._blk(f, "log", t, rect, erode=erode):
             etag(f, "w", x + 3, y, fit_title(tag, w - 6), erode, key, fr, size=L.T_MICRO, pad=3)
         with self._blk(f, "log", t, rect):
-            f.text("w", x, y + 30, er(fit_fields(head, w, size), erode, key + 1, fr), size=size, alpha=0.55)
+            # (the header names the fields the rows show: a narrow column drops the same ones in both)
+            nf = min([n_fit(ln[0], w, size) for ln in lines if len(ln[0]) == len(head)] + [len(head)])
+            f.text("w", x, y + 30, er(fit_fields(head[:nf], w, size), erode, key + 1, fr), size=size, alpha=0.55)
             for row, (fields, layer, alpha, new_age, *gone) in enumerate(lines[: int((Y_BASE + 4 - (y + 54)) / lead) + 1]):
                 s = fit_fields(fields, w, size)
                 if new_age is not None and new_age < 1.0:
@@ -1303,7 +1617,10 @@ class Sphere(Scene):
                         ["TIME   ", "D ", "E   ", " MRAD", "X    ", "Y    ", "Z"], lines, t=t)
 
     def _right(self, f, t, ctx, past, title="DETECTORS", erode=0.0):
-        """The three streams: hit counts, last energy, the float each tower sends, its last hits as bars."""
+        """The three streams: hit counts, last energy, the float each tower sends, its last hits as bars.
+        It is live: the counts spin when they change, the float has a level with a peak mark, a hit sends a
+        red dash along the rule of its detector, and its bar grows at the right end of the row while the
+        older ones slide one place to the left (they do not jump)."""
         if not self.lay.dets:
             return
         x0, x1 = self.lay.dets
@@ -1311,6 +1628,8 @@ class Sphere(Scene):
         fr = int(t * 30)
         y = Y_TITLE
         rect = (x0, y - 50.0, x1, y + 92.0 + 2 * 176.0 + 122.0)
+        xm0, xm1 = x0 + 110.0 + text_w("/MUON/C 0.000", L.T_MICRO) + 12.0, x1 - 2.0       # the level of the float
+        meter = xm1 - xm0 >= 50.0
         # two passes over the same block: its boxes and rules, then its lettering and bars
         for rules in (True, False):
             with self._blk(f, "dets", t, rect, erode=erode if rules else None):
@@ -1319,6 +1638,12 @@ class Sphere(Scene):
                 else:
                     f.text("w", x0 + 4, y + 44, er("3 DETECTORS // 3 FLOATS // OSC", erode, 52, fr), size=L.T_MICRO, alpha=0.75)
                 yy = y + 92
+                slide = {"w": [], "r": []}      # the bars that move, of the three rows: drawn in one go (hud.bars)
+
+                def bar(layer, xa, ya, xb_, yb_, inten):
+                    slide[layer].append(np.broadcast_arrays(*(np.atleast_1d(np.asarray(v, np.float64))
+                                                              for v in (xa, ya, xb_, yb_, inten))))
+
                 for k, key in enumerate(L.ORDER):
                     tt, ee, ec = ctx.det.hits(key, 0.0, t + 1e-6)
                     age, e = ctx.det.last(key, t, echoes=True)
@@ -1328,28 +1653,56 @@ class Sphere(Scene):
                         etag(f, "r" if age < 0.7 else "w", x0 + 3, yy + 8, L.NAMES[key], erode, 53 + k, fr, size=L.T_LABEL,
                              pad=4)
                         f.segments("w", [x0], [yb + 1], [x1], [yb + 1], 0.35)
+                        if meter:                       # the scale of the level: 0, half, 1
+                            xt = xm0 + np.array([0.0, 0.5, 1.0]) * (xm1 - xm0)
+                            f.segments("w", np.r_[xm0, xt], np.r_[yy + 42.0, np.full(3, yy + 42.0)],
+                                       np.r_[xm1, xt], np.r_[yy + 42.0, np.full(3, yy + 46.0)], 0.4)
                     else:
-                        n = int((~ec).sum())
+                        n, n_e = int((~ec).sum()), int(ec.sum())
                         val = float(ctx.det.value(key, t))
-                        lines = [f"HITS {n:03d}   ECHO {int(ec.sum()):03d}",
-                                 f"LAST E {e:.3f}   T+{min(age, 99.9):04.1f}" if age < 90 else "LAST E -.---",
+                        # the counts tick when they change (the digit that changed spins, then locks); the
+                        # decimals of a new energy spin before they lock
+                        hits_ = tick(n, t - float(tt[~ec][-1]) if n else None, key=160 + k)
+                        echo_ = tick(n_e, t - float(tt[ec][-1]) if n_e else None, key=163 + k)
+                        last_ = f"{e:.3f}"
+                        if age < 0.25:
+                            last_ = last_[:2] + B.roll(last_[2:], age, 0.25, key=166 + k)
+                        lines = [f"HITS {hits_}   ECHO {echo_}",
+                                 f"LAST E {last_}   T+{min(age, 99.9):04.1f}" if age < 90 else "LAST E -.---",
                                  f"/MUON/{key} {val:.3f}"]
                         for j, ln in enumerate(lines):
                             f.text("w", x0 + 110, yy - 2 + j * 22, er(ln, erode, 60 + 3 * k + j, fr), size=L.T_MICRO,
                                    alpha=0.85 if j < 2 else 0.6)
-                        # the last hits of this tower as energy bars (newest right)
+                        sl_ = slice(max(0, len(tt) - 34), len(tt))      # the hits that may still be in the row
+                        ts_, es, cs = tt[sl_], ee[sl_], ec[sl_]
+                        since_ = t - ts_
+                        if meter and erode < 0.85:      # the float it streams, as a level; the red mark holds its last peaks
+                            peak = max([val] + [float(v) for v in np.minimum(es, 1.0) * np.exp(-since_ / 1.1)])
+                            bar("w", xm0, yy + 34, xm0 + val * (xm1 - xm0), yy + 40, 0.95)
+                            xp = xm0 + min(1.0, peak) * (xm1 - xm0)
+                            bar("r", xp - 1.5, yy + 30, xp + 1.5, yy + 44, 1.1)
+                        for a_, c_ in zip(since_[-4:], cs[-4:]):        # a hit: a red dash runs along the rule of its detector
+                            if a_ < 0.45 and erode < 0.85:
+                                xh = x0 + (x1 - x0) * float(B.ease(a_ / 0.4))
+                                bar("r", max(x0, xh - 64.0), yy - 17, xh, yy - 13, (0.6 if c_ else 1.3) * (1.0 - a_ / 0.45))
+                        # the last hits of this tower as energy bars (newest right). A hit that comes in pushes
+                        # the row one place to the left - it slides there - while its own bar grows
                         m = 26
-                        bx = x0 + np.arange(m) * ((x1 - x0) / m)
-                        sel = slice(max(0, len(tt) - m), len(tt))
-                        es, cs = ee[sel], ec[sel]
+                        sw = (x1 - x0) / m
                         if len(es):
-                            keep = np.ones(len(es), bool) if erode <= 0 else hash01(np.arange(len(es)), k, 9) > erode
-                            xb = bx[m - len(es):]
-                            g = pop(t - tt[sel])        # the bar of a hit that has just come in grows
+                            push = smoothstep(0.0, SLIDE, since_)
+                            xb = x0 + (m - 1 - (np.cumsum(push[::-1])[::-1] - push)) * sw
+                            keep = xb + 9.0 > x0
+                            if erode > 0:
+                                keep = keep & (hash01(sl_.start + np.arange(len(es)), k, 9) > erode)
+                            g = pop(since_)             # the bar of a hit that has just come in grows
                             a, b = keep & ~cs, keep & cs
-                            f.rects("r", xb[a], yb - (6 + 44 * es[a]) * g[a], xb[a] + 9, yb, 0.95)
-                            f.rects("w", xb[b], yb - (4 + 44 * es[b]) * g[b], xb[b] + 5, yb, 0.6)
+                            bar("r", np.maximum(xb[a], x0), yb - (6 + 44 * es[a]) * g[a], np.maximum(xb[a] + 9, x0), yb, 0.95)
+                            bar("w", np.maximum(xb[b], x0), yb - (4 + 44 * es[b]) * g[b], np.maximum(xb[b] + 5, x0), yb, 0.6)
                     yy += 176
+                for layer, parts in slide.items():
+                    if parts:
+                        hud.bars(f, layer, *(np.concatenate([p[j] for p in parts]) for j in range(5)))
 
     def _spectrum(self, f, t, past, erode=0.0):
         """Scattering-angle spectrum of the live tracks (under the detectors)."""
@@ -1444,19 +1797,24 @@ class Sphere(Scene):
             f.polyline("w", X(tb), yb - 4 - 46 * lv ** 1.3, 0.55, width=L.LW_HAIR)
             kt, ka = ctx.cues.kicks(t - span, t + 1e-6)
             if len(kt):                                 # (a kick / a hit that has just come in grows)
-                xk = X(kt)
-                f.rects("w", xk - 2, yb - (10 + 30 * np.minimum(ka, 1.5)) * pop(t - kt), xk + 3, yb, 0.95)
+                xk = X(kt)                              # the grid scrolls: the bars slide (hud.bars), they leave under its left end
+                hud.bars(f, "w", np.maximum(xk - 2, ix0), yb - (10 + 30 * np.minimum(ka, 1.5)) * pop(t - kt),
+                         np.maximum(xk + 3, ix0), yb, 0.95)
+            hx0, hy0, hx1, hy1, hi = [], [], [], [], []
             for row, key in enumerate(L.ORDER):
                 yl = yb + 24 + row * 20
                 f.text("w", ix0, yl, key, size=L.T_MICRO, alpha=0.7)
                 tt, ee, ec = ctx.det.hits(key, t - span, t + 1e-6)
                 if len(tt):
                     xh = X(tt)
-                    ok = xh >= ix0 + 22                  # keep the row label clear
                     g = pop(t - tt)
-                    a, b = ~ec & ok, ec & ok
-                    f.rects("r", xh[a], yl - (4 + 10 * ee[a]) * g[a], xh[a] + 3, yl, 1.0)
-                    f.rects("r", xh[b], yl - (2 + 7 * ee[b]) * g[b], xh[b] + 2, yl, 0.55)
+                    hx0.append(np.maximum(xh, ix0 + 22))             # (they leave before the row label)
+                    hx1.append(np.maximum(xh + np.where(ec, 2.0, 3.0), ix0 + 22))
+                    hy0.append(yl - np.where(ec, 2 + 7 * ee, 4 + 10 * ee) * g)
+                    hy1.append(np.full(len(tt), yl))
+                    hi.append(np.where(ec, 0.55, 1.0))
+            if hx0:
+                hud.bars(f, "r", *(np.concatenate(v) for v in (hx0, hy0, hx1, hy1, hi)))
             f.segments("r", [ix1], [y0 + 44], [ix1], [y1 - 8], 1.1, width=L.LW)
             f.text("w", ix1 - 8, y0 + 25, f"KICK {min(env, 9.99):.2f}   LOUD {ctx.cues.loud(t):.2f}", size=L.T_MICRO, alpha=0.8,
                    anchor="rs")
@@ -1475,11 +1833,11 @@ class Sphere(Scene):
             header(f, x0, x1, lay.y0, title, erode, key, fr)
         cols = cols[: max(1, min(len(cols), int((x1 - x0) / 125.0)))]
         cw = (x1 - x0) / len(cols)
+        size = min(fit_size(val, cw - 12.0, 26.0, 48.0) for _, val, _ in cols)       # one size for the row
         with self._blk(f, "num", t, rect):
             for k, (lab, val, layer) in enumerate(cols):
                 f.text("w", x0 + k * cw + 4, lay.y0 + 34, er(lab, erode, key + 1 + k, fr), size=L.T_MICRO, alpha=0.75)
-                f.text(layer, x0 + k * cw + 2, lay.y0 + 96, er(val, erode * 0.5, key + 4 + k, fr),
-                       size=fit_size(val, cw - 12.0, 26.0, 48.0), alpha=0.97)
+                f.text(layer, x0 + k * cw + 2, lay.y0 + 96, er(val, erode * 0.5, key + 4 + k, fr), size=size, alpha=0.97)
 
     def _barcode_panel(self, f, t, ctx, erode=0.0, fr=0):
         """Bottom band: the three streams of the last 8 s as a barcode (quiet = sparse, hit = solid)."""
@@ -1492,19 +1850,21 @@ class Sphere(Scene):
             header(f, x0, x1, lay.y0, fit_title("STREAM_BARCODE // L C R // LAST 8 S", x1 - x0 - 8), erode, 158, fr)
             f.segments("r", [x1 - 1], [lay.y0 + 8], [x1 - 1], [lay.y1], 1.2, width=L.LW)
         cols_n = int(np.clip((x1 - x0) / 3.2, 60, 150))
-        dt = 8.0 / cols_n
-        kk = math.floor((t - 8.0) / dt) + np.arange(cols_n)
-        cw = (x1 - x0) / cols_n
-        xs = x0 + np.arange(cols_n) * cw
+        kk, frac, dt = hud.barcode_keys(t, 8.0, cols_n)
+        xl, xr = hud.barcode_cols(x0, x1, cols_n, frac)          # the bars slide, they do not jump a column
         lane_h = (lay.y1 - lay.y0 - 12) / 3
         with self._blk(f, "bar", t, rect):
+            xa, xb, ya = [], [], []
             for ln, key in enumerate(L.ORDER):
-                val = ctx.det.value(key, kk * dt + dt)
-                on = hash01(kk, ln + 17) < 0.03 + 1.6 * val
+                val = ctx.det.value(key, kk * dt)               # read at the start of its slot: it never changes after
+                on = (hash01(kk, ln + 17) < 0.03 + 1.6 * val) & (xr > xl)
                 if erode > 0:
                     on = on & (hash01(kk, ln, 159) > erode)
-                yl = lay.y0 + 12 + ln * lane_h
-                f.rects("w", xs[on], yl, xs[on] + cw, yl + lane_h - 4, 0.95)
+                xa.append(xl[on])
+                xb.append(xr[on])
+                ya.append(np.full(int(on.sum()), lay.y0 + 12 + ln * lane_h))
+            xa, xb, ya = np.concatenate(xa), np.concatenate(xb), np.concatenate(ya)
+            hud.bars(f, "w", xa, ya, xb, ya + lane_h - 4, 0.95)
 
     def _single_panel(self, f, title, value, layer="r", erode=0.0, fr=0, t=0.0):
         """Bottom band, smallest panel: one big figure."""
@@ -1520,10 +1880,11 @@ class Sphere(Scene):
 
     def _bottom(self, f, t, ctx, past, thr, found):
         expo = max(0.0, t - self.t_first)
-        self._numbers_panel(f, "RECONSTRUCTED", [("TRACKS", f"{len(past):04d}", "w"),
-                                                 ("SCATTERED", f"{len(thr):04d}", "r" if thr else "w"),
-                                                 ("EXPOSURE", f"{int(expo // 60):02d}:{int(expo % 60):02d}", "w")], t=t)
+        # the density of the core: the figure spins when the core is called, then locks. It has the smallest
+        # panel of the band; when the towers leave only two panels it is the fourth counter of the first
+        rho = ("RHO_CORE", B.roll("11.3", t - self.t_found, 0.6, key=9) if found else "--.-", "r" if found else "w")
+        cols = [("TRACKS", f"{len(past):04d}", "w"), ("SCATTERED", f"{len(thr):04d}", "r" if thr else "w"),
+                ("EXPOSURE", f"{int(expo // 60):02d}:{int(expo % 60):02d}", "w")]
+        self._numbers_panel(f, "RECONSTRUCTED", cols if self.lay.p_one else cols + [rho], t=t)
         self._barcode_panel(f, t, ctx)
-        # the density of the core: the figure spins when the core is called, then locks
-        self._single_panel(f, "RHO_CORE", B.roll("11.3", t - self.t_found, 0.6, key=9) if found else "--.-",
-                           "r" if found else "w", t=t)
+        self._single_panel(f, rho[0], rho[1], rho[2], t=t)

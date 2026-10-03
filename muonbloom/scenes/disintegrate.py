@@ -45,8 +45,8 @@ from .. import layout as L
 from .. import showdata as sd
 from ..engine import hash01, smoothstep
 from ..show import Scene
-from .sphere import (BLK, BUS_Y, HOT, N_BINS, R_FAR, Y_BASE, Y_LOW, Body, Lay, Sphere, draw_leader, er, fade, one_tag,
-                     pop, ring_values, sphere_tracks, unit)
+from .sphere import (BLK, BUS_Y, FOLLOW, HOT, N_BINS, R_FAR, Y_BASE, Y_LOW, Body, Lay, Sphere, draw_leader, er, fade,
+                     one_tag, pop, ring, ring_values, sphere_tracks, unit)
 
 T0, T1 = 575.0, 588.0
 T_ALMOST = 585.3                  # the music drops into the pulse of scene 11 (first heavy kick 584.9): almost nothing
@@ -114,6 +114,23 @@ class Disintegrate(Sphere):
             tr["star"] = self._star_dirs(rng)
             tr["ee"] = float(self._michel_sample(rng))
         self._schedule(ctx, np.random.default_rng(2020))
+        # the body still moves (sphere.Body.rho): the noise on the clock of the music, a ring from every bite.
+        # A piece that breaks off keeps the radius it had when it let go
+        self._init_motion(ctx, T0, T1)
+        self.waves = [(ch["t"], (0.3 if ch["echo"] else 1.0) * (0.55 + 0.6 * ch["e"]), np.asarray(ch["c"], np.float64))
+                      for ch in self.chunks]
+        b = self.body
+        self.rho_rel = np.ones(b.n)
+        for i in np.nonzero(np.isfinite(self.rel))[0]:
+            self.rho_rel[i] = float(b.rho(b.u[i:i + 1], self._pose(float(self.rel[i]), ctx))[0])
+        # the tomogram loses its picture: when the erosion reaches each hash (a piece of the contour, a voxel,
+        # a point lets go then), and where the estimate stands after every decay of a scattered track
+        self._e_t = np.linspace(T0, T1, 1301)
+        self._e_v = np.maximum.accumulate(np.array([e_picture(float(v)) for v in self._e_t]))
+        thr_all = [tr for tr in self.old if tr["through"]]
+        self.est = self._est_steps([(T0 - 1.0, thr_all)] + [(d, [q for q in thr_all if q["decay"] > d])
+                                                              for d in sorted(q["decay"] for q in thr_all)])
+        self.decays = np.sort(np.array([tr["decay"] for tr in self.old]))
         # the hits that get the tag of the bottom-right corner and the labels of their star
         self.prim = [ch for ch in self.chunks if not ch["echo"]]
         self.prim_t = np.array([ch["t"] for ch in self.prim])
@@ -262,22 +279,32 @@ class Disintegrate(Sphere):
     def chunks_before(self, t):
         return [ch for ch in self.chunks if ch["t"] <= t]
 
+    def _lost(self, t):
+        """h -> seconds since the erosion of the picture reached the hash h (negative: not yet). What the
+        tomogram loses lets go at that moment and is given the time to leave (Sphere._tomogram)."""
+        def since(h):
+            i = np.searchsorted(self._e_v, np.asarray(h, np.float64), side="left")
+            return t - np.where(i < len(self._e_t), self._e_t[np.minimum(i, len(self._e_t) - 1)], T1 + 9.0)
+        return since
+
     # ----------------------------------------------------------------- render
     def draw(self, f, t, ctx):
         lay = self.lay
         cam, yaw = self._cam(t)
+        self.pose, self._sl = self._pose(t, ctx), None
         e_txt = e_text(t)
         frac = float(remaining(t))
         alive = [tr for tr in self.old if tr["decay"] > t]
         thr = [tr for tr in alive if tr["through"]]
         phi, v, phc = ring_values(lay, cam, 7, 9, 9, self.ring_jit)
         v = v * (0.35 + 0.65 * frac ** 0.5)
+        follow = FOLLOW * lay.R * (self.body.outline(cam, phi, self.pose) - 1.0)    # the halo follows the outline of the body
         f.set_clip(*lay.clip)
         self._lattice(f)
         self._eroding_body(f, cam, t)
         self._ring(f, phi, v, 1.0, alive=self.drop > t, gain=1.0,          # its labels go with its first stick
-                   label_age=B.io(t - T0 - 0.4, self.t_drop0 - t, out=0.3, span=0.45))
-        self._falling_sticks(f, phi, v, t)
+                   label_age=B.io(t - T0 - 0.4, self.t_drop0 - t, out=0.3, span=0.45), follow=follow)
+        self._falling_sticks(f, phi, v, t, follow)
         for tr in self.old:                               # the old picture, decaying
             a = t - tr["decay"]
             if a < 0:
@@ -294,10 +321,13 @@ class Disintegrate(Sphere):
         self._callouts_d(f, t, e_txt, frac, yaw)
         e_tomo = e_picture(t)
         a_tomo = self._age0("tomo", t)
-        self._tomogram(f, t, alive, thr, yaw, erode=e_tomo, alive=hash01(np.arange(200), 21) > e_tomo,
+        k_dec = int(np.searchsorted(self.decays, t, side="right"))
+        self._tomogram(f, t, alive, thr, yaw, erode=e_tomo, lost=self._lost(t),
                        title="TOMOGRAM // TOP VIEW // LOSING THE PICTURE", erode_txt=e_txt,
                        est_age=B.io(a_tomo - 0.45, self.t_est_gone - t, out=0.4),
-                       core_age=B.io(a_tomo - 0.6, self.t_core_gone - t, out=0.5, span=0.5))
+                       core_age=B.io(a_tomo - 0.6, self.t_core_gone - t, out=0.5, span=0.5),
+                       gone=[(tr["K"][0], tr["K"][2], t - tr["decay"]) for tr in self.old if 0.0 <= t - tr["decay"] < 0.5],
+                       loose=2.5 * e_tomo, count_age=t - float(self.decays[k_dec - 1]) if k_dec else None)
         self._integrity(f, t, ctx, e_txt)
         self._left_d(f, t, e_txt)
         self._right(f, t, ctx, alive, title="DECAY", erode=e_txt)
@@ -310,10 +340,11 @@ class Disintegrate(Sphere):
     # ------------------------------------------------------------------ world
     def _eroding_body(self, f, cam, t):
         b = self.body
-        P0 = b.surface(t).astype(np.float32)
-        N = b.normals(t).astype(np.float32)
         a = (t - self.rel).astype(np.float32)
         gone = a >= 0
+        rho, N = b.shape(self.pose)
+        P0 = (b.u * np.where(gone, self.rho_rel, rho)[:, None]).astype(np.float32)      # (a piece that let go keeps its radius)
+        N = N.astype(np.float32)
         aa = np.where(gone, a, 0.0)[:, None]
         drift = 3.0 * (1.0 - np.exp(-aa / 3.0))                     # the pieces slow down and float
         P = P0 + self.vel * drift + np.array([0.0, -0.012, 0.0], np.float32) * aa * aa
@@ -348,13 +379,15 @@ class Disintegrate(Sphere):
             fresh = np.exp(-a[fl] / 0.25)
             f.dots("w", sx[fl], sy[fl], 1.5, 0.25 + 0.9 * fd + 0.8 * fresh)
 
-    def _falling_sticks(self, f, phi, v, t):
+    def _falling_sticks(self, f, phi, v, t, follow=None):
         lay = self.lay
         a = t - self.drop
         m = (a >= 0) & (a < 1.5)
         if not m.any():
             return
         Ln = lay.l0 + (lay.l1 - lay.l0) * v[m]
+        if follow is not None:                  # (the length it had on the halo: Sphere._ring)
+            Ln = np.maximum(Ln + follow[m], 5.0 * lay.s)
         c, s = np.cos(phi[m]), -np.sin(phi[m])
         am = a[m]
         mx = lay.cx + (lay.r0 + Ln / 2) * c + self.stick_v[m, 0] * lay.s * am
@@ -390,8 +423,8 @@ class Disintegrate(Sphere):
             s = (np.arange(n) + 0.5) / n
             f.pixels("w", px[0] + (px[k] - px[0]) * s, py[0] + (py[k] - py[0]) * s, 1.3 * fd * (1 - 0.6 * s))
         f.dots("r", px[0:1], py[0:1], 3.4 if big else 2.0, (1.6 if big else 1.2) * fd)
-        if big:
-            f.rings("r", px[0:1], py[0:1], [8 + 54 * (1 - math.exp(-a / 0.5))], 0.9 * math.exp(-a / 0.45), width=L.LW)
+        if big:                             # (a ring that grows: always the same vertices, sphere.ring)
+            ring(f, "r", float(px[0]), float(py[0]), 8 + 54 * (1 - math.exp(-a / 0.5)), 0.9 * math.exp(-a / 0.45), n=40)
         if label_left is not None and label_left > 0.0:     # prong labels, only where they stay whole inside the body column
             x0, x1 = self.lay.body
             for k, (word, g) in enumerate((("E-", 1.0), ("NU", 0.7), ("NU", 0.7)), start=1):
@@ -411,7 +444,7 @@ class Disintegrate(Sphere):
                 break
             if a > 3.2:
                 continue
-            S = (ch["c"] * b.rho(ch["c"][None], t)[0]).astype(np.float32)
+            S = (ch["c"] * b.rho(ch["c"][None], self.pose)[0]).astype(np.float32)
             d = unit(-ch["c"] * 0.55 + np.array([0.0, -1.0, 0.0]))            # it came from above
             far = S - d * 0.2
             # walk back to the far radius
@@ -555,9 +588,11 @@ class Disintegrate(Sphere):
     def _bottom_d(self, f, t, ctx, e_txt, frac):
         fr = int(t * 30)
         nodes, edges, struts, sticks, tracks = self._counts(t)
-        self._numbers_panel(f, "REMAINING", [("NODES", f"{nodes:04d}", "w"), ("EDGES", f"{edges:04d}", "w"),
-                                             ("STICKS", f"{sticks:03d}", "w")], erode=e_txt, fr=fr, t=t)
-        self._barcode_panel(f, t, ctx, erode=e_txt, fr=fr)
         left = nodes / self.body.n          # (0.995 and more reads 1.0: ".2f" would round it to "1.00", shown as ".00")
-        self._single_panel(f, "N/N0", "1.0" if left >= 0.995 else (f"{left:.3f}"[1:] if left < 0.1 else f"{left:.2f}"[1:]),
-                           "r", erode=e_txt, fr=fr, t=t)
+        frac_ = "1.0" if left >= 0.995 else (f"{left:.3f}"[1:] if left < 0.1 else f"{left:.2f}"[1:])
+        cols = [("NODES", f"{nodes:04d}", "w"), ("EDGES", f"{edges:04d}", "w"), ("STICKS", f"{sticks:03d}", "w")]
+        # (N/N0 has the smallest panel of the band; with only two panels it is the fourth counter of the first)
+        self._numbers_panel(f, "REMAINING", cols if self.lay.p_one else cols + [("N/N0", frac_, "r")], erode=e_txt, fr=fr,
+                            t=t)
+        self._barcode_panel(f, t, ctx, erode=e_txt, fr=fr)
+        self._single_panel(f, "N/N0", frac_, "r", erode=e_txt, fr=fr, t=t)

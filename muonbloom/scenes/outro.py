@@ -7,7 +7,7 @@ years" is 11 s shorter (the axis draws itself in 10 s instead of 21).
   11.0  09:48 - 11:04  NARRATIVE     "nothing chose when. everything returns to almost... nothing."
                                       the remains of the disintegration fade to one red dot. Out of it the
                                       whole journey is drawn as ONE line: a log time axis from the collapse
-                                      of the star (left, -5 billion years) to NOW / YOU (right). The red dot
+                                      of the star (left, -4.8 billion years) to NOW / YOU (right). The red dot
                                       travels it on the voice: billions of years in the first metres, the
                                       last heartbeat, the 50 microseconds of atmosphere, you. Two clocks for
                                       "time stretched around it", a heartbeat trace for "less than a
@@ -17,11 +17,22 @@ years" is 11 s shorter (the axis draws itself in 10 s instead of 21).
                                       The towers stay live; the whirl passes behind them and continues.
   11.2  11:40 - 12:06  SWIRLING      (the drums enter at 11:35.5 and leave at 12:11)
                                       the whirl is the streak field of the first minute, turning around the
-                                      red dot, rings beating on the drums. 11:54.3: the fifty-thousandth muon
-                                      through you. The credits start at 12:06.4.
-  12.0  12:06 - 12:38  CREDITS       when the drums stop the detectors power down and nothing new arrives: the
-                                      field drains into the dot. What is left is the lattice of crosses and one
-                                      red dot = the first image of the show. It loops.
+                                      red dot, rings beating on the drums. THE FINALE: what the show has built
+                                      comes back together and builds to the fifty-thousandth muon through you
+                                      (11:54.3, the count the voice announced at 04:41). The whirl gets denser
+                                      until it takes the wall, the muon rain starts and thickens to the real
+                                      rate through one body, the three towers bloom (the blooms of scene 3,
+                                      opening wider and wider), the count runs large towards 50 000. It lands
+                                      on the kick: the blooms burst wide open, a shock ring crosses the wall,
+                                      the rain floods. The peak holds on the last drums; the credits start
+                                      under it at 12:06.4.
+  12.0  12:06 - 12:38  CREDITS       when the drums stop the detectors power down, the blooms close and nothing
+                                      new arrives: the field drains into the dot. What is left is the lattice
+                                      of crosses and one red dot = the first image of the show. Then everything
+                                      goes, the way it came in the first seven seconds, backwards: the credits
+                                      are taken apart, the lattice is un-drawn row by row, the dot goes out,
+                                      the counter, the edge meters, the outlines of the towers and at last the
+                                      frame. Black before the music ends, as the show begins.
 
 NOTHING THAT SHOWS DATA FADES (muonbloom/build.py): the strip, the stations of the axis and their glyphs,
 the blocks under the axis, the bottom panels, the tags (NOW, YOU // NOW, the reading of the traveller, MORE
@@ -32,9 +43,15 @@ keep their own ramps.
 
 The three towers stand in front of the wall for the whole show and nobody knows yet where: so there is
 no fixed x in this scene. Everything is laid out from ctx: text, numbers and panels live in ctx.cols
-(the bays between the towers), the time axis skips the towers (no station ever falls behind one), the
-whirl and the last red dot sit on ctx.focus. Only textures, trails, rings and the axis line pass behind
+(the bays between the towers), the time axis skips the towers that reach up to it (no station ever falls
+behind one, or in the plume of its live replies; it runs over a tower that stops lower), the whirl and the
+last red dot sit on ctx.focus. Only textures, trails, rings and the axis line pass behind
 the towers. All of it is closed-form in show time, so any frame draws alone.
+
+It is the journey of the opening, with the figures of the opening: the star collapsed YEAR0 = 4.8E9 years
+ago (origin.py), the messenger is the proton of 3.2E15 eV, gamma 3.4E6 (messenger.py), for which 1 411 years
+pass on the way; the muon of the last 15 km is the one that went through YOU (you.py: 4.02 GeV/c, gamma
+38.1). Every figure written here is derived from those, none is written twice.
 """
 from __future__ import annotations
 
@@ -49,24 +66,43 @@ from .. import layout as L
 from .. import showdata as sd
 from ..engine import CHAR_W, hash01, smoothstep
 from ..show import Scene
+from .messenger import GAMMA as GAMMA_P            # the messenger of the opening: a proton of gamma 3.4E6 ...
+from .origin import YEAR0                          # ... sent out by a star that collapsed 4.8E9 years ago
 
 T0, T_COIL, T_END = 588.0, 664.44, 726.44
 AX_Y = 520.0                                       # the journey axis
 LT0, LT1 = 17.4, -6.6                              # log10(seconds before now) at its two ends
 YEAR = 3.156e7
-T_STAR = 5.0e9 * YEAR                              # the star collapsed 5 billion years ago
+T_STAR = YEAR0 * YEAR                              # the star collapsed 4.8 billion years ago
 T_ATM = 5.0e-5                                     # 15 km of atmosphere at the speed of light
 TAU_MU = 2.197e-6
-GAMMA_P, GAMMA_MU = 1.0e6, 30.0
+M_P = 938.272e6                                    # eV: the proton
+M_MU, P_MU = 0.1056584, 4.02                       # GeV: the muon that went through YOU (4.02 GeV/c)
+GAMMA_MU = math.hypot(P_MU, M_MU) / M_MU           # 38.1
 B_SP, EPS = 3.2, 0.02                              # whirl: log spirals r = R (1 - u)
 N_DOTS = 7000
 T_AXIS = (603.0, 613.44)                           # the axis draws itself (it ends where it ended in V7)
 T_PWR = 730.74                                     # the drums stop: the detectors power down (centre, right, left)
 PWR_ORDER = {"C": 0.0, "R": 0.5, "L": 1.0}
 T_DRAIN = (730.74, 736.64)                         # ... and nothing new arrives: the whirl drains into the dot
-T_CREDITS_OUT = (751.44, 756.44)
+# the end: everything goes, in the reverse order of the opening (origin.py, 00:00 - 00:07), with the music
+T_CRED_LINES = T_PWR + 1.6                         # the title is made at T_END, over the blooms; the lines under it and
+T_CRED_B = T_PWR + 2.6                             # the second block when the blooms have closed
+T_CREDITS_OUT = (747.4, 751.4)                     # the credits are taken apart line by line, the title last
+T_LAT_OUT = (751.4, 753.5)                         # the lattice is un-drawn, row by row (the music fades from here)
+T_DOT_OUT = (753.5, 754.6)                         # the red dot goes out
+T_CELL_OUT = 755.4                                 # the counter cell is gone (its red tag just before it)
+T_EDGE_OUT = (754.8, 756.0)                        # the edge meters are un-drawn
+T_FRAME_OUT = (755.9, 757.7)                       # the frame and the outlines of the towers: black (music ends 12:38.5)
+# the finale (11.2)
+T_FIN = 700.44                                     # the build starts; it lands on the 50 000th muon (self.t_bang)
+BLOOM_SIZE = {"L": 1.0, "C": 1.18, "R": 1.0}       # the blooms of scene 3 come back at their sizes
+BLOOM_LAG = {"L": 0.0, "R": 1.6, "C": 3.2}         # ... and wake in its order: left, right, centre
+N_FIN = 5000                                       # travellers that join the whirl during the build
+P_SHELL, N_SHELL, R_SHELL = 5.6, 7, 62.0           # the collapsing star of the axis: a shell falls in every 0.8 s
 PANEL_Y = AX_Y + 140.0                             # top of the blocks under the axis
 BURST = 0.6                                        # size of the towers' live replies in this calm scene
+PLUME = 500.0 * BURST                              # ... which rise this high above a detector (towers.burst)
 T_STRIP = (599.9, 689.44)                          # the score strip: made / taken apart (before the whirl gets there)
 T_ANN_OUT = (662.94, 666.24)                       # the annotations of the journey are taken apart, before the line coils
 PANEL_OUT = dict(journey=663.74, clocks=664.04, heart=664.34, here=664.64)     # when each block under the axis is gone
@@ -74,6 +110,23 @@ T_NOW_TAG = (665.64, 691.44)                       # NOW rides beside the dot on
 T_DIM = (662.94, 669.44)                           # what is drawn of the journey dims into the whirl; NOW leaves the axis
 T_RINGS = 688.44                                   # the rings of the first minute come back
 T_TOP = 689.44                                     # the world stays under the header until the strip has gone
+
+
+def _grouped(v, n):
+    """A fraction with n decimals, its figures in groups of three: 0.999 999 999 999 96."""
+    a, b = f"{v:.{n}f}".split(".")
+    return a + "." + " ".join(b[k: k + 3] for k in range(0, len(b), 3))
+
+
+def _sci(v):
+    """3.2E15, 3.4E6, 4.8E9: one decimal and the power of ten, as the opening writes them."""
+    m, e = f"{v:.1E}".split("E")
+    return f"{m}E{int(e)}"
+
+
+GYR = f"{YEAR0 / 1e9:.1f} GYR"                               # 4.8 GYR
+V_P = _grouped(1.0 - 0.5 / GAMMA_P ** 2, 14)                 # 0.999 999 999 999 96 (1 - beta = 1 / 2 gamma2)
+V_MU = _grouped(P_MU / math.hypot(P_MU, M_MU), 5)            # 0.999 65
 
 
 def fit(size, n_chars, width):
@@ -118,9 +171,40 @@ def _ecg(u):
     return g(0.2, 0.12, 0.035) + g(0.335, -0.14, 0.014) + g(0.365, 1.0, 0.013) + g(0.395, -0.24, 0.014) + g(0.62, 0.3, 0.06)
 
 
-def _body(y):
-    """Front silhouette of the figure of YOU: y from 0 (feet) to 1 (top of the head) -> [(centre, half width)]."""
-    return human.front_spans(y)
+def _circles(f, layer, cx, cy, radii, inten, n=96, width=1.0):
+    """Circles that grow or shrink smoothly: a fixed number of vertices and the default spacing. (Frame.rings
+    takes its vertex count from the radius, so the polygon re-divides while it moves, and a spacing above 0.5
+    is drawn as single splats whose grain crawls.) Inside a block being built each circle is traced."""
+    radii = np.atleast_1d(np.asarray(radii, np.float64))
+    inten = np.broadcast_to(np.asarray(inten, np.float64), radii.shape)
+    if not len(radii):
+        return
+    a = np.linspace(0.0, 2.0 * np.pi, n + 1)
+    x = cx + radii[:, None] * np.cos(a)[None, :]
+    y = cy + radii[:, None] * np.sin(a)[None, :]
+    if getattr(f, "_bld", None) is not None:
+        for k in range(len(radii)):
+            f.polyline(layer, x[k], y[k], float(inten[k]), width=width)
+        return
+    f.segments(layer, x[:, :-1].ravel(), y[:, :-1].ravel(), x[:, 1:].ravel(), y[:, 1:].ravel(), np.repeat(inten, n),
+               width=width)
+
+
+def _swell(times, amps, t, tau, attack):
+    """Pulses with an attack: each one swells in `attack` seconds and dies in `tau` (its peak = its amplitude).
+    Cues.kick and the hits of a detector jump to their peak in one frame, and what they drive - the radius of
+    a ring, the size of a bloom - jumps with them."""
+    if not len(times):
+        return 0.0
+    a = np.maximum(t - np.asarray(times, np.float64), 0.0)
+    x = attack / (2.0 * tau + attack)                 # (1 - e^(-a/attack))^2 e^(-a/tau): it starts with no speed
+    peak = (1.0 - x) ** 2 * x ** (attack / tau)
+    return float((np.asarray(amps, np.float64) * (1.0 - np.exp(-a / attack)) ** 2 * np.exp(-a / tau)).sum() / peak)
+
+
+def _kick(cues, t, tau=0.22, attack=0.05):
+    """The kicks of the music, as _swell: what moves on the drums moves without a jump."""
+    return _swell(*cues.kicks(t - 7.0 * tau, t + 1e-6), t, tau, attack)
 
 
 class Outro(Scene):
@@ -141,13 +225,16 @@ class Outro(Scene):
             were=s("You always were", 687.07))
         c = self.c
         self.t_dep, self.t_arr = c["billions"], c["reach"] + 2.0
+        # the figure at the end of the axis turns: two turns between the arrival and 'passing through your body',
+        # so that it faces the wall on both
+        self.turn = (c["body"] - self.t_arr) / 2.0 if 12.0 <= c["body"] - self.t_arr <= 18.0 else 7.5
         self.t_dot = c["nothing"] + 0.5                 # out of 'nothing.': one red dot
         # the drums of the swirl: the strongest low hit around 11:35.5
         kt, ka = ctx.cues.kicks(692.44, 699.44)
         self.t_hit = float(kt[int(np.argmax(ka))]) if len(kt) else 695.54
         # story markers on the axis: (seconds before now, title, value, preferred rows, priority)
         self.marks = [
-            (T_STAR, "A STAR COLLAPSES", "-5.0 GYR", (2, 1, 0), 0),
+            (T_STAR, "A STAR COLLAPSES", f"-{GYR}", (2, 1, 0), 0),
             (4.54e9 * YEAR, "EARTH FORMS", "-4.54 GYR", (0, 1, 2), 4),
             (66e6 * YEAR, "DINOSAURS GONE", "-66 MYR", (1, 0, 2), 8),
             (3.0e5 * YEAR, "FIRST HUMANS", "-300 KYR", (0, 1, 2), 6),
@@ -174,6 +261,12 @@ class Outro(Scene):
         self.d_b = 0.35 + 0.65 * rng.random(N_DOTS) ** 2
         self.d_tau = 0.1 + 0.1 * rng.random(N_DOTS)
         self.d_act = c["universe"] + (self.t_hit - c["universe"]) * (k / N_DOTS) ** (1 / 2.6)
+        # the finale: the fifty-thousandth muon through one spectator, and the kick the wall answers it on
+        self.t50 = 50000.0 / ctx.RATE_YOU
+        kt, ka = ctx.cues.kicks(self.t50 - 0.05, self.t50 + 0.6)
+        self.t_bang = float(kt[int(np.argmax(ka))]) if len(kt) else self.t50
+        self.t_bang = float(np.clip(self.t_bang, T_FIN + 6.0, T_END - 4.0))
+        self._init_finale(ctx)
         # what is left of the disintegration at 09:48
         n = 130
         self.rem = dict(x=rng.uniform(L.FX0 + 60, L.FX1 - 60, n), y=rng.uniform(L.HEAD_Y + 30, L.FY1 - 120, n),
@@ -197,8 +290,14 @@ class Outro(Scene):
 
     # ------------------------------------------------------------------ geometry from the towers
     def _geometry(self, ctx):
-        """Everything is placed from ctx: the text columns between the towers, the focus point."""
-        cols = list(ctx.cols) or [(L.COL_X0, L.COL_X1)]
+        """Everything is placed from ctx: the text columns between the towers, the focus point.
+        The journey axis and what stands on it only keep clear of the towers that reach up to it (counting the
+        plume of their live replies): a tower that stops lower is not in their way, the scale runs over it
+        (self.cols). The blocks under the axis and the credits reach lower: they keep to the columns between
+        all the towers (self.bcols)."""
+        self.bcols = list(ctx.cols) or [(L.COL_X0, L.COL_X1)]
+        high = {k: tw for k, tw in ctx.towers.items() if tw.top - PLUME < AX_Y + 110.0}
+        cols = (L.columns(high) if high else [(L.COL_X0, L.COL_X1)]) or self.bcols
         self.cols = cols
         wide = [c for c in cols if c[1] - c[0] >= 200] or [max(cols, key=lambda c: c[1] - c[0])]
         self.col_now = wide[-1]                              # the column where the line ends: NOW, YOU
@@ -265,16 +364,17 @@ class Outro(Scene):
                 self.mark_pos[i] = best[:2]
 
     def _layout_panels(self):
-        """The four blocks under the axis flow into the columns left to right; the least important ones are
-        dropped when the towers leave no room."""
+        """The four blocks under the axis go into the columns between the towers, in reading order: a column
+        each when there are enough of them, else shared so that every block gets about the same part of the
+        width it would like. The least important ones are dropped when the towers leave no room."""
         gap = 40.0
-        blocks = [("journey", 330.0, 400.0, 3), ("clocks", 300.0, 740.0, 1), ("heart", 420.0, 740.0, 2),
+        blocks = [("journey", 310.0, 400.0, 3), ("clocks", 300.0, 740.0, 1), ("heart", 420.0, 740.0, 2),
                   ("here", 190.0, 400.0, 4)]
         inset = 24.0                      # extra room on the side of a tower: its live replies bloom there
         spans = []
-        for a, b in self.cols:
+        for a, b in self.bcols:
             a2 = a + (inset if a > L.COL_X0 + 1.0 else 0.0)
-            b2 = (self.x_now - 110.0) if (a, b) == self.col_now else b - (inset if b < L.COL_X1 - 1.0 else 0.0)
+            b2 = (self.x_now - 110.0) if a <= self.x_now <= b else b - (inset if b < L.COL_X1 - 1.0 else 0.0)
             spans.append((a2, b2))
 
         def one_each(bl):
@@ -289,29 +389,47 @@ class Outro(Scene):
                 ci += 1
             return out
 
-        def flow(bl):
-            out, ci, x = {}, 0, spans[0][0]
-            per_col = {}
-            for name, mn, pref, _ in bl:
-                while ci < len(spans) and spans[ci][1] - x < mn:
-                    ci += 1
-                    x = spans[ci][0] if ci < len(spans) else 0.0
-                if ci >= len(spans):
-                    return None
-                per_col.setdefault(ci, []).append([name, x, mn, pref])
-                x += mn + gap
-            for ci, items in per_col.items():                # share what is left of the column
-                extra = spans[ci][1] - (items[-1][1] + items[-1][2])
-                want = sum(p - m for _, _, m, p in items)
-                shift = 0.0
-                for it in items:
-                    add = min(it[3] - it[2], extra * (it[3] - it[2]) / want) if want > 0 else 0.0
-                    out[it[0]] = (it[1] + shift, it[1] + shift + it[2] + add)
-                    shift += add
+        def shared(bl):
+            """Columns shared: of all the ways to deal the blocks to the columns, in order, the one that
+            leaves the most squeezed column the least squeezed (then the one that uses the most columns)."""
+            best, n = None, len(bl)
+
+            def deal(k, ci, groups):
+                nonlocal best
+                if k == n:
+                    score = []
+                    for c, items in groups.items():
+                        w = spans[c][1] - spans[c][0]
+                        if sum(it[1] for it in items) + gap * (len(items) - 1) > w:
+                            return
+                        score.append(min(1.0, w / (sum(it[2] for it in items) + gap * (len(items) - 1))))
+                    key = (round(min(score), 3), len(groups))
+                    if best is None or key > best[0]:
+                        best = (key, {c: list(v) for c, v in groups.items()})
+                    return
+                for c in range(ci, len(spans)):
+                    groups.setdefault(c, []).append(bl[k])
+                    deal(k + 1, c, groups)
+                    groups[c].pop()
+                    if not groups[c]:
+                        del groups[c]
+
+            deal(0, 0, {})
+            if best is None:
+                return None
+            out = {}
+            for c, items in best[1].items():                  # every block its minimum, and its share of the rest
+                extra = spans[c][1] - spans[c][0] - sum(it[1] for it in items) - gap * (len(items) - 1)
+                want = sum(it[2] - it[1] for it in items)
+                x = spans[c][0]
+                for name, mn, pref, _ in items:
+                    w = mn + (min(pref - mn, extra * (pref - mn) / want) if want > 0 else 0.0)
+                    out[name] = (x, x + w)
+                    x += w + gap
             return out
 
         while blocks:
-            res = one_each(blocks) or flow(blocks)
+            res = one_each(blocks) or shared(blocks)
             if res is not None:
                 break
             blocks.remove(max(blocks, key=lambda b: b[3]))    # drop the least important and try again
@@ -321,8 +439,8 @@ class Outro(Scene):
         """Two blocks, each in a column of its own, never the one that holds the red dot."""
         fx = self.cx
         wd = lambda c: c[1] - c[0]
-        free = [c for c in self.cols if not (c[0] <= fx <= c[1]) and wd(c) >= 300.0]
-        home = self._col_of(fx)
+        free = [c for c in self.bcols if not (c[0] <= fx <= c[1]) and wd(c) >= 300.0]
+        home = next((c for c in self.bcols if c[0] - 1.0 <= fx <= c[1] + 1.0), None)
         if home is not None and len(free) < 2:                # the focus column itself, left and right of the dot
             free += [c for c in ((home[0], fx - 190.0), (fx + 190.0, home[1])) if wd(c) >= 300.0]
         A = B = None
@@ -333,6 +451,64 @@ class Outro(Scene):
             right = [c for c in rest if c[0] > A[0]]
             B = max(right or rest, key=wd) if rest else None
         self.cred = dict(A=A, B=B)
+
+    def _init_finale(self, ctx):
+        """What the finale needs: the travellers that join the whirl, the muon rain, the place of the count."""
+        rg = np.random.default_rng(12)
+        # travellers that join during the build: no arms, they fill the wall
+        k = np.arange(N_FIN)
+        self.d_th = np.r_[self.d_th, rg.uniform(0, 2 * np.pi, N_FIN)]
+        self.d_lane = np.r_[self.d_lane, rg.normal(0, 0.5, N_FIN).clip(-1.4, 1.4)]
+        self.d_ph = np.r_[self.d_ph, rg.random(N_FIN)]
+        self.d_b = np.r_[self.d_b, 0.3 + 0.6 * rg.random(N_FIN) ** 2]
+        self.d_tau = np.r_[self.d_tau, 0.1 + 0.1 * rg.random(N_FIN)]
+        self.d_act = np.r_[self.d_act, T_FIN + (self.t_bang - T_FIN) * (k / N_FIN) ** 0.8]
+        # the muon rain: a few a second when the build starts, the real rate through one body (RATE_YOU) when
+        # the count lands; a surge on the bang, then it goes on thickening to the last drums - the flood the
+        # voice announced. Nothing new once the drums have stopped
+        rate = float(ctx.RATE_YOU)
+        dur = self.t_bang - T_FIN
+        g = np.linspace(0.0, 1.0, 400)
+        cdf = 3.0 * g + (rate - 3.0) / 3.0 * g ** 3                 # integral of 3 + (rate - 3) g2
+        hold = T_PWR + 0.2 - self.t_bang
+        ts = np.r_[T_FIN + dur * np.interp(rg.random(int(cdf[-1] * dur)) * cdf[-1], cdf, g),
+                   self.t_bang + np.minimum(rg.exponential(0.22, 110), 1.2),
+                   rg.uniform(self.t_bang, T_PWR + 0.2, int(rate * hold)),
+                   self.t_bang + hold * np.sqrt(rg.random(int(0.5 * rate * hold)))]       # + a ramp to twice the rate
+        n = len(ts)
+        self.rain = dict(t=ts, x=rg.uniform(L.FX0 - 300.0, L.FX1 + 300.0, n), sl=rg.normal(0, 0.3, n).clip(-0.85, 0.85),
+                         v=rg.uniform(3600.0, 5400.0, n), ln=rg.uniform(380.0, 760.0, n), b=0.45 + 0.55 * rg.random(n))
+        # the count, large: in the title column of the credits (it leaves before they come), in the largest
+        # piece of it that no bloom reaches. A bloom opens upwards and sideways from its detector: the wall
+        # under the level of a detector is free, and so is what lies beside a bloom or above it
+        self.fin = None
+        col = self.cred["A"]
+        if col is not None:
+            boxes = []
+            for key, tw in ctx.towers.items():
+                hw = towers.S_MAX[key] * BLOOM_SIZE[key]
+                top = tw.top - 1.15 * towers.bloom_height(key, 1.2, BLOOM_SIZE[key])
+                boxes.append((tw.cx - hw - 20.0, top - 20.0, tw.cx + hw + 20.0, tw.top + 36.0))
+            ya_min, yb_max = L.FY0 + 64.0, ctx.slots["y0"] - 30.0
+            xs_a = [col[0]] + [b[2] for b in boxes if col[0] < b[2] < col[1]]
+            xs_b = [col[1]] + [b[0] for b in boxes if col[0] < b[0] < col[1]]
+            ys_a = [ya_min] + [b[3] for b in boxes if ya_min < b[3] < yb_max]
+            ys_b = [yb_max] + [b[1] for b in boxes if ya_min < b[1] < yb_max]
+            best = None
+            for xa in xs_a:
+                for xb in xs_b:
+                    for ya in ys_a:
+                        for yb in ys_b:
+                            if xb - xa < 340.0 or yb - ya < 250.0:
+                                continue
+                            if any(b[0] < xb and b[2] > xa and b[1] < yb and b[3] > ya for b in boxes):
+                                continue
+                            size = min(190.0, (xb - xa - 16.0) / (6 * CHAR_W), (yb - ya - 180.0) / 0.8)
+                            key_ = (round(size), ya, -(xb - xa))          # the largest type, then the lowest place
+                            if size >= 90.0 and (best is None or key_ > best[0]):
+                                best = (key_, (xa, ya, xb, float(size)))
+            if best is not None:
+                self.fin = best[1]
 
     # ------------------------------------------------------------------ helpers
     def _phi(self, t):
@@ -401,15 +577,21 @@ class Outro(Scene):
         if c["universe"] <= t < T_PWR + 2.3:              # the three scopes stay readable under the whirl
             a = float(smoothstep(c["universe"], c["universe"] + 1.5, t) * (1 - smoothstep(T_PWR, T_PWR + 2.3, t)))
             out += [(r[0], r[1] - 16, r[2], r[3], 0.82 * a) for r in ctx.slots["scopes"].values()]
+        if self.fin is not None and T_FIN <= t < T_END + 1.0:      # the count of the finale
+            x0, y0, x1, size = self.fin
+            a = float(smoothstep(T_FIN, T_FIN + 1.5, t) * (1 - smoothstep(T_END - 0.5, T_END + 1.0, t)))
+            out.append((x0 - 16, y0 - 14, x1 + 16, y0 + 60.0 + size + 110.0, 0.86 * a))
         if t >= T_END:
             a = t - T_END
             keep = float(1 - smoothstep(*T_CREDITS_OUT, t))
-            if self.cred["A"]:
+            if self.cred["A"]:            # the title first, the lines under it when the blooms have closed
                 x0, x1 = self.cred["A"]
-                out.append((x0 - 20, 352.0, x1 + 20, 880.0, 0.93 * min(1.0, a / 1.5) * keep))
-            if self.cred["B"] and a > 4.0:
+                out.append((x0 - 20, 352.0, x1 + 20, 540.0, 0.93 * min(1.0, a / 1.5) * keep))
+                if t > T_CRED_LINES - 0.5:
+                    out.append((x0 - 20, 540.0, x1 + 20, 960.0, 0.93 * min(1.0, (t - T_CRED_LINES + 0.5) / 1.5) * keep))
+            if self.cred["B"] and t > T_CRED_B:
                 x0, x1 = self.cred["B"]
-                out.append((x0 - 20, 352.0, x1 + 20, 830.0, 0.93 * min(1.0, (a - 4.0) / 1.5) * keep))
+                out.append((x0 - 20, 352.0, x1 + 20, 830.0, 0.93 * min(1.0, (t - T_CRED_B) / 1.5) * keep))
         return [v for v in out if v[4] > 0.01]
 
     @staticmethod
@@ -424,8 +606,10 @@ class Outro(Scene):
     # ------------------------------------------------------------------ draw
     def draw(self, f, t, ctx):
         c = self.c
+        if t >= T_FRAME_OUT[1]:           # black, as the show begins
+            return {"frame": False, "cell": False, "edge_ticks": False, "scopes": False, "towers": "own"}
         drain = float(smoothstep(*T_DRAIN, t))
-        self._lattice(f, 0.72 + 0.28 * drain)
+        self._lattice(f, t, 0.72 + 0.28 * drain)
         if t < c["nothing"] + 1.0:
             self._remains(f, t)
         a_img = float(1 - smoothstep(*T_DIM, t))                 # what is DRAWN of the journey dims into the whirl
@@ -438,13 +622,18 @@ class Outro(Scene):
             self._stations(f, t, ctx, a_img)
             if T_AXIS[0] <= t < T_ANN_OUT[1]:
                 self._panels(f, t, ctx)
-        if t >= c["universe"]:
+        if t >= c["universe"] and drain < 1.0:
             self._travellers(f, t, ctx, drain)
-        if t >= T_RINGS:
+        if t >= T_FIN:
+            self._rain(f, t)
+        if t >= T_RINGS and drain < 1.0:
             self._rings(f, t, ctx, drain)
         self._now_dot(f, t, ctx, drain)
+        if t >= T_FIN:
+            self._blooms(f, t, ctx)       # (towers.bloom sets a clip of its own and leaves none)
         f.set_clip()
         self._bottom(f, t, ctx)
+        self._count(f, t, ctx)
         if t >= T_END:
             self._credits(f, t, ctx)
         age = B.io(t - T_STRIP[0], T_STRIP[1] - t, out=0.6, span=1.6)    # the strip is made, then taken apart
@@ -455,16 +644,44 @@ class Outro(Scene):
             hud.show_strip(f, t, ctx, "OUTRO // SCENE 11 // THE JOURNEY, ONCE MORE", T0, T_END, marks, age=age)
         # the towers stay live to the end of the music; they power down under the credits, then stand dark
         opt = {"tower_dim": 0.34, "burst_size": BURST}
+        if t >= T_FIN:                    # in the finale a tower answers with its bloom, not with the compact reply
+            opt["burst_gain"] = float(1 - smoothstep(T_FIN, T_FIN + 5.0, t))
         if t >= T_PWR + 2.4:
-            opt.update(towers="none", scopes=False)
+            k = float(1 - smoothstep(*T_FRAME_OUT, t))           # their outlines go with the frame
+            for tw in ctx.towers.values():
+                towers.dark(f, tw, outline=0.16 * k)
+            opt.update(towers="own", scopes=False)
         elif t >= T_PWR:
             self._power_down(f, t, ctx)
             opt.update(towers="own", scopes=False)
+        self._leave(t, opt)
         return opt
 
-    def _lattice(self, f, gain):
+    @staticmethod
+    def _leave(t, opt):
+        """The furniture the show draws on top of the scene is taken away at the end, the way the opening made
+        it (origin._boot), backwards: the counter cell closes, the edge meters are un-drawn by their bright
+        head, the frame fades to black last."""
+        left = T_CELL_OUT - t
+        if left <= 0.0:
+            opt["cell"] = False
+        elif left < 0.6:                  # the build of the cell, run backwards (stopped short of its commit flash)
+            opt["cell_age"] = 0.97 * left / 0.6
+        if t >= T_EDGE_OUT[1]:
+            opt["edge_ticks"] = False
+        elif t > T_EDGE_OUT[0]:
+            opt["edge_kw"] = {"reveal": 1.0 - B.lin(t, *T_EDGE_OUT)}
+        if t > T_FRAME_OUT[0]:
+            opt["frame_alpha"] = float(1 - smoothstep(*T_FRAME_OUT, t))
+
+    def _lattice(self, f, t, gain):
         """The lattice of the first image of the show (origin.py): 64 px, centred on the red dot, a bolder cross
-        every fourth one. Quieter under the journey, at full strength again when everything has returned."""
+        every fourth one. Quieter under the journey, at full strength again when everything has returned. At
+        the end it is un-drawn the way the opening drew it, backwards: row by row from the bottom up, the row
+        being taken off brighter."""
+        u = B.lin(t, *T_LAT_OUT)
+        if u >= 1.0:
+            return
         cx, cy = self.cx, self.cy
         x0, y0, x1, y1 = L.FRAME
         kx = np.arange(math.ceil((x0 + 14 - cx) / 64.0), math.floor((x1 - 14 - cx) / 64.0) + 1)
@@ -472,8 +689,15 @@ class Outro(Scene):
         KX, KY = np.meshgrid(kx, ky)
         X, Y = (cx + KX * 64.0).ravel(), (cy + KY * 64.0).ravel()
         major = ((KX % 4 == 0) & (KY % 4 == 0)).ravel()
-        f.crosses("w", X[~major], Y[~major], 7.0, 0.2 * gain)
-        f.crosses("w", X[major], Y[major], 10.0, 0.42 * gain, width=1.3)
+        on = np.ones(len(X), bool)
+        if u > 0.0:
+            row = (KY - ky[0]).ravel()
+            head = (1.0 - u) * len(ky)
+            on = row < head
+            last = on & (row >= head - 1.0)
+            f.crosses("w", X[last], Y[last], 9.0, 0.9 * gain, width=1.3)
+        f.crosses("w", X[on & ~major], Y[on & ~major], 7.0, 0.2 * gain)
+        f.crosses("w", X[on & major], Y[on & major], 10.0, 0.42 * gain, width=1.3)
 
     # --- 11.0 ---------------------------------------------------------------------
     def _remains(self, f, t):
@@ -613,15 +837,25 @@ class Outro(Scene):
         if t >= T_AXIS[0] and c0[1] - c0[0] >= 230:      # the star: shells around a point, over the first column
             g = 0.6 + 0.4 * (not dep)
             gx, gy = min(x_star + 138.0, c0[1] - 70.0), 292.0
-            rr = np.array([8.0, 16, 26, 37, 49, 60])
+            # it collapses for as long as it is on the wall: its shells fall in on the core one after the other
+            # (slowly at first, then faster), a new one starts outside as one arrives, and the core answers
+            # every arrival with a beat and a ring that bounces off it
+            u = (t / P_SHELL + np.arange(N_SHELL) / N_SHELL) % 1.0
+            rr = R_SHELL * (1.0 - u) ** 0.72
+            ii = 0.8 * g * smoothstep(0.0, 0.16, u) * (0.5 + 0.7 * u) * smoothstep(4.0, 11.0, rr)     # (into the core)
+            a = t % (P_SHELL / N_SHELL)                           # seconds since a shell reached the core
+            beat = (a / 0.07) * math.exp(1.0 - a / 0.07)
             with f.build(B.io(t - T_AXIS[0] - 0.5, T_ANN_OUT[0] + 1.1 - t),
                          (x_star - 8, gy - 68, gx + 68, max(star_top, gy + 68) + 4), flow="out",
                          origin=(x_star, star_top), wave=0.35, marks=False, key=52):
-                f.rings("w", [gx] * 6, [gy] * 6, rr * (1 + 0.03 * math.sin(t * 1.3)), 0.6 * g)
-                f.dots("r", [gx], [gy], 4.5, 1.3 * g)
+                m = ii > 0.004
+                _circles(f, "w", gx, gy, rr[m], ii[m], n=44)
+                _circles(f, "r", gx, gy, [6.0 + 22.0 * (1.0 - math.exp(-a / 0.22))],
+                         [0.7 * g * math.exp(-a / 0.28) * (1.0 - math.exp(-a / 0.04))], n=44)
+                f.dots("r", [gx], [gy], 4.5 + 2.0 * beat, (1.3 + 0.5 * beat) * g)
                 if gx - 66 > x_star + 8:
                     f.segments("w", [x_star, x_star], [star_top, gy], [x_star, gx - 66], [gy, gy], 0.45 * g)
-        mid = [cc for cc in self.cols if cc != c0 and cc != self.col_now and cc[1] - cc[0] >= 330]
+        mid = [cc for cc in self.bcols[1:] if not (cc[0] <= self.x_now <= cc[1]) and cc[1] - cc[0] >= 330]
         if mid and t >= T_AXIS[0]:                        # the messenger: a point and the line it draws
             cc = max(mid, key=lambda v: v[1] - v[0])
             gx = float(np.clip(0.5 * (cc[0] + cc[1]), cc[0] + 80.0, cc[1] - 236.0))
@@ -635,7 +869,7 @@ class Outro(Scene):
                 f.dots("w", [gx], [gy], 4.0, 1.4 * g)
                 f.rings("r", [gx], [gy], [14.0], 0.7 * g)
                 f.text("w", gx + 26, gy - 6, "PRIMARY // P+", size=L.T_SMALL, alpha=0.85 * g)
-                f.text("w", gx + 26, gy + 18, "V 0.999 999 999 999 5 C", size=L.T_MICRO, alpha=0.65 * g)
+                f.text("w", gx + 26, gy + 18, f"V {V_P} C", size=L.T_MICRO, alpha=0.65 * g)
         x_a = float(self.X(math.log10(T_ATM)))
         ca = self._col_of(x_a)
         if ca is not None and t >= T_AXIS[0]:             # 15 km of air: the cascade, above its station
@@ -674,21 +908,31 @@ class Outro(Scene):
                    alpha=0.9)
 
     def _you(self, f, t, a_img):
-        """The figure at the end of the axis (front view in slices, the journey line through the heart). It
-        assembles slice by slice around the heart when the line gets there; its tag is made, then taken apart
-        with the stations."""
+        """The figure at the end of the axis: the body in slices (its contours every 3 cm), turning slowly
+        about its vertical axis for as long as it stands there - it faces the wall when the traveller reaches
+        it and when the voice says 'your body' -, the journey line through the heart. It assembles slice by
+        slice around the heart when the line gets there; its tag is made, then taken apart with the stations."""
         c = self.c
         Hh = 250.0
+        S = Hh / human.HEIGHT
+        hx, hy, hz = human.HEART
+        th = 2.0 * math.pi * (t - self.t_arr) / self.turn
+        cs, sn = math.cos(th), math.sin(th)
         x0 = self.x_now
-        y_feet = AX_Y + 0.71 * Hh
+        y_feet = AX_Y + hy * S
+        x_heart = x0 + (hx * cs + hz * sn) * S
         arr = float(smoothstep(self.t_arr - 0.6, self.t_arr + 0.2, t))
         g = a_img * (0.45 + 0.55 * arr)
-        ys = np.arange(0.0, 1.0, 5.0 / Hh)
-        xa, xb, yy = [], [], []
-        for v in ys:
-            for cen, hw in _body(float(v)):
-                xa.append(x0 + (cen - hw) * Hh); xb.append(x0 + (cen + hw) * Hh); yy.append(y_feet - v * Hh)
-        xa, xb, yy = np.array(xa), np.array(xb), np.array(yy)
+
+        def proj(P):                      # seen a little from above: a slice shows as a flat loop, its near side lower
+            d = -P[:, 0] * sn + P[:, 2] * cs
+            return x0 + (P[:, 0] * cs + P[:, 2] * sn) * S, y_feet - P[:, 1] * S + d * S * 0.16, d
+
+        xa, ya, da = proj(human.CA)
+        xb, yb, db = proj(human.CB)
+        yy = y_feet - human.LEVELS[human.CLEV] * S
+        near = np.clip((0.5 * (da + db) + 0.06) / 0.12, 0.0, 1.0)         # the side that faces us is the bright one
+        ii = 0.3 + 0.6 * near
         there = np.abs(yy - AX_Y) <= 190.0 * B.lin(t, self.t_fig, self.t_fig + 0.7)       # from the heart outwards
         heart = np.abs(yy - AX_Y) < 16
         hot = 0.0
@@ -698,17 +942,18 @@ class Outro(Scene):
         if ab >= 0:
             hot = max(hot, math.exp(-ab / 2.2))
         m = there & ~heart
-        f.segments("w", xa[m], yy[m], xb[m], yy[m], 0.75 * g, width=L.LW)
+        f.segments("w", xa[m], ya[m], xb[m], yb[m], ii[m] * g, width=1.2)
         m = there & heart
-        f.segments("w", xa[m], yy[m], xb[m], yy[m], 0.75 * g * (1 - hot), width=L.LW)
+        f.segments("w", xa[m], ya[m], xb[m], yb[m], ii[m] * g * (1 - hot), width=1.2)
         if hot > 0.02:
-            f.segments("r", xa[m], yy[m], xb[m], yy[m], 1.5 * hot * a_img, width=L.LW)
-            f.rings("r", [x0 + 0.012 * Hh], [AX_Y], [10 + 60 * (1 - hot)], hot * a_img, width=L.LW)
+            f.segments("r", xa[m], ya[m], xb[m], yb[m], 2.0 * ii[m] * hot * a_img, width=1.2)
+            _circles(f, "r", x_heart, AX_Y, [10 + 60 * (1 - hot)], [hot * a_img], n=72, width=L.LW)
         if 0 <= ab < 5.0:                     # 'passing through your body': from above, as it really does
             u = min(1.0, ab / 0.22)
             fade = float(1 - smoothstep(3.5, 5.0, ab))
-            ya, yb_ = y_feet - Hh - 110, y_feet + 26
-            f.segments("r", [x0 + 26], [ya], [x0 + 26 - 34 * u], [ya + (yb_ - ya) * u], 1.2 * fade * a_img, width=L.LW)
+            y_a, y_b = y_feet - Hh - 110, y_feet + 26
+            f.segments("r", [x0 + 26], [y_a], [x0 + 26 - 34 * u], [y_a + (y_b - y_a) * u], 1.2 * fade * a_img,
+                       width=L.LW)
         now = t >= c["moment"]
         B.tag(f, "r" if (now or arr > 0.5) else "w", x0, y_feet + 44, "YOU // NOW",
               B.io(t - self.t_fig - 0.6, T_ANN_OUT[0] + 2.3 - t, out=0.3, span=0.45), size=L.T_TAG, pad=5,
@@ -727,9 +972,10 @@ class Outro(Scene):
 
         if "journey" in self.panel:
             x0, x1 = self.panel["journey"]
-            lines = ["ORIGIN    CORE COLLAPSE", "DEPARTED  -5.0 GYR", "MESSENGER PROTON  P+", "GAMMA     1 000 000",
-                     "PATH      5.0E9 LY", "LAST LEG  MUON  15 KM", "ARRIVAL   NOW"]
-            with f.build(age(T_AXIS[0] + 0.2, "journey"), (x0 - 12, y0 - 10, x1 + 6, y0 + 96 + 6 * 27 + 12), flow="tb",
+            lines = ["ORIGIN    CORE COLLAPSE", f"DEPARTED  -{GYR}", "MESSENGER PROTON  P+",
+                     f"ENERGY    {_sci(GAMMA_P * M_P)} EV", f"GAMMA     {_sci(GAMMA_P)}", f"PATH      {_sci(YEAR0)} LY",
+                     "LAST LEG  MUON  15 KM", "ARRIVAL   NOW"]
+            with f.build(age(T_AXIS[0] + 0.2, "journey"), (x0 - 12, y0 - 10, x1 + 6, y0 + 96 + 7 * 27 + 12), flow="tb",
                          wave=0.45, cps=90.0, key=31):
                 f.tag("w", x0, y0 + 36, "THE JOURNEY", size=fit(44, 11, x1 - x0 - 24), pad=8)
                 for k, ln in enumerate(lines):
@@ -746,14 +992,17 @@ class Outro(Scene):
             size = fit(54, 8, (w * 0.5 - 24) if wide else (w - 8))
             xi, yi = (x0 + w * 0.5, y0) if wide else (x0, y0 + 100)
             yq = y0 + (0 if wide else 100)
-            who = "MUON  GAMMA 30" if muon or t >= self.t_arr else "PROTON  GAMMA 1 000 000"
+            who = f"MUON  GAMMA {GAMMA_MU:.1f}" if muon or t >= self.t_arr else f"PROTON  GAMMA {_sci(GAMMA_P)}"
+            # on board the proton: whole years once there are a thousand of them (1 411 at the end, as in the opening)
+            own_s = (f"{int(its / YEAR):,} YR".replace(",", " ") if not muon and t < self.t_arr and its >= 1000 * YEAR
+                     else fmt_time(its))
             line = f"{who}  //  ITS CLOCK RUNS GAMMA TIMES SLOWER" if w >= 545 else who
             with f.build(age(c["stretched"], "clocks"), (x0 - 10, y0 - 28, x1 + 10, yq + 166), key=32):
                 hud.panel_header(f, x0, x1, y0, "TWO CLOCKS // TIME STRETCHED AROUND IT" if w >= 330 else "TWO CLOCKS")
                 f.tag("w", x0 + 2, y0 + 52, "OUR TIME", size=L.T_MICRO, pad=3)
                 f.text("w", x0, y0 + 116, fmt_time(our), size=size)
                 f.tag("r", xi + 2, yi + 52, "ITS OWN TIME", size=L.T_MICRO, pad=3)
-                f.text("r", xi, yi + 116, fmt_time(its), size=size)
+                f.text("r", xi, yi + 116, own_s, size=size)
                 f.text("w", x0, yq + 152, line, size=L.T_MICRO, alpha=0.7)
             # its own time against its lifetime: just long enough
             by = yq + 196
@@ -764,7 +1013,7 @@ class Outro(Scene):
             with f.build(age(c["reach"], "clocks"), (x0 - 6, by - 6, x1 + 6, by + 56), flow="lr", wave=0.3, marks=False,
                          key=33):
                 f.rect("w", x0, by, x1, by + 22, 0.7)
-                f.rects("r", x0 + 3, by + 3, x0 + 3 + (w - 6) * frac, by + 19, 0.95)
+                hud.bars(f, "r", x0 + 3, by + 3, x0 + 3 + (w - 6) * frac, by + 19, 0.95)
                 f.text("w", x0, by + 48, cap, size=L.T_MICRO, alpha=0.8)
             B.tag(f, "r", x1, by + (52 if w >= 700 else 84), "JUST LONG ENOUGH",
                   B.io(t - self.t_arr, PANEL_OUT["clocks"] - t, out=0.3, span=0.5), size=L.T_SMALL, pad=4, anchor="rs",
@@ -819,15 +1068,21 @@ class Outro(Scene):
         kick = min(1.5, ctx.cues.kick(t, 0.14))
         loud = ctx.cues.loud(t, 0.3)
         hit = math.exp(-(t - self.t_hit) / 0.5) if t >= self.t_hit else 0.0
+        if t >= self.t_bang:              # the fifty-thousandth: the whole field answers
+            hit += 0.4 * math.exp(-(t - self.t_bang) / 0.8)
         r_cut = self.r_out * (1.0 - drain) ** 1.25
         a = smoothstep(0.0, 1.2, age[idx]) * smoothstep(0.0, 0.03, u) * (1 - smoothstep(0.975, 1.0, u))
         if drain > 0:
             a = a * (1.0 - smoothstep(r_cut - 90.0, r_cut, r[:, 0]))
-        credits = 1.0 - 0.45 * float(smoothstep(T_END, T_END + 2.0, t))      # quieter under the credits
+        credits = 1.0 - 0.45 * float(smoothstep(T_PWR - 0.5, T_PWR + 1.5, t))      # quieter under the credit lines
         b = self.d_b[idx] * a * (0.55 + 0.45 * loud + 0.5 * kick + 1.2 * hit) * (0.7 + 0.5 * m[:, 0]) * credits
         veils = self._veils(t, ctx)
         if veils:
             b = b * self._veil_factor(px[:, 0], py[:, 0], veils)
+        lit = b > 0.004                   # (what is not lit is not handed to the renderer)
+        if not lit.any():
+            return
+        px, py, b, idx = px[lit], py[lit], b[lit], idx[lit]
         fall = (1.0 - j) ** 1.2
         i0 = b[:, None] * fall[None, :-1]
         i1 = b[:, None] * fall[None, 1:]
@@ -836,44 +1091,156 @@ class Outro(Scene):
         f.dots("w", px[:, 0], py[:, 0], 1.5 + 0.9 * self.d_b[idx], 1.25 * b)
 
     def _rings(self, f, t, ctx, drain):
-        """The rings of the first minute, around the dot, beating on the drums; they fall in at the end."""
-        g = float(smoothstep(T_RINGS, self.t_hit, t)) * (1.0 - 0.4 * float(smoothstep(T_END, T_END + 2.0, t)))
-        kick = min(1.5, ctx.cues.kick(t, 0.2))
+        """The rings of the first minute, around the dot, beating on the drums; they fall in at the end.
+        They swell on a kick and settle (no jump: _kick has an attack), and every kick throws one more ring
+        out of the dot. All of them keep their vertices while they move (_circles): a ring grows smoothly."""
+        g = float(smoothstep(T_RINGS, self.t_hit, t)) * (1.0 - 0.4 * float(smoothstep(T_PWR - 0.5, T_PWR + 1.5, t)))
+        kick = min(1.5, _kick(ctx.cues, t, 0.3, 0.07))
         k = np.arange(len(self.rings))
-        r = self.rings * (1 + 0.025 * np.sin(t * 0.9 + 1.7 * k) + 0.03 * kick * (1 + k % 3))
+        r = self.rings * (1 + 0.025 * np.sin(t * 0.9 + 1.7 * k) + 0.02 * kick * (1 + k % 3))
         r = r * (1.0 - drain) ** (1.0 + 0.25 * (k % 4))
         m = r > 6.0
-        f.rings("w", np.full(m.sum(), self.cx), np.full(m.sum(), self.cy), r[m], 0.72 * g * (1 - 0.6 * drain),
-                spacing=0.6, width=L.LW)
+        _circles(f, "w", self.cx, self.cy, r[m], 0.72 * g * (1 - 0.6 * drain), n=200, width=L.LW)
         kt, ka = ctx.cues.kicks(max(self.t_hit - 0.05, t - 2.5), t + 1e-6)     # every kick throws one more ring out
-        for tk, a in zip(kt, ka):
-            age = t - float(tk)
-            rr = (40.0 + 520.0 * age) * (1.0 - drain)
-            f.rings("w", [self.cx], [self.cy], [rr], 0.6 * min(float(a), 1.6) * g * math.exp(-age / 0.9) * (1 - drain),
-                    spacing=0.7, width=L.LW)
+        if len(kt):
+            age = t - kt.astype(np.float64)
+            rr = (12.0 + 30.0 * (1.0 - np.exp(-age / 0.06)) + 520.0 * age) * (1.0 - drain)
+            ii = 0.6 * np.minimum(ka, 1.6) * g * np.exp(-age / 0.9) * (1.0 - np.exp(-age / 0.045)) * (1 - drain)
+            _circles(f, "w", self.cx, self.cy, rr, ii, n=240, width=L.LW)
+        # the fifty-thousandth muon: a shock crosses the whole wall, two fainter ones behind it
+        a = t - self.t_bang
+        if 0.0 < a < 3.2:
+            lag = np.array([0.0, 0.17, 0.36])
+            b = np.maximum(a - lag, 0.0)
+            rr = 16.0 + (self.r_out - 16.0) * (1.0 - (1.0 - np.minimum(b / 2.2, 1.0)) ** 2.2)
+            ii = np.array([1.7, 0.8, 0.5]) * np.exp(-b / 0.85) * (1.0 - np.exp(-b / 0.03)) * (b > 0)
+            _circles(f, "w", self.cx, self.cy, rr[:1], ii[:1], n=320, width=3.2)
+            _circles(f, "w", self.cx, self.cy, rr[1:], ii[1:], n=320, width=L.LW)
+
+    def _rain(self, f, t):
+        """The muon rain of the finale: red tracks through the whole wall, top to bottom, a comet each. A few a
+        second when the build starts, 70 a second - what really goes through one body - when the count lands,
+        a surge on the bang, then more and more to the last drums. Nothing new once the drums have stopped."""
+        r = self.rain
+        a = t - r["t"]
+        m = (a > 0.0) & (a * r["v"] < (L.FY1 - L.FY0) + r["ln"])
+        if not m.any():
+            return
+        a, x, sl, v, ln, b = a[m], r["x"][m], r["sl"][m], r["v"][m], r["ln"][m], r["b"][m]
+        yh = L.FY0 + v * a
+        yt = np.maximum(yh - ln, L.FY0)
+        xh, xt = x + sl * (yh - L.FY0), x + sl * (yt - L.FY0)
+        f.segments("r", xt, yt, xh, yh, 0.0, 1.05 * b, width=L.LW)
+        f.dots("r", xh, yh, 3.0, 1.5 * b)
+        f.dots("w", xh, yh, 1.1, 0.9 * b)
+
+    def _bloom_state(self, t, ctx, key, kick):
+        """(openness, size, gain) of the bloom of a tower in the finale, or None while it has none.
+        It leaves its detector as a bud when the build starts (left, right, centre: the order of scene 3),
+        opens with the build, bursts wide open on the bang, breathes on the drums and with the live hits of
+        its detector, and closes when its tower powers down."""
+        a = t - T_FIN - BLOOM_LAG[key]
+        t_off = T_PWR + PWR_ORDER[key]
+        if a <= 0.0 or t >= t_off + 1.3:
+            return None
+        grow = float(smoothstep(0.0, 4.5, a))
+        build = float(np.clip((t - T_FIN) / (self.t_bang - T_FIN), 0.0, 1.0))
+        bang = t - self.t_bang
+        burst = (1.0 - math.exp(-bang / 0.13)) ** 2 if bang > 0.0 else 0.0       # (it starts with no speed)
+        down = float(1.0 - smoothstep(t_off, t_off + 1.3, t))
+        tt, ee, _ = ctx.det.hits(key, t - 8.0, t + 1e-6)
+        live = min(1.0, _swell(tt, ee, t, 1.2, 0.14))
+        open_ = min(1.2, 0.1 + 0.5 * build ** 1.6 + 0.42 * burst + 0.3 * live + 0.07 * kick * burst) * down
+        size = BLOOM_SIZE[key] * (0.22 + 0.78 * grow) * (0.3 + 0.7 * down)
+        gain = min(1.0, 0.25 + open_) * grow * down * (1.0 + 0.2 * min(kick, 1.0))
+        if bang > 0.0:
+            gain *= 1.0 + 0.6 * math.exp(-bang / 0.5)
+        return open_, size, gain
+
+    def _blooms(self, f, t, ctx):
+        """The three towers in bloom (towers.bloom, the image of scene 3), over the whirl."""
+        kick = min(1.5, _kick(ctx.cues, t, 0.3, 0.07))
+        clip = (L.FX0 + 2, L.FY0 + 2, L.FX1 - 2, L.FY1 - 2)
+        for key in L.ORDER:
+            st = self._bloom_state(t, ctx, key, kick)
+            if st is not None and st[2] > 0.01:
+                towers.bloom(f, ctx.towers[key], t, ctx.det, gain=st[2], size=st[1], clip=clip, open_=st[0])
+
+    def _count(self, f, t, ctx):
+        """The count of the finale, large: the muons through one spectator since 00:00, running to the fifty
+        thousand the voice announced at 04:41, on a ruler from 49 000 to 51 000. It lands at 11:54.3: the figure
+        turns red and its tag is made on the mark of the ruler. The block is constructed when the build starts
+        and taken apart when the credits come."""
+        if self.fin is None:
+            return
+        age = B.io(t - T_FIN - 0.3, T_END + 0.5 - t, out=0.7, span=1.5)
+        if age < 0.0:
+            return
+        x0, y0, x1, size = self.fin
+        w = x1 - x0
+        cw = CHAR_W * L.T_TAG
+        long_tag, long_go = w >= 32 * cw + 24 * CHAR_W * L.T_SMALL + 40.0, w >= 17 * cw + 24 * CHAR_W * L.T_SMALL + 40.0
+        done = t >= self.t50
+        n = ctx.through_you(t)
+        yb = y0 + 52.0 + 0.78 * size                  # base line of the figure
+        ry = yb + 64.0                                # the ruler
+        xr = x1 - 58.0                                # (its last label ends inside the block)
+        v0, v1 = 49000.0, 51000.0
+        xv = lambda v: x0 + (float(np.clip(v, v0, v1)) - v0) / (v1 - v0) * (xr - x0)
+        xt = xv(50000.0)
+        with f.build(age, (x0 - 12.0, y0 - 10.0, x1 + 12.0, ry + 62.0), wave=0.5, key=61):
+            f.tag("w", x0 + 4, y0 + 24, "MUONS THROUGH YOU // SINCE 00:00" if long_tag else "MUONS THROUGH YOU",
+                  size=L.T_TAG, pad=5)
+            f.text("r" if done else "w", x0 - 0.04 * size, yb, sd.spaced(n), size=size)
+            f.segments("w", [x0], [ry], [xr], [ry], 0.8, width=L.LW)
+            hud.ruler(f, x0, xr, ry, v0, v1, 50.0, 500.0, fmt=lambda v: sd.spaced(v), inten=0.75, lab_dy=34,
+                      label_every=500.0 if xr - x0 >= 640.0 else 1000.0)
+            hud.bars(f, "r" if done else "w", x0, ry - 16.0, xv(ctx.RATE_YOU * t), ry - 5.0, 0.95)
+            f.segments("r", [xt], [ry - 30.0], [xt], [ry + 16.0], 1.3, width=L.LW_BOLD)
+            if not done:
+                f.text("w", x1, y0 + 24, f"TO FIFTY THOUSAND  -{50000 - n:04d}" if long_go else f"-{50000 - n:04d}",
+                       size=L.T_SMALL, alpha=0.85, anchor="rs")
+            else:
+                over = f"+{n - 50000:04d}"
+                f.text("r", x1, y0 + 24, f"SINCE {sd.tc(self.t50)[:8]}  {over}" if long_go else over, size=L.T_SMALL,
+                       alpha=0.95, anchor="rs")
+        if done:                                      # the fifty-thousandth: its tag is made on the mark of the ruler
+            a = B.io(t - self.t50, T_END - 0.1 - t, out=0.3, span=0.5)
+            B.tag(f, "r", xt + 10.0, ry - 26.0, "FIFTY THOUSAND", a, size=L.T_SMALL, pad=4, cps=50.0, key=62,
+                  commit=t < T_END - 1.0)
+            B.flash(f, (x0 - 8.0, yb - 0.82 * size, x0 + 6 * CHAR_W * size + 8.0, yb + 0.12 * size), t - self.t_bang,
+                    0.0)
 
     def _now_dot(self, f, t, ctx, drain):
         """NOW: the end of the axis. In 11.1 it travels to the focus point and becomes the centre of the whirl
-        = the red dot of the first image of the show."""
+        = the red dot of the first image of the show. It goes out when everything has gone (T_DOT_OUT)."""
         al = float(smoothstep(*T_DIM, t))             # before that it is drawn with the figure, on the axis
-        if al <= 0.01:
+        out = float(smoothstep(*T_DOT_OUT, t))
+        if al <= 0.01 or out >= 1.0:
             return
         x, y, _, m = self._path(np.array([1.0]), t)
         x, y = float(x[0]), float(y[0])
-        kick = min(1.5, ctx.cues.kick(t, 0.2))
+        kick = min(1.5, _kick(ctx.cues, t, 0.22, 0.05))
         pulse = 0.5 + 0.5 * math.sin(t * 2.2) ** 2
         big = float(m[0])
         # when everything has drained into it, it is the dot of the first image again (origin.py): a red disc
         # breathing with the low thumps, a thin white ring around it
-        p0 = min(1.5, ctx.cues.kick(t, 0.28) * 1.6 + 0.5 * ctx.cues.onset(t, 0.3))
+        tt, aa = ctx.cues.onset_t, ctx.cues.onset_a
+        lo = int(np.searchsorted(tt, t - 3.0))
+        hi = int(np.searchsorted(tt, t, side="right"))
+        p0 = min(1.5, 1.6 * _kick(ctx.cues, t, 0.28, 0.05) + 0.5 * _swell(tt[lo:hi], aa[lo:hi], t, 0.3, 0.05))
         r_first = 16.0 + 4.0 * math.sin(2 * math.pi * t / 2.9) + 13.0 * p0
         r = (9.0 + 2.0 * big + 2.5 * pulse + 3.0 * kick) * (1 - drain) + r_first * drain
+        if t >= self.t_bang:              # the fifty-thousandth lands in it
+            r += 9.0 * math.exp(-(t - self.t_bang) / 0.5) * (1.0 - math.exp(-(t - self.t_bang) / 0.04))
+        r = max(r * (1.0 - out), 2.6)                 # at the very end it shrinks to a point, and goes out
+        al = al * float(1.0 - smoothstep(0.82, 1.0, out))
         f.dots("r", [x], [y], r, (1.6 - 0.35 * drain) * al)
         f.dots("w", [x], [y], 2.8, 1.3 * al * (1 - drain))
         if big > 0.5 and drain < 1.0:
-            f.rings("r", [x], [y], [28.0 + 8.0 * pulse + 10.0 * kick], 0.6 * al * big * (1 - drain), width=L.LW)
+            _circles(f, "r", x, y, [28.0 + 8.0 * pulse + 10.0 * kick], [0.6 * al * big * (1 - drain)], n=64, width=L.LW)
         if drain > 0.0:
-            f.rings("w", [x], [y], [r + 3.0], 0.75 * drain, width=1.5)
+            _circles(f, "w", x, y, [r + 3.0], [0.75 * drain * al * float(smoothstep(5.0, 11.0, r))], n=64, width=1.5)
         for a, b, _ in self.now_runs:     # its name rides with it: made when it has room, taken apart before a tower
             if a <= t < b:
                 B.tag(f, "r", x + 22, y - 18, "NOW", B.io(t - a, b - t, out=0.2, span=0.3), size=L.T_TAG, pad=5, cps=40.0,
@@ -937,11 +1304,11 @@ class Outro(Scene):
                 f.text("r" if t >= self.t_dep else "w", xa0, y0 + 98, val, size=fit(58, 9, xa1 - xa0))
             if second:
                 xb0, xb1 = second
-                sp = "0.999 999 999 999 5" if (sec > T_ATM or t < self.t_dep) else "0.999 444 3"
+                sp = V_P if (sec > T_ATM or t < self.t_dep) else V_MU
                 with f.build(B.io(t - T_AXIS[0] - 0.45, left, out=0.45), (xb0 - 10, y0 - 26, xb1 + 10, L.FY1 - 4),
                              key=37):
                     hud.panel_header(f, xb0, xb1, y0, "SPEED // FRACTION OF C" if xb1 - xb0 >= 200 else "SPEED / C")
-                    f.text("w", xb0, y0 + 90, sp, size=fit(40, 19, xb1 - xb0))
+                    f.text("w", xb0, y0 + 90, sp, size=fit(40, len(V_P), xb1 - xb0))
                     if xb1 - xb0 >= 330:
                         f.text("w", xb0, y0 + 122, "PROTON, THEN FOR THE LAST 15 KM A MUON", size=L.T_MICRO, alpha=0.6)
         elif main and c["universe"] <= t < T_END + 3.0:
@@ -966,60 +1333,80 @@ class Outro(Scene):
                     self._head(f, xb0, xb1, y0, "ACCELERANDO >> BARCODE" if xb1 - xb0 >= 210 else "ACCELERANDO", gone,
                                7, fr)
                     cols = max(30, int((xb1 - xb0) / 3.7))
-                    dt = 3.0 / 130
-                    kk = math.floor((t - 3.0) / dt) + np.arange(cols)
+                    kk, frac, _ = hud.barcode_keys(t, cols * 3.0 / 130, cols)
                     lv = min(1.0, (t - c["universe"]) / (self.t_hit - c["universe"]))
-                    dens = np.full(cols, (0.06 + 0.8 * lv ** 1.5) * (1.0 - gone) ** 2)
-                    hud.barcode_lanes(f, xb0, xb1, y0 + 12, y1, dens, kk, lanes=3, seed=11)
+                    dens = np.full(len(kk), (0.06 + 0.8 * lv ** 1.5) * (1.0 - gone) ** 2)
+                    hud.barcode_lanes(f, xb0, xb1, y0 + 12, y1, dens, kk, lanes=3, seed=11, frac=frac)
         # the count the voice announced at 04:41: more than fifty thousand. The tag is made on that muon, and
         # flashes; the frame of the counter flashes red with it
-        t50 = 50000 / ctx.RATE_YOU
+        t50 = self.t50
         if t >= t50:
             x0, yc, x1, _ = ctx.slots["cell"]
             fl = math.exp(-(t - t50) / 1.5)
-            if x1 - x0 >= 260:
-                B.tag(f, "r", x0 + 2, yc - 12, "MORE THAN FIFTY THOUSAND", t - t50, size=L.T_SMALL, pad=4,
+            if x1 - x0 >= 260:        # (at the very end it is taken apart just before the cell it sits on)
+                B.tag(f, "r", x0 + 2, yc - 12, "MORE THAN FIFTY THOUSAND",
+                      B.io(t - t50, T_CELL_OUT - 0.6 - t, out=0.35, span=0.5), size=L.T_SMALL, pad=4,
                       alpha=0.75 + 0.25 * fl, cps=50.0, key=13, commit=True)
             if fl > 0.05:
                 f.rect("r", x0, yc, x1, L.FY1, 1.5 * fl, width=L.LW_FRAME)
 
     # --- credits ---------------------------------------------------------------------
+    @staticmethod
+    def _credit_lines(w):
+        """The lines under the title for a column w wide -> ([(text, alpha)], type size).
+        A credit is set as LABEL ........ NAME; a name too long for the column runs on under itself. In a column
+        too narrow for that the name goes under its label."""
+        s = float(np.clip(fit(26, 48, w), 14, 26))
+        cols = int(w / (s * CHAR_W) + 1e-6)
+        head = hud.wrap("A LIVE PERFORMANCE FOR THREE COSMIC-RAY MUON DETECTORS", cols)
+        lines = [(ln, 0.9) for ln in head] + [("BLINK // CINCINNATI // OCTOBER 2026", 0.9), ("", 0)]
+        who = [("CONCEPT + MUSIC", "CHRISTO SQUIER"), ("VISUALS", "TYRELL"),
+               ("DETECTORS", "NAME TBC"),                     # (the only name still to come)
+               ("WITH THANKS TO", "ALL THE TEAM OF THE BLINK FESTIVAL")]
+        if cols >= 39:
+            p = min(29, cols - 19)                            # where the names start
+            for lab, name in who:
+                for k, part in enumerate(hud.wrap(name, cols - p)):
+                    lines.append((f"{lab} {'.' * (p - len(lab) - 2)} {part}" if k == 0 else " " * p + part, 0.75))
+        else:
+            for lab, name in who:
+                lines.append((lab, 0.55))
+                lines += [("  " + part, 0.8) for part in hud.wrap(name, max(cols - 2, 8))]
+        return lines, s
+
     def _credits(self, f, t, ctx):
-        """Over the last drums of the whirl, then on the lattice and the dot. Each block sits in a column of
-        its own, clear of the towers and of the dot. Names are placeholders.
+        """The title is made over the last drums of the finale, on the towers in bloom; the lines under it and
+        the second block when the drums have stopped and the blooms have closed, then they stand on the lattice
+        and the dot. Each block sits in a column of its own, clear of the towers and of the dot.
         Nothing fades: the title tag is pushed out and its letters decoded, every line is decoded in turn, the
-        count spins before it locks; at the end the lines are taken apart in reverse order, the title last."""
+        count spins before it locks; at the end the lines are taken apart in reverse order, the title last
+        (it is gone at T_CREDITS_OUT[1]: the lattice, the dot and the frame follow, see T_LAT_OUT ...)."""
         if t >= T_CREDITS_OUT[1]:
             return
         there = t < T_CREDITS_OUT[0]          # (no flash on the way out)
+        lines, s = self._credit_lines(self.cred["A"][1] - self.cred["A"][0]) if self.cred["A"] else ([], 0.0)
+        n = len(lines)
+        step = (T_CREDITS_OUT[1] - T_CREDITS_OUT[0] - 0.5) / (7 + n)
 
         def age(t_in, rank, span):            # rank = place in the taking apart (0 = the first to go)
-            return B.io(t - t_in, T_CREDITS_OUT[0] + 0.5 + 0.28 * rank - t, out=0.5, span=span)
+            return B.io(t - t_in, T_CREDITS_OUT[0] + 0.5 + step * rank - t, out=0.5, span=span)
 
         if self.cred["A"]:
             x0, x1 = self.cred["A"]
             w = x1 - x0
             ts = fit(104, 12, w - 40)
-            s = float(np.clip(fit(26, 39, w), 14, 26))          # the longest credit line is 38 characters
-            head = hud.wrap("A LIVE PERFORMANCE FOR THREE COSMIC-RAY MUON DETECTORS", int(w / (s * CHAR_W)))
-            lines = [(ln, 0.9) for ln in head] + [("BLINK // CINCINNATI // OCTOBER 2026", 0.9), ("", 0),
-                                                  ("CONCEPT + MUSIC ............ NAME TBC", 0.75),
-                                                  ("VISUALS .................... NAME TBC", 0.75),
-                                                  ("DETECTORS .................. NAME TBC", 0.75),
-                                                  ("VOICE ...................... NAME TBC", 0.75),
-                                                  ("WITH THANKS TO ............. NAMES TBC", 0.75)]
-            n = len(lines)
             B.tag(f, "w", x0 + ts * 0.15, 380 + ts * 0.86, "MUON : BLOOM", age(T_END, 7 + n, 1.3), size=ts, pad=ts * 0.15,
                   bold=True, cps=14.0, lead=3, wipe=0.3, key=14, commit=there)
             y = 380 + ts * 1.3 + s * 2.2
             for k, (ln, al) in enumerate(lines):
                 if ln:
-                    a = age(T_END + 1.2 + 0.35 * k, 6 + (n - 1 - k), len(ln) / 60.0 + 0.4)
-                    f.text("w", x0, y + k * s * 1.55, B.resolve(ln, a, cps=60.0, key=20 + k), size=s, alpha=al)
+                    a = age(T_CRED_LINES + 0.35 * k, 6 + (n - 1 - k), len(ln) / 60.0 + 0.4)
+                    f.text("w", x0, y + k * s * 1.55, B.resolve(ln, a, cps=60.0, key=20 + k, pad=ln[0] == " "), size=s,
+                           alpha=al)
         if self.cred["B"]:
             x0, x1 = self.cred["B"]
             w = x1 - x0
-            tb = T_END + 4.0
+            tb = T_CRED_B
             num = f"{ctx.through_you(T_END):,}".replace(",", " ")
             ns = fit(120, len(num), w - 8)
             s = float(np.clip(fit(26, 27, w), 14, 26))
@@ -1032,5 +1419,5 @@ class Outro(Scene):
             f.text("w", x0, yn + s * 5.4, B.resolve(caught, age(tb + 2.0, 2, 1.0), cps=50.0, key=18), size=s, alpha=0.8)
             f.text("w", x0, yn + s * 6.95, B.resolve("YOU FELT NONE OF THEM", age(tb + 2.8, 1, 0.85), cps=50.0, key=19),
                    size=s, alpha=0.8)
-            B.tag(f, "r", x0, yn + s * 10.4, "IT CONTINUES", age(tb + 4.0, 0, 0.9), size=min(40.0, s * 1.55), pad=8,
+            B.tag(f, "r", x0, yn + s * 10.4, "IT CONTINUES", age(tb + 3.8, 0, 0.9), size=min(40.0, s * 1.55), pad=8,
                   cps=20.0, key=19, commit=there)

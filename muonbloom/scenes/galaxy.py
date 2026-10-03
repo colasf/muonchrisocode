@@ -14,7 +14,9 @@ angle), re-anchored on the towers and given the Muon Bloom data layer:
     the trace log (echoes dimmer). A strong hit also makes the core answer: a red shock ring on
     the floor, a flash through the whole disc, a fast new generation of trails;
   * detail: labelled range rings, trace log, orbit log of tracked trails, arm-density histogram,
-    rotation curve, counters, the three detector streams as a barcode.
+    rotation curve, counters, the three detector streams as a barcode. The rotation curve is alive: the
+    tracked trails of the orbit log ride it at their radius, a probe runs along it and reads it, and the
+    dashed line is Kepler's fall-off - the gap between the two is the mass nobody sees.
 
 Nothing depends on the drums. The model is closed-form in time (tables of radius / angle against
 age, built once per span), so any frame can be drawn on its own - the realtime app can integrate
@@ -63,6 +65,8 @@ N_BINS = 60
 RINGS = (4, 8, 12, 16)          # range rings (kpc); ring k switches on 0.4 + 1.6 k seconds after the cut
 
 
+R_KEP = 0.5                     # 8 kpc, the solar circle: Kepler's fall-off is drawn from there on the rotation curve
+PROBE_T = 12.0                  # s the probe of the rotation curve takes to run out and back
 COL_W = 403.0                   # width a data column takes when the bay gives it
 EDGE = 60.0                     # px / s: the red number of a detection is decoded as it gets clear of an obstacle
 LAB_PERIOD = 6.0                # a floating number rides its trail for one turn of this length (s)
@@ -205,8 +209,14 @@ class Model:
         a = a[idx]
         j = np.arange(m, dtype=np.float32) / (m - 1)
         age = np.maximum(a[:, None] - j[None, :] * ln[idx][:, None], 0.0)
-        r = self._interp(tab_r[idx], age)
-        th = self._interp(tab_t[idx], age)
+        # the two tables are read in place, row by row (copying the rows of the live particles out first - some
+        # 40 MB a frame - cost more than everything else in the scene), with one index for both
+        x = np.clip(age / DT, 0.0, tab_r.shape[1] - 1.001)
+        i = x.astype(np.int64)
+        fr = (x - i).astype(np.float32)
+        rows = idx[:, None]
+        r = tab_r[rows, i] * (1 - fr) + tab_r[rows, i + 1] * fr
+        th = tab_t[rows, i] * (1 - fr) + tab_t[rows, i + 1] * fr
         if not red:
             r = r * (1.0 + self.ecc[idx][:, None] * np.cos(2 * (th - self.eph[idx][:, None])))
         P = np.stack([r * np.cos(th), h[idx][:, None] * np.minimum(r / 0.4, 1.0), r * np.sin(th)], -1)
@@ -643,7 +653,9 @@ class Galaxy(Scene):
                 continue                        # no room beside this tower: the trace log has it anyway
             side = 1 if room_r >= 330 or room_r >= room_l else -1
             x = tw.x1 + 30 if side > 0 else tw.x0 - 30
-            y = tw.top + tw.det_h + 44          # beside the tower body, clear of the bloom at its head
+            # beside the tower body, clear of the bloom at its head - and above the bottom band when the
+            # tower is short
+            y = min(tw.top + tw.det_h + 44, Y_CLIP - 96.0)
             anchor = "ls" if side > 0 else "rs"
             lines = [f"{L.NAMES[key]}  E {e['e']:.3f}", f"GL {e['gl']:05.1f}  GB {e['gb']:+05.1f}",
                      f"D {e['d']:05.2f} KPC"]
@@ -721,11 +733,7 @@ class Galaxy(Scene):
             f.text("w", x0, y2 + 30, "ID    R_KPC  AZ_DEG  V_KM/S  AGE_S" if full else "ID    R_KPC  AZ_DEG",
                    size=L.T_MICRO, alpha=0.55)
             if len(idx):
-                pos = np.searchsorted(idx, self.track)
-                okk = (pos < len(idx)) & (idx[np.minimum(pos, len(idx) - 1)] == self.track)
-                sel = pos[okk]
-                sel = sel[p_age[sel] > 2.0]
-                sel = sel[np.argsort(p_age[sel])][:8]                # the latest to settle first: a slow ticker
+                sel = self._tracked()[1][:8]                         # the latest to settle first: a slow ticker
                 for k, j in enumerate(sel):
                     r = float(r_head[j])
                     line = f"{int(idx[j]):04d}  {r * KPC:05.2f}  {math.degrees(float(th_head[j])) % 360:06.2f}"
@@ -734,6 +742,18 @@ class Galaxy(Scene):
                     if k == 0:              # a primary that has just settled into its orbit enters the log
                         line = B.resolve(line, float(p_age[j]) - 2.0, 120.0, key=145)
                     f.text("w", x0, y2 + 54 + k * 21, line, size=L.T_MICRO, alpha=0.9 if k < 2 else 0.6)
+
+    def _tracked(self):
+        """The tracked primaries that are in flight: (their rows in self._heads, the same sorted from the
+        latest to settle - the first eight of those are the lines of the orbit log)."""
+        idx, p_age = self._heads[0], self._heads[4]
+        if not len(idx):
+            return np.zeros(0, np.int64), np.zeros(0, np.int64)
+        pos = np.searchsorted(idx, self.track)
+        okk = (pos < len(idx)) & (idx[np.minimum(pos, len(idx) - 1)] == self.track)
+        sel = pos[okk]
+        log = sel[p_age[sel] > 2.0]
+        return sel, log[np.argsort(p_age[log])]
 
     def _right(self, f, t, ctx, hist, hot):
         if self.col_r is None:
@@ -756,19 +776,70 @@ class Galaxy(Scene):
             for k in range(0, N_BINS, N_BINS // 6):
                 f.segments("w", [xl - 13], [ys[k] + 2], [xl - 6], [ys[k] + 2], 0.8)
                 f.text("w", x0, ys[k] + 8, f"{k * 360 // N_BINS:03d}", size=L.T_MICRO, alpha=0.7)
-        # rotation curve: speed against radius; the ring of every strong hit travels along it
+        # rotation curve: speed against radius - the curve this galaxy turns with (omega). It is alive:
+        #   * the tracked primaries ride it at their radius; the eight of the orbit log wear a tick, made as
+        #     their line enters the log and withdrawn as a newer one pushes it out;
+        #   * a probe runs along it, out and back, and reads it;
+        #   * the dashed line is Kepler's fall-off, what the speed would do if all the mass sat inside the solar
+        #     circle (8 kpc): the gap between the two, held open by the probe, is the mass nobody sees;
+        #   * the ring of every strong hit travels along it (red).
         y0, y1 = 902.0, 1150.0
         px0, px1, py0, py1 = x0 + 8, x1 - 8, y0 + 14, y1 - 30
+        X = lambda r: px0 + np.minimum(r, 1.5) / 1.5 * (px1 - px0)
+        Y = lambda v: py1 - v * (py1 - py0) * 0.9                # v in units of 220 km/s
+        V = lambda r: r / (r + RC)
+        v_k = float(V(R_KEP))
+        K = lambda r: v_k * np.sqrt(R_KEP / np.maximum(r, R_KEP))
+        a_p = max(age - 0.9, 0.0)
+        rp = 0.75 - 0.72 * math.cos(2 * math.pi * a_p / PROBE_T)         # the probe: 0.5 .. 23.5 kpc and back
+        xp, yv, yk = float(X(rp)), float(Y(V(rp))), float(Y(K(rp)))
         with f.build(age - 0.9, (x0 - 8, y0 - 40, x1 + 4, y1 + 14), key=151, wave=0.4):
             f.tag("w", x0, y0 - 16, "ROTATION_CURVE // V(R)", size=L.T_MICRO, pad=3)
             f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.7)
             hud.ruler(f, px0, px1, py1, 0.0, 24.0, 1.0, 4.0 if w >= 300 else 8.0, fmt=lambda vv: f"{vv:.0f}", inten=0.6,
                       lab_dy=26)
             r = np.linspace(0.0, 1.5, 90)
-            vr = omega(r) * r / V0
-            f.polyline("w", px0 + r / 1.5 * (px1 - px0), py1 - vr * (py1 - py0) * 0.9, 0.95, width=L.LW)
+            f.polyline("w", X(r), Y(V(r)), 0.95, width=L.LW)
             f.text("w", px1, py0 + 6, "220 KM/S", size=L.T_MICRO, alpha=0.7, anchor="rs")
-            f.text("w", px1, y1 + 6, "KPC", size=L.T_MICRO, alpha=0.6, anchor="rs")
+            f.text("w", px1, py1 - 8, "KPC", size=L.T_MICRO, alpha=0.6, anchor="rs")
+            # Kepler: dashes that creep outwards
+            nd = 13
+            sa = (np.arange(-1, nd) + (0.1 * t) % 1.0) / nd
+            ra = R_KEP + np.clip(sa, 0.0, 1.0) * (1.5 - R_KEP)
+            rb = R_KEP + np.clip(sa + 0.55 / nd, 0.0, 1.0) * (1.5 - R_KEP)
+            f.segments("w", X(ra), Y(K(ra)), X(rb), Y(K(rb)), 0.6)
+            yl = float(Y(K(1.5)))
+            f.text("w", px1, yl + 20, "KEPLER // V ~ 1/SQRT(R)" if w >= 300 else "KEPLER", size=L.T_MICRO, alpha=0.6,
+                   anchor="rs")
+            if w >= 300:
+                f.text("w", px1, yl + 38, "THE GAP = MASS NOT SEEN", size=L.T_MICRO, alpha=0.6, anchor="rs")
+            # the probe: a stem from the axis while it is inside the solar circle, then the gap it holds open
+            stem = 1.0 - float(smoothstep(R_KEP - 0.08, R_KEP + 0.08, rp))
+            f.segments("w", [xp, xp, xp], [py1 + 12.0, py1, yk], [xp, xp, xp], [py1, yv, yv], [0.9, 0.4 * stem, 0.95 * (1.0 - stem)],
+                       width=L.LW)
+            f.dots("w", [xp, xp], [yv, yk], [3.2, 2.2 * (1.0 - stem)], [1.5, 1.2 * (1.0 - stem)])
+            kep = f"KEPLER {220.0 * float(K(rp)):03.0f}" if rp > R_KEP else "KEPLER ---"
+            for k, ln in enumerate((f"R {rp * KPC:04.1f} KPC", f"V {220.0 * float(V(rp)):03.0f} KM/S", kep)):
+                f.text("w", px0 + 10, py0 + 12 + 18 * k, ln, size=L.T_MICRO, alpha=0.85 if k < 2 else 0.6)
+            # the tracked primaries, riding the curve. The eight lines of the orbit log wear a tick: wt = how much
+            # a primary is one of them - it comes in as it settles (0.3 s), and goes as the ones that settled
+            # after it add up to eight (each counted as far as it is in: nothing switches)
+            sel = self._tracked()[0]
+            if len(sel):
+                idx, p_age, r_head = self._heads[0], self._heads[4], self._heads[5]
+                m = self.model
+                ab = p_age[sel]
+                live = np.clip(ab / 0.5, 0.0, 1.0) * (1.0 - smoothstep(m.f0[idx[sel]], m.f1[idx[sel]], ab))
+                s_in = np.clip((ab - 2.0) / 0.3, 0.0, 1.0)
+                order = np.argsort(ab)
+                after = np.empty(len(sel))
+                after[order] = np.cumsum((s_in * live)[order]) - (s_in * live)[order]
+                wt = s_in * np.clip(8.0 - after, 0.0, 1.0)
+                xb, yb = X(r_head[sel]), Y(V(r_head[sel]))
+                f.dots("w", xb, yb, 1.5 + 1.1 * wt, (0.6 + 0.7 * wt) * live)
+                on = wt > 0.0
+                hl = (9.0 * B.spring(wt[on]) * live[on]).astype(np.float32)
+                f.segments("w", xb[on], yb[on] - hl, xb[on], yb[on] + hl, 0.9 * live[on])
         for tg, key, e in self.model.strong:
             a = t - tg
             if 0 <= a < 2.6:            # the marker of a strong hit: a line that is drawn, travels, and is withdrawn
@@ -786,6 +857,8 @@ class Galaxy(Scene):
         rest = [q for q in panels if q is not main]
         code = next((q for q in rest if q[1] - q[0] >= 200.0), None)
         expo = next((q for q in rest if q is not code and q[1] - q[0] >= 125.0), None)
+        if expo is None and code and code[1] - code[0] >= 520.0:     # two panels only: it takes the end of the barcode's
+            code, expo = (code[0], code[1] - 196.0), (code[1] - 170.0, code[1])
         a_in = t - self.span[0]                  # the panels are constructed at the cut, one after the other
         if main:
             x0, x1 = main
@@ -807,18 +880,16 @@ class Galaxy(Scene):
                 hud.panel_header(f, x0, x1, y0, "DATA ON // DETECTOR STREAMS >> BARCODE" if w >= 335 else
                                  "DETECTOR STREAMS")
                 cols = max(40, int((w - 34) / 4.0))
-                dt = 6.0 / 110
-                kk = math.floor(t / dt) - cols + np.arange(cols) + 1
+                kk, frac, dt = hud.barcode_keys(t, cols * 6.0 / 110, cols)
                 ts = kk * dt
                 bx0 = x0 + 34
-                cw = (x1 - bx0) / cols
-                xs = bx0 + np.arange(cols) * cw
+                xl, xr = hud.barcode_cols(bx0, x1, cols, frac)      # the bars slide, they do not jump a column
                 lane = (y1 - y0 - 14) / 3
                 for i, key in enumerate(L.ORDER):
                     v = ctx.det.value(key, ts)
-                    on = hash01(kk, i + 3) < 0.04 + 1.7 * v
+                    on = (hash01(kk, i + 3) < 0.04 + 1.7 * v) & (xr > xl)
                     ya = y0 + 14 + i * lane
-                    f.rects("w", xs[on], ya, xs[on] + cw, ya + lane - 4, 0.95)
+                    hud.bars(f, "w", xl[on], ya, xr[on], ya + lane - 4, 0.95)
                     age, _ = ctx.det.last(key, t, echoes=True)
                     f.text("r" if age < 1.0 else "w", x0, ya + lane - 10, key, size=L.T_LABEL, alpha=0.9)
         if expo:

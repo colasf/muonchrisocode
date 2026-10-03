@@ -19,12 +19,20 @@ detector hits. Linear, follows the sheet and the voice:
                     the disintegration, scenes/disintegrate.py. The detectors no longer power down.
 No score strip here: the fan and the beam need the height above the centre tower (up to the top).
 
+The towers are short (Site 3.1: the centre one ends half-way up the wall, the side ones just above the
+bottom band), so the rise is not theirs alone: the light climbs each tower to the detector at its head
+and then GOES ON RISING ON THE WALL above it, a column as wide as the tower between two thin guides that
+prolong its walls, up to the height the crescendo was composed for (HEAD_C / HEAD_S). A tower taller than
+that keeps its light inside. What leaves the centre stream - the rays of a bass bloom, the fan - starts on
+the very top of that column of light, wherever it is, and stays on it.
+
 Nothing has a fixed x. The towers stand in front of the wall and nobody knows yet where, how wide
 or how tall: the columns of light, the ladders, the level, the fan and the beam hang on ctx.towers;
 the identity card and the light / yield card take the usable columns OUTSIDE the towers (ctx.cols,
 left of the first tower and right of the last one), scaled to the width they get; if only one such
 column exists it gets the identity card (the voice strips it) and the yield card is dropped; the
-Bragg curve / barcode / level go to ctx.slots["panels"], widest first.
+Bragg curve / barcode / level go to ctx.slots["panels"], widest first (with two panels only, the level
+takes the end of the barcode's).
 
 Nothing that shows data fades in or pops in (build.py). The two cards, the bottom panels and the section
 tag are CONSTRUCTED when the scene starts; the level line and its read-outs when the centre column climbs
@@ -60,6 +68,10 @@ E_MICHEL = 37.9                               # the decay electron it ends with 
 
 CARD_W = 430.0                                 # a data card never gets wider than this
 N_RUNG = 13
+HEAD_C, HEAD_S = 377.0, 642.0                  # y the columns of light reach at the peak (centre / sides): above a short tower
+HEAD_CAP = 1.05                                # the round head of a column of light: a cap this many half-widths tall
+HEAD_FLARE = 55.0                              # ... which flares out near its top (centre column) over this many px
+_RING = np.linspace(0.0, 2.0 * np.pi, 161)
 ARP = [0, 2, 4, 6, 8, 6, 4, 2, 1, 3, 5, 7, 9, 7, 5, 3]
 CHORD = [0, 2, 1, 3]
 
@@ -81,6 +93,27 @@ def _level(t):
 
 def _thousands(n):
     return f"{int(n):,}".replace(",", " ")
+
+
+def _head(c, yh, s, flare=0.0, inset=0.0):
+    """Points on the surface of the round head of a column of light - the top of the stream, exactly as
+    _draw_column fills it - for s = sine of the angle from the vertical, signed: -1 = left shoulder, 0 = the
+    very top, 1 = right shoulder. Returns (x, y, nx, ny): the points, `inset` px inside the light, and the
+    outward direction there. The rays of the fan start here: they stay on the head whatever its height, its
+    width and its flare."""
+    s = np.clip(np.asarray(s, np.float64), -1.0, 1.0)
+    cs = np.sqrt(1.0 - s * s)
+    d = c["hw"] * HEAD_CAP * (1.0 - cs)                      # depth under the very top
+    x = c["cx"] + c["hw"] * s * (1.0 + flare * np.exp(-d / HEAD_FLARE))
+    return x - inset * s, yh + d + inset * cs, s, -cs
+
+
+def _ring(f, layer, cx, cy, r, inten, width=1.0):
+    """A circle that grows: always the same 160 sides (Frame.rings picks their number from the radius, and
+    the corners of a ring that changes size would crawl around it)."""
+    if inten > 0.004 and r > 0.5:
+        x, y = cx + r * np.cos(_RING), cy + r * np.sin(_RING)
+        f.segments(layer, x[:-1], y[:-1], x[1:], y[1:], inten, width=width)
 
 
 def _fit(options, width, size, pad=8.0):
@@ -109,8 +142,11 @@ class Rise(Scene):
         self.cue_mass = sd.said("The mass", 558.167)
         self.cue_name = sd.said("The name", 560.0)
         self.cue_light = sd.said("Wherever it began, it ends as light", 561.15)
-        # where the column heads arrive at the peak, and the top the beam reaches
-        self.head = {k: t.top - (13.0 if k == "C" else 46.0) for k, t in self.tw.items()}
+        # where the column heads arrive at the peak, and the top the beam reaches. The light climbs its tower
+        # to the detector at its head; when the tower is short it goes on, on the wall above it, to the height
+        # the crescendo was composed for
+        self.head = {k: min(t.top - (13.0 if k == "C" else 46.0), HEAD_C if k == "C" else HEAD_S)
+                     for k, t in self.tw.items()}
         self.top = L.FY0 + 6.0
         # range-energy table of the stopping muon
         Tk = np.geomspace(0.25, E0 - M_MU, 1500)
@@ -187,6 +223,9 @@ class Rise(Scene):
         rest = panels[1:] if self.pan_bragg else panels
         self.pan_bar = next((q for q in rest if q[1] - q[0] >= 220.0), None)
         self.pan_lvl = next((q for q in rest if q is not self.pan_bar and q[1] - q[0] >= 120.0), None)
+        if self.pan_lvl is None and self.pan_bar and self.pan_bar[1] - self.pan_bar[0] >= 480.0:
+            a, b = self.pan_bar                 # two panels only: the level takes the end of the barcode's
+            self.pan_bar, self.pan_lvl = (a, b - 196.0), (b - 170.0, b)
 
     def _t_when(self, tw, y, key):
         """Show time at which the head of the column of light of a tower climbs past the height y."""
@@ -271,8 +310,9 @@ class Rise(Scene):
         mu = self._muon(t)
         e_dep = (E0 - M_MU) - mu["Tk"] + E_MICHEL * float(smoothstep(self.cue_light, self.cue_light + 1.2, t))
         pulse = 0.8 * ctx.cues.kick(t, tau=0.24) if t < self.off["C"] + 0.3 else 0.0
+        beam = beam * pw["C"]
         return dict(lv=lv, pw=pw, yh=yh, mu=mu, n_gamma=YIELD * e_dep, e_dep=e_dep, pulse=pulse,
-                    beam=beam * pw["C"])
+                    beam=beam, flare=0.7 * lv * (1.0 - beam))       # flare: how far the centre head spreads
 
     def _active_notes(self, t, span=0.6):
         n = self.notes
@@ -309,8 +349,11 @@ class Rise(Scene):
         return {"invert": invert}
 
     # --- the towers --------------------------------------------------------------
-    def _tower_frame(self, f, tw, inten, layer="w"):
-        """Outline of a tower with its scintillator slabs and the detector module at its head."""
+    def _tower_frame(self, f, tw, inten, layer="w", yh=None):
+        """Outline of a tower with its scintillator slabs and the detector module at its head.
+        yh = head of its column of light: once the light has climbed out of a short tower, the two walls go on
+        above it as thin guides with the same marks, drawn by the light as it rises (up to the foot of its round
+        head): the column it stands in on the wall."""
         if inten <= 0.004:
             return
         f.rect(layer, tw.x0, tw.top, tw.x1, tw.bot, inten, width=L.LW_BOLD)
@@ -318,6 +361,16 @@ class Rise(Scene):
         f.segments(layer, np.full_like(ys, tw.x0), ys, np.full_like(ys, tw.x0 + 8), ys, 0.8 * inten)
         f.segments(layer, np.full_like(ys, tw.x1 - 8), ys, np.full_like(ys, tw.x1), ys, 0.8 * inten)
         f.segments(layer, [tw.x0], [tw.top + tw.det_h], [tw.x1], [tw.top + tw.det_h], 0.7 * inten)
+        if yh is None:
+            return
+        yg = yh + 0.5 * tw.w * HEAD_CAP              # where the round head of the column begins
+        if yg < tw.top - 1.0:
+            f.segments(layer, [tw.x0, tw.x1], [tw.top, tw.top], [tw.x0, tw.x1], [yg, yg], 0.42 * inten)
+            ys = np.arange(tw.top - 48.0, yg, -48.0)
+            if len(ys):
+                ln = 8.0 * np.clip((ys - yg) / 14.0, 0.0, 1.0)        # a mark grows as the light passes it
+                f.segments(layer, np.full_like(ys, tw.x0), ys, tw.x0 + ln, ys, 0.6 * inten)
+                f.segments(layer, tw.x1 - ln, ys, np.full_like(ys, tw.x1), ys, 0.6 * inten)
 
     def _draw_column(self, f, c, yh, t, gain, bands=(), flare=0.0):
         H = c["bot"] - yh
@@ -325,9 +378,9 @@ class Rise(Scene):
             return
         q = ((c["ph"] + c["spd"] * t) % 1.0) ** 0.62
         d = (1.0 - q) * H
-        cap = c["hw"] * 1.05
+        cap = c["hw"] * HEAD_CAP                    # the round head: _head() gives its surface
         shape = np.sqrt(np.clip(1.0 - (1.0 - np.minimum(d / cap, 1.0)) ** 2, 0.0, 1.0))
-        x = c["cx"] + c["u"] * c["hw"] * shape * (1.0 + flare * np.exp(-d / 55.0))
+        x = c["cx"] + c["u"] * c["hw"] * shape * (1.0 + flare * np.exp(-d / HEAD_FLARE))
         y = yh + d
         inten = c["b"] * gain * (0.16 + 0.84 * q ** 2.4)
         for yk, amp in bands:
@@ -339,10 +392,10 @@ class Rise(Scene):
         notes = self._active_notes(t)
         for k in ("L", "R", "C"):
             tw = self.tw[k]
-            self._tower_frame(f, tw, 0.22 + 0.6 * pw[k])
+            self._tower_frame(f, tw, 0.22 + 0.6 * pw[k], yh=yh[k])
             if k == "C":
                 gain = (0.55 + 0.45 * lv) * (1.0 + 0.9 * math.tanh(st["pulse"])) * pw[k] * (1.0 + 0.8 * st["beam"])
-                self._draw_column(f, self.cols[k], yh[k], t, gain, flare=0.7 * lv * (1 - st["beam"]))
+                self._draw_column(f, self.cols[k], yh[k], t, gain, flare=st["flare"])
                 if st["beam"] > 0.01:     # it ends as light: a solid core burns up the column
                     w = 3.0 + 14.0 * st["beam"]
                     f.rects("w", tw.cx - w, yh[k], tw.cx + w, tw.bot, 0.8 * st["beam"])
@@ -431,21 +484,32 @@ class Rise(Scene):
     def _draw_fan(self, f, t, st):
         yh = st["yh"]["C"]
         twc = self.tw["C"]
-        y_hi, y_lo = twc.top + 47.0, twc.top + 0.62 * (twc.bot - twc.top)
+        hc = self.head["C"]                           # it opens over the upper part of the climb, whatever the tower
+        y_hi, y_lo = hc + 60.0, hc + 0.625 * (twc.bot - hc)
         amt = float(smoothstep(y_lo, y_hi, yh)) * st["lv"] * st["pw"]["C"] * (1.0 - st["beam"])
         if amt < 0.01:
             return
         cx = twc.cx
-        n = int(30 + 250 * amt)
+        nf = 30.0 + 250.0 * amt
+        n = min(int(math.ceil(nf)), len(self.fan_u))
         u, s = self.fan_u[:n], self.fan_s[:n]
         ext = np.where(s < 0, cx - (L.FX0 + 8.0), (L.FX1 - 8.0) - cx)
         xe = cx + s * (u ** 1.3) * ext
-        xs = cx + s * 46.0 * (0.25 + 0.75 * u)
+        # every ray leaves the top of the stream: it starts ON the crown of the round head of the column (the
+        # steep rays next to its very top, the flat ones further out) and follows that head as it climbs,
+        # widens and flares. (They used to start on a flat line 46 px either side of the axis: beside the head.)
+        xs, ys, _, _ = _head(self.cols["C"], yh, s * 0.6 * (0.25 + 0.75 * u), st["flare"], inset=3.0)
         tw_ = 0.6 + 0.4 * np.sin(self.fan_ph[:n] + t * (2.0 + 7.0 * u))
         i0 = amt * (0.09 + 0.36 * (1 - u) ** 2) * tw_ * (1.0 + 0.6 * math.tanh(st["pulse"]))
-        f.segments("w", xs, np.full(n, yh + 4.0), xe, np.full(n, L.FY0 + 3.0), i0, i0 * 0.3)
+        i0 = i0 * np.clip(nf - np.arange(n), 0.0, 1.0)          # a ray that joins the fan comes up: no pop
+        f.segments("w", xs, ys, xe, np.full(n, L.FY0 + 3.0), i0, i0 * 0.3)
 
     def _draw_bass(self, f, t, st, ctx):
+        """A strong kick blooms at the head of the centre column: rays with a point at their end, and rings.
+        The rays LEAVE the stream: every one starts on the very top of the column of light (cx, yh: where the
+        muon sits) and stays on it while the column climbs - it grows out of the light, keeps reaching out and
+        dims; its foot never lets go. (They used to start 24 px away from that point and drift to 114 px: a
+        dark half-disc between the stream and its rays.)"""
         twc = self.tw["C"]
         cx, yh, pw = twc.cx, st["yh"]["C"], st["pw"]["C"]
         if pw < 0.01:
@@ -455,23 +519,24 @@ class Rise(Scene):
             aj = float(a[j])
             u = aj / 1.3
             e = (1 - u) ** 2 * pw * min(1.0, self.bass_a[j]) * (0.4 + 0.6 * st["lv"])
-            f.rings("w", [cx], [yh], [30 + 780 * (1 - (1 - u) ** 3)], 0.8 * e, width=L.LW)
-            f.rings("w", [cx], [yh], [18 + 380 * (1 - (1 - u) ** 3)], 0.5 * e)
+            g = 1 - (1 - u) ** 3
+            _ring(f, "w", cx, yh, 30 + 780 * g, 0.8 * e, L.LW)
+            _ring(f, "w", cx, yh, 18 + 380 * g, 0.5 * e)
             grow = 1 - (1 - min(1.0, aj / 0.3)) ** 3
             ang = self.bass_ang[j]
-            r0 = 24 + 90 * u
-            r1 = r0 + self.bass_len[j] * 440 * grow
-            f.segments("w", cx + np.cos(ang) * r0, yh + np.sin(ang) * r0, cx + np.cos(ang) * r1,
-                       yh + np.sin(ang) * r1, 0.8 * e, 0.0)
-            f.dots("w", cx + np.cos(ang) * r1, yh + np.sin(ang) * r1, 2.0, 1.3 * e)
+            ln = (24 + self.bass_len[j] * 440) * grow + 90 * u       # the tips go where they went
+            f.segments("w", np.full(len(ang), cx), np.full(len(ang), yh), cx + np.cos(ang) * ln, yh + np.sin(ang) * ln,
+                       0.8 * e, 0.0)
+            f.dots("w", cx + np.cos(ang) * ln, yh + np.sin(ang) * ln, 2.0, 1.3 * e)
         for (th, key, e_h, echo, _, _) in self.hits:        # a real hit of the centre detector: red
             aj = t - th
             if key != "C" or echo or not (0 <= aj < 1.6):
                 continue
             u = aj / 1.6
             e = (1 - u) ** 2 * pw * (0.4 + 0.6 * e_h)
-            f.rings("r", [cx], [yh], [18 + (160 + 420 * e_h) * (1 - (1 - u) ** 3)], 1.1 * e, width=L.LW_BOLD)
-            f.rings("r", [cx], [yh], [10 + (90 + 240 * e_h) * (1 - (1 - u) ** 3)], 0.7 * e, width=L.LW)
+            g = 1 - (1 - u) ** 3
+            _ring(f, "r", cx, yh, 18 + (160 + 420 * e_h) * g, 1.1 * e, L.LW_BOLD)
+            _ring(f, "r", cx, yh, 10 + (90 + 240 * e_h) * g, 0.7 * e, L.LW)
 
     def _draw_motes(self, f, t, st):
         """The light piles up: short streaks climbing the wall between the towers, denser as it rises."""
@@ -725,14 +790,16 @@ class Rise(Scene):
             with f.build(age, box(g0, g1), key=22):
                 hud.panel_header(f, g0, g1, y0, "PMT_C >> BARCODE")
                 cols = int(np.clip((g1 - g0) / 3.2, 45, 150)) // 3 * 3
-                dt = 3.0 / cols
-                kf = math.floor((t - 3.0) / dt)
-                kk = kf + np.arange(cols)
+                kk, frac, dt = hud.barcode_keys(t, 3.0, cols)
                 ts = kk * dt
-                pulse = np.array([ctx.cues.kick(float(v), tau=0.2) for v in ts[::3]]).repeat(3)[:cols]
+                # the kick is read once per group of three slots, the groups tied to the slots (not to the
+                # panel): a column keeps its density while it slides, so no bar flickers on its way
+                grp = (kk // 3) * 3
+                pk = {int(g): ctx.cues.kick(float(g) * dt, tau=0.2) for g in np.unique(grp)}
+                pulse = np.array([pk[int(g)] for g in grp])
                 dens = (0.05 + 0.5 * _level(ts) + 0.42 * np.tanh(0.8 * pulse)) * np.array(
                     [float(self._power("C", float(v))) for v in ts])
-                hud.barcode_lanes(f, g0, g1, y0 + 12, y1, dens, kk, lanes=3, seed=9)
+                hud.barcode_lanes(f, g0, g1, y0 + 12, y1, dens, kk, lanes=3, seed=9, frac=frac)
         age = B.io(sa - 0.8, self.off["R"] + 0.5 - t, out=0.5)
         if self.pan_lvl and age >= 0.0:
             g0, g1 = self.pan_lvl
