@@ -18,6 +18,7 @@
 
 #include "SpoutDX.h"
 #include "audio.h"
+#include "gui.h"
 #include "live.h"
 #include "player.h"
 
@@ -30,7 +31,11 @@ const float FRAME_X0 = 28.0f, FRAME_X1 = 2950.0f, FRAME_Y1 = 1354.0f, HEAD_Y = 2
 const int BAR_H = 36;                       // height of the time bar under the picture, window pixels
 const float BAR_PAD = 12.0f;                // its margin left and right
 const float BTN_W = 44.0f;                  // the play / pause button, at its left
-const float BAR_X0 = BTN_W + BAR_PAD;       // where the time line starts
+const float TC_W = 114.0f;                  // the time code MM:SS:FF, after the button
+const float BAR_X0 = BTN_W + TC_W + BAR_PAD; // where the time line starts
+const float SND_W = 78.0f, CMT_W = 102.0f;  // the SOUND and COMMENT buttons, at its right
+const float RIGHT_W = SND_W + CMT_W;
+const float BOX_H = 40.0f;                  // the line a comment is typed in, above the bar
 
 // ------------------------------------------------------------------------------------------------
 // messages: the console, and a file that is still there the morning after
@@ -90,6 +95,7 @@ struct Window {
     bool lost = false;                      // the graphics device is gone: nothing can be shown any more
     WINDOWPLACEMENT placement = { sizeof(WINDOWPLACEMENT) };
     std::vector<WPARAM> keys;               // keys pressed since the last pump
+    std::wstring chars;                     // ... and what they typed (the comment line)
     int mx = 0, my = 0;
     bool down = false, pressed = false, released = false;
     // Windows runs a loop of its own while the window is dragged or resized, or while its menu is open:
@@ -107,6 +113,7 @@ struct Window {
                 if (wp != SIZE_MINIMIZED) { s->w = LOWORD(lp); s->h = HIWORD(lp); s->resized = true; }
                 return 0;
             case WM_KEYDOWN: s->keys.push_back(wp); return 0;
+            case WM_CHAR: if (wp >= 32 && wp != 127) s->chars.push_back((wchar_t)wp); return 0;
             case WM_MOUSEMOVE: s->mx = GET_X_LPARAM(lp); s->my = GET_Y_LPARAM(lp); return 0;
             case WM_LBUTTONDOWN: s->mx = GET_X_LPARAM(lp); s->my = GET_Y_LPARAM(lp); s->down = s->pressed = true; SetCapture(h); return 0;
             case WM_LBUTTONUP: s->down = false; s->released = true; ReleaseCapture(); return 0;
@@ -164,6 +171,7 @@ struct Window {
     void pump()
     {
         keys.clear();
+        chars.clear();
         pressed = released = false;
         MSG m;
         while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
@@ -218,10 +226,14 @@ struct Window {
     }
     bool overBar() const { return bar > 0 && my >= h - bar && my < h && mx >= 0 && mx < w; }
     bool overButton() const { return overBar() && mx < BTN_W; }         // the play / pause button
+    bool overSound() const { return overBar() && mx >= w - RIGHT_W && mx < w - CMT_W; }
+    bool overComment() const { return overBar() && mx >= w - CMT_W; }
+    float lineEnd() const { return std::max(BAR_X0 + 1.0f, (float)w - RIGHT_W - BAR_PAD); }    // where the time line ends
+    bool overLine() const { return overBar() && mx >= BAR_X0 - 6.0f && mx <= lineEnd() + 6.0f; }
     // mouse position -> 0..1 along the time line
     double barFraction() const
     {
-        return std::clamp(((double)mx - BAR_X0) / std::max(1.0, (double)w - BAR_PAD - BAR_X0), 0.0, 1.0);
+        return std::clamp(((double)mx - BAR_X0) / std::max(1.0, (double)lineEnd() - BAR_X0), 0.0, 1.0);
     }
 };
 
@@ -436,12 +448,23 @@ float percentile(std::vector<float> v, double q)
     return v[(size_t)std::min<double>((double)v.size() - 1, q * v.size())];
 }
 
-// The time bar of the preview window: a play / pause button, then the scenes of the show as blocks, what
-// has been played, where the clock is, where the mouse points. Window pixels.
+// What the bar shows beside the time line.
+struct BarState {
+    std::string tc;                         // the time code, MM:SS:FF
+    bool sound = false;                     // the engine plays sound itself
+    bool commenting = false;                // a comment is being typed
+    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT
+    const std::vector<gui::Comments::Mark>* marks = nullptr;
+};
+
+// The time bar of the preview window: a play / pause button, the time code, then the scenes of the show as
+// blocks, what has been played, where the clock is, where the mouse points, where the comments are; at the
+// right the SOUND and COMMENT buttons. Window pixels.
 void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Pool::Look>& looks, double end, double t, double hover,
-             bool playing, bool hot)
+             bool playing, const BarState& st)
 {
-    const float y0 = (float)(h - BAR_H), y1 = (float)h, x0 = BAR_X0, x1 = std::max(BAR_X0 + 1.0f, (float)w - BAR_PAD);
+    const bool hot = st.hot == 1;
+    const float y0 = (float)(h - BAR_H), y1 = (float)h, x0 = BAR_X0, x1 = std::max(BAR_X0 + 1.0f, (float)w - RIGHT_W - BAR_PAD);
     auto X = [&](double v) { return x0 + (float)(std::clamp(v / std::max(end, 1e-9), 0.0, 1.0) * (x1 - x0)); };
     o.push_back({ 0.0f, y0, (float)w, y1, 0.0f, 0.0f, 0.0f, 1.0f });
     o.push_back({ 0.0f, y0, (float)w, y0 + 1.0f, 0.35f, 0.35f, 0.35f, 1.0f });
@@ -470,7 +493,44 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
     for (auto& l : looks)                                                           // where a scene starts
         o.push_back({ X(l.t0), y0 + 6.0f, X(l.t0) + 1.0f, y1 - 6.0f, 0.75f, 0.75f, 0.75f, 1.0f });
     if (hover >= 0.0) o.push_back({ X(hover) - 0.5f, y0 + 3.0f, X(hover) + 0.5f, y1 - 3.0f, 1.0f, 1.0f, 1.0f, 0.8f });
+    if (st.marks)                                                                   // the comments: yellow, grey once done
+        for (auto& m : *st.marks) {
+            float g = m.done ? 0.5f : 1.0f;
+            o.push_back({ X(m.t) - 1.5f, y0 + 2.0f, X(m.t) + 1.5f, y0 + 10.0f, g, m.done ? 0.5f : 0.85f, m.done ? 0.5f : 0.0f, 1.0f });
+        }
     o.push_back({ X(t) - 1.5f, y0 + 2.0f, X(t) + 1.5f, y1 - 2.0f, 1.0f, 0.1f, 0.06f, 1.0f });     // the clock
+    // the time code
+    gui::text(o, BTN_W + 11.0f, y0 + 11.0f, st.tc, 2.0f, 1.0f, 1.0f, 1.0f);
+    // the buttons at the right: SOUND (white while the engine plays sound), COMMENT (yellow while one is typed)
+    const float xs = (float)w - RIGHT_W, xc = (float)w - CMT_W;
+    o.push_back({ xs, y0 + 6.0f, xs + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+    o.push_back({ xc, y0 + 6.0f, xc + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+    if (st.hot == 2) o.push_back({ xs + 4.0f, y0 + 4.0f, xc - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    if (st.hot == 3) o.push_back({ xc + 4.0f, y0 + 4.0f, (float)w - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    const float gs = st.sound ? 1.0f : 0.55f;
+    gui::text(o, xs + 0.5f * (SND_W - gui::textWidth(5, 2.0f)), y0 + 11.0f, "SOUND", 2.0f, gs, gs, gs);
+    gui::text(o, xc + 0.5f * (CMT_W - gui::textWidth(7, 2.0f)), y0 + 11.0f, "COMMENT", 2.0f, st.commenting ? 1.0f : 0.8f,
+              st.commenting ? 0.85f : 0.8f, st.commenting ? 0.0f : 0.8f);
+}
+
+// The line a comment is typed in, above the bar: its time code, then the text (its end when it is too long).
+void commentBox(std::vector<Renderer::Over>& o, int w, int h, int bar, const std::string& tc, const std::wstring& typed)
+{
+    const float y1 = (float)(h - bar), y0 = y1 - BOX_H, px = 2.0f;
+    o.push_back({ 0.0f, y0, (float)w, y1, 0.0f, 0.0f, 0.0f, 0.92f });
+    o.push_back({ 0.0f, y0, (float)w, y0 + 1.0f, 1.0f, 0.85f, 0.0f, 1.0f });
+    const std::string head = "COMMENT " + tc + " > ";
+    gui::text(o, 14.0f, y0 + 13.0f, head, px, 1.0f, 0.85f, 0.0f);
+    const float x = 14.0f + gui::textWidth(head.size(), px) + 6.0f * px;
+    const size_t room = (size_t)std::max(1.0f, ((float)w - 30.0f - x) / (6.0f * px));
+    std::string shown;
+    for (wchar_t c : typed) shown += (char)(c >= 32 && c < 127 ? c : '?');
+    if (shown.size() > room) shown = shown.substr(shown.size() - room);
+    gui::text(o, x, y0 + 13.0f, shown, px, 1.0f, 1.0f, 1.0f);
+    const float xe = x + (shown.empty() ? 0.0f : gui::textWidth(shown.size(), px) + px);
+    o.push_back({ xe, y0 + 11.0f, xe + 5.0f * px, y0 + 29.0f, 1.0f, 1.0f, 1.0f, 0.9f });          // the cursor
+    const char* help = "ENTER SAVE   ESC CANCEL";
+    if (typed.empty()) gui::text(o, xe + 24.0f, y0 + 13.0f, help, px, 0.5f, 0.5f, 0.5f);
 }
 
 }  // namespace
@@ -647,7 +707,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     // The sound: files that cannot be read are a mistake in the set-up (stop); an output that cannot be
     // opened may come back (go on without sound, and keep trying).
     Audio audio;
-    const bool wantAudio = !lo.audio.empty();
+    bool wantAudio = !lo.audio.empty();             // (the SOUND button changes it while the show runs)
     std::string err;
     if (wantAudio) {
         for (auto& f : lo.audio) say("sound: %s", narrow(f).c_str());
@@ -727,7 +787,18 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     double playedSince = 0, respawnAt = 0, barDrawnT = -1.0, barDrawnHover = -2.0;
     uint64_t sent = 0;
     int warmFailedSeen = 0, hungSeen = 0;
-    bool scrubbing = false, strangerTold = false, barDirty = true, barDrawnPlaying = false, barDrawnHot = false;
+    bool scrubbing = false, strangerTold = false, barDirty = true, barDrawnPlaying = false;
+    int barDrawnHot = 0;
+
+    // comments typed in the window (key C, or the COMMENT button): written to <root>/comments.txt with the
+    // time code they were started at
+    gui::Comments comments;
+    comments.path = fs::path(o.root) / L"comments.txt";
+    comments.load(o.fps);
+    bool commenting = false, commentResume = false;
+    double commentT = 0;
+    std::wstring commentText;
+    bool askSound = false;                          // the SOUND button: the dialog is opened by the main loop
 
     // One turn of the loop. Also called from a timer while Windows holds the window thread (drag, resize).
     auto step = [&] {
@@ -763,8 +834,41 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         }
 
         // ---- keys ----
+        auto startComment = [&] {
+            if (commenting || !warmed) return;
+            commenting = true;
+            commentT = clock.now();
+            commentText.clear();
+            commentResume = playing && !ext.following;      // (a show that follows Ableton is not ours to pause)
+            if (commentResume) pause();
+            barDirty = true;
+        };
+        auto endComment = [&](bool save) {
+            if (save && !commentText.empty()) {
+                std::string scene;
+                for (auto& l : p.pool->looks) if (commentT >= l.t0 && commentT < l.t1) scene = l.name;
+                if (comments.add(commentT, o.fps, scene, commentText)) {
+                    note = "comment saved in comments.txt";
+                    say("comment at %s: %s", gui::timecode(commentT, o.fps).c_str(), gui::utf8(commentText).c_str());
+                } else {
+                    note = "CANNOT WRITE comments.txt";
+                    warn("cannot write %s", narrow(comments.path.wstring()).c_str());
+                }
+            }
+            commenting = false;
+            if (commentResume && !playing) play();
+            barDirty = true;
+        };
+        const bool typing = commenting;             // (a comment started by a key in this turn: that key is not text)
         for (WPARAM k : win.keys) {
             bool shift = GetKeyState(VK_SHIFT) < 0, ctrl = GetKeyState(VK_CONTROL) < 0;
+            if (commenting) {                       // every key belongs to the line being typed
+                if (k == VK_RETURN) endComment(true);
+                else if (k == VK_ESCAPE) endComment(false);
+                else if (k == VK_BACK && !commentText.empty()) commentText.pop_back();
+                barDirty = true;
+                continue;
+            }
             if (tool.on) {
                 float stepPx = shift ? 10.0f : 1.0f;
                 if (k == '1' || k == '2' || k == '3') tool.sel = (int)(k - '1');
@@ -805,6 +909,17 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             case VK_UP: setLevels(levelSel, shift ? 0.05f : 0.01f, true); panel = true; break;
             case VK_DOWN: setLevels(levelSel, shift ? -0.05f : -0.01f, true); panel = true; break;
             case 'R': p.reload(); note = "reloading"; break;
+            case 'C': startComment(); break;
+            case 'O':                               // the sound: choose the files; Shift: no sound from the engine
+                if (!shift) askSound = true;
+                else if (wantAudio) {
+                    audio.close();
+                    wantAudio = false;
+                    note = "sound off";
+                    say("sound off: the clock is /muonbloom/time if it arrives, else the machine's timer");
+                    barDirty = true;
+                }
+                break;
             case 'T':
                 if (tool.tw.load()) { tool.on = true; tool.dirty = true; note.clear(); }
                 else note = "cannot read data/towers.json";
@@ -814,17 +929,30 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             }
         }
         win.keys.clear();                           // (taken: a turn called from the timer has no pump to clear them)
+        if (commenting && typing && !win.chars.empty()) {
+            for (wchar_t c : win.chars) if (commentText.size() < 400) commentText.push_back(c);
+            barDirty = true;
+        }
+        win.chars.clear();
 
         // ---- mouse: the time bar first, then the tower tool ----
         double hover = -1.0;
-        const bool hotButton = win.overButton() && !scrubbing;
+        const int hotButton = !win.bar || scrubbing ? 0 : win.overButton() ? 1 : win.overSound() ? 2 : win.overComment() ? 3 : 0;
         if (win.bar && win.pressed && win.overButton()) {       // the play / pause button
-            if (warmed) { if (playing) pause(); else play(); }
+            if (warmed && !commenting) { if (playing) pause(); else play(); }
+            win.pressed = false;
+        }
+        if (win.bar && win.pressed && win.overSound()) {
+            askSound = true;
+            win.pressed = false;
+        }
+        if (win.bar && win.pressed && win.overComment()) {
+            if (commenting) endComment(true); else startComment();
             win.pressed = false;
         }
         if (win.bar && showEnd > 0) {
-            if (win.pressed && win.overBar()) scrubbing = true;
-            if ((win.overBar() && !win.overButton()) || scrubbing) hover = win.barFraction() * showEnd;
+            if (win.pressed && win.overLine()) scrubbing = true;
+            if (win.overLine() || scrubbing) hover = win.barFraction() * showEnd;
             if (scrubbing && win.down && now() - scrubAt > 0.03 && std::abs(hover - clock.now()) > 0.5 / o.fps) {
                 scrubAt = now();
                 seek(hover);
@@ -1024,6 +1152,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (std::abs(t - barDrawnT) > px || hover != barDrawnHover) barDirty = true;
         }
         if (win.bar && (playing != barDrawnPlaying || hotButton != barDrawnHot)) barDirty = true;
+        if (win.bar && !playing && std::abs(t - barDrawnT) > 0.25 / o.fps) barDirty = true;     // the time code
         if (panel && liveDet && now() - panelAt > 0.033) {      // the meters move by themselves
             panelAt = now();
             barDirty = true;
@@ -1038,7 +1167,16 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 if (spoutOn && p.shown() >= 0) sent += spout.SendTexture(p.renderer.shown().tex.Get());
             }
             barRects.clear();
-            if (win.bar) timeBar(barRects, win.w, win.h, p.pool->looks, std::max(showEnd, 1e-9), t, hover, playing, hotButton);
+            if (win.bar) {
+                BarState st;
+                st.tc = gui::timecode(t, o.fps);
+                st.sound = wantAudio;
+                st.commenting = commenting;
+                st.hot = hotButton;
+                st.marks = &comments.marks;
+                timeBar(barRects, win.w, win.h, p.pool->looks, std::max(showEnd, 1e-9), t, hover, playing, st);
+            }
+            if (commenting) commentBox(barRects, win.w, win.h, win.bar, gui::timecode(commentT, o.fps), commentText);
             if (panel && liveDet) meter.rects(barRects, level, levelSel, now());
             barDrawnT = t;
             barDrawnHover = hover;
@@ -1113,10 +1251,47 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         }
     };
 
+    // The SOUND button (or the key O): choose the WAV files the engine plays, and follows, from now on.
+    // The dialog runs a loop of its own: the picture goes on behind it, from the timer of the window.
+    auto chooseSound = [&] {
+        std::error_code ec;
+        fs::path dir = fs::path(o.root) / L".." / L"audio";
+        std::vector<std::wstring> files;
+        win.modal = true;
+        SetTimer(win.hwnd, 1, 1, nullptr);
+        const bool chosen = gui::chooseWav(win.hwnd, fs::exists(dir, ec) ? fs::weakly_canonical(dir, ec).wstring() : std::wstring(), files);
+        KillTimer(win.hwnd, 1);
+        win.modal = false;
+        win.down = win.pressed = win.released = false;
+        barDirty = true;
+        if (!chosen) return;
+        audio.stop();                               // (the voices play out of the memory that is replaced)
+        std::string e;
+        if (!audio.load(files, e)) {
+            warn("%s", e.c_str());
+            note = e + " (PCM WAV files only): no sound";
+            audio.close();
+            wantAudio = false;
+            return;
+        }
+        wantAudio = true;
+        ext.following = false;                      // the sound of the engine is the clock from here on
+        for (auto& f : files) say("sound: %s", narrow(f).c_str());
+        note = "sound: " + narrow(fs::path(files[0]).filename().wstring()) + (files.size() > 1 ? " + " + std::to_string(files.size() - 1) + " more" : "");
+        if (!audio.ok() && !audio.openDevice()) warn("NO SOUND OUTPUT: playing without sound, trying again every few seconds");
+        audio.volume(lo.volume);
+        if (playing && audio.ok()) audio.play(clock.now());
+        sound.reset();
+    };
+
     win.tick = step;
     while (!win.closed) {
         win.pump();
         step();
+        if (askSound) {
+            askSound = false;
+            chooseSound();
+        }
     }
     win.tick = nullptr;
     timeEndPeriod(1);

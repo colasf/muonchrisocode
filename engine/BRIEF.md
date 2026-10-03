@@ -287,6 +287,17 @@ picture 5 ms earlier / later than the clock (the value is shown in the title: pu
 level; Esc quit. The title bar shows the time code, the scene, where the clock comes from,
 the frame rate, the frames dropped, the time the scenes take and the trigger levels.
 
+Added 2026-10-03, in the bar under the picture (`engine/src/gui.h`, drawn with a small bitmap font):
+
+- the time code `MM:SS:FF` (FF = frames, as in the timings sheet), right of the play / pause button;
+- `SOUND` button, or key O: a file dialog chooses the WAV file(s) the engine plays and follows from then
+  on (PCM WAV only; several files = stems that start together). Shift+O: no sound from the engine again.
+  The choice is not kept for the next start (on site Ableton plays the sound);
+- `COMMENT` button, or key C: a line to type a comment in; Enter writes it to `comments.txt` in the
+  repository folder as `[ ] MM:SS:FF | scene | date | text`, Esc cancels. The show is paused while it is
+  typed (not when it follows `/muonbloom/time`). The comments show as yellow marks on the time line,
+  grey once their line starts with `[x]`.
+
 - **Time bar**: under the picture, in the preview window only (never in the Spout output).
   A play / pause button at its left, then one block per scene; click or drag to move in the
   show; the title shows the time and the scene under the mouse. B or `--no-bar` hides it.

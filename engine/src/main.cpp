@@ -15,6 +15,10 @@
 //       the show in real time: preview window, Spout sender (default name: MuonBloom).
 //       Keys: Space play / pause, Left / Right 5 s (Shift 30 s, Ctrl one frame), Page Up / Down scene,
 //       Home start, F full screen, T tower placement, R reload the scenes, [ ] picture earlier / later, Esc quit.
+//       The bar under the picture shows the time code (MM:SS:FF, as in the timings sheet). O (or the SOUND
+//       button): choose the WAV file(s) the engine plays and follows from then on; Shift+O: no sound again.
+//       C (or the COMMENT button): type a comment, Enter writes it with its time code to comments.txt in
+//       the repository folder (Esc cancels); the show is paused while it is typed.
 //       The clock: the sound is played by Ableton, and the time of the show comes by OSC:
 //       /muonbloom/time <seconds>, sent all the time. The show follows it (plays when it moves, pauses when
 //       it stands still, goes on by the machine's timer if nothing arrives any more). Without it the engine
@@ -350,7 +354,7 @@ int wmain(int argc, wchar_t** argv)
                 if (a.v[k] == L"--audio") lo.audio.push_back(a.v[k + 1]);
             if (lo.audio.empty() && a.flag(L"--sound")) {                     // the stems of the previews
                 std::vector<fs::path> wanted;
-                for (const wchar_t* f : { L"muonbloom V7 no muon sounds.wav", L"v7 just muon sounds.wav" })
+                for (const wchar_t* f : { L"muon bloom Mixed v1 scene 10 edit NO MUONS SOUNDS.wav", L"muon bloom Mixed v1 just muons.wav" })
                     wanted.push_back(fs::path(o.root) / L".." / L"audio" / f);
                 for (auto& p : wanted)
                     if (fs::exists(p)) lo.audio.push_back(fs::weakly_canonical(p).wstring());

@@ -29,4 +29,4 @@ target_compile_definitions(muonengine PRIVATE
     MUON_ROOT_DIR=L"${CMAKE_CURRENT_SOURCE_DIR}/.."
     NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 target_compile_options(muonengine PRIVATE /W3 /utf-8)
-target_link_libraries(muonengine PRIVATE spout d3d11 dxgi d3dcompiler dxguid winmm xaudio2 ws2_32)
+target_link_libraries(muonengine PRIVATE spout d3d11 dxgi d3dcompiler dxguid winmm xaudio2 ws2_32 comdlg32)
