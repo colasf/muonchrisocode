@@ -36,6 +36,7 @@ from __future__ import annotations
 import math
 import os
 import pickle
+import zlib
 
 import numpy as np
 
@@ -1213,7 +1214,8 @@ class Shower(Scene):
         rain = []
         for tk in kt[np.argsort(-ka)[:7]]:
             rain.append(dict(t_land=float(tk), target=(float(rng.uniform(-11, 11)), 0.0, float(rng.uniform(-4, 4)))))
-        self.world = World([spec], rain, seed=4, cache=f"hero_{int(self.t_int * 1000)}_{int(self.t_land * 1000)}")
+        sig = zlib.crc32(np.round([r["t_land"] for r in rain], 3).tobytes()) % 100000   # new audio, new kicks: rebuilt
+        self.world = World([spec], rain, seed=4, cache=f"hero_{int(self.t_int * 1000)}_{int(self.t_land * 1000)}_{sig:05d}")
         # --- layout from the towers ---
         # view 1 (the hero: tags, MU- 0001, the footprint) lives in the focus bay, on ctx.focus;
         # view 2 (a second elevation, no tags) takes the widest other bay, if there is one worth it.

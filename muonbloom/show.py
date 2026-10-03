@@ -48,6 +48,7 @@ class Scene:
     cell = True             # bottom-left cell: the muons through one spectator since 00:00
     edge_ticks = True       # spectrum ticks on the left / right frame edges
     frame = True
+    strip_grows = True      # the score strip takes the whole header band while the subtitle box is away
 
     def __init__(self, ctx):
         self.ctx = ctx
@@ -78,6 +79,8 @@ class Show:
         _, sec, _ = sd.section_at(t)
         sc = self.scene(look or sec[4])
         f = Frame(W, H)
+        # the score strip fills the header while the subtitle box is away (unless the scene uses that slot)
+        L.STRIP = hud.strip_rect(t, ctx.sub) if sc.strip_grows else L.STRIP0
         opt = sc.draw(f, t, ctx) or {}
         f.set_clip()
         f.set_view()

@@ -1,6 +1,10 @@
 """OUTRO - the journey once more, then everything returns to the dot.   Sheet scene 11 + credits.
 
-  11.0  10:52 - 12:20  NARRATIVE     "nothing chose when. everything returns to almost... nothing."
+Times are those of the scene 10 edit of the audio: scene 11 starts at 09:48 (10:52 in V7); from 10:00 on
+everything is 75.56 s earlier than in V7, and the stretch between "nothing." and "Travelling for billions of
+years" is 11 s shorter (the axis draws itself in 10 s instead of 21).
+
+  11.0  09:48 - 11:04  NARRATIVE     "nothing chose when. everything returns to almost... nothing."
                                       the remains of the disintegration fade to one red dot. Out of it the
                                       whole journey is drawn as ONE line: a log time axis from the collapse
                                       of the star (left, -5 billion years) to NOW / YOU (right). The red dot
@@ -8,14 +12,14 @@
                                       last heartbeat, the 50 microseconds of atmosphere, you. Two clocks for
                                       "time stretched around it", a heartbeat trace for "less than a
                                       heartbeat", the place and the moment for "in this moment, in this place".
-  11.1  12:20 - 12:51  ACCELERANDO   "The universe does not stop": the journey repeats, faster, by the
+  11.1  11:04 - 11:40  ACCELERANDO   "The universe does not stop": the journey repeats, faster, by the
                                       thousand; the axis coils into a whirl around the focus point of the wall.
                                       The towers stay live; the whirl passes behind them and continues.
-  11.2  12:51 - 13:27  SWIRLING      (the drums of the V7 audio enter at 12:51.1 and leave at 13:27)
+  11.2  11:40 - 12:06  SWIRLING      (the drums enter at 11:35.5 and leave at 12:11)
                                       the whirl is the streak field of the first minute, turning around the
-                                      red dot, rings beating on the drums. 13:13.6: the fifty-thousandth muon
-                                      through you. The credits start on it at 13:22.
-  12.0  13:22 - 13:54  CREDITS       when the drums stop the detectors power down and nothing new arrives: the
+                                      red dot, rings beating on the drums. 11:54.3: the fifty-thousandth muon
+                                      through you. The credits start at 12:06.4.
+  12.0  12:06 - 12:38  CREDITS       when the drums stop the detectors power down and nothing new arrives: the
                                       field drains into the dot. What is left is the lattice of crosses and one
                                       red dot = the first image of the show. It loops.
 
@@ -40,12 +44,13 @@ import numpy as np
 
 from .. import build as B
 from .. import hud, towers
+from .. import human
 from .. import layout as L
 from .. import showdata as sd
 from ..engine import CHAR_W, hash01, smoothstep
 from ..show import Scene
 
-T0, T_COIL, T_END = 652.0, 740.0, 802.0
+T0, T_COIL, T_END = 588.0, 664.44, 726.44
 AX_Y = 520.0                                       # the journey axis
 LT0, LT1 = 17.4, -6.6                              # log10(seconds before now) at its two ends
 YEAR = 3.156e7
@@ -55,17 +60,20 @@ TAU_MU = 2.197e-6
 GAMMA_P, GAMMA_MU = 1.0e6, 30.0
 B_SP, EPS = 3.2, 0.02                              # whirl: log spirals r = R (1 - u)
 N_DOTS = 7000
-T_AXIS = (668.0, 689.0)                            # the axis draws itself
-T_PWR = 806.3                                      # the drums stop: the detectors power down (centre, right, left)
+T_AXIS = (603.0, 613.44)                           # the axis draws itself (it ends where it ended in V7)
+T_PWR = 730.74                                     # the drums stop: the detectors power down (centre, right, left)
 PWR_ORDER = {"C": 0.0, "R": 0.5, "L": 1.0}
-T_DRAIN = (806.3, 812.2)                           # ... and nothing new arrives: the whirl drains into the dot
-T_CREDITS_OUT = (827.0, 832.0)
+T_DRAIN = (730.74, 736.64)                         # ... and nothing new arrives: the whirl drains into the dot
+T_CREDITS_OUT = (751.44, 756.44)
 PANEL_Y = AX_Y + 140.0                             # top of the blocks under the axis
 BURST = 0.6                                        # size of the towers' live replies in this calm scene
-T_STRIP = (664.0, 765.0)                           # the score strip: made / taken apart (before the whirl gets there)
-T_ANN_OUT = (738.5, 741.8)                         # the annotations of the journey are taken apart, before the line coils
-PANEL_OUT = dict(journey=739.3, clocks=739.6, heart=739.9, here=740.2)     # when each block under the axis is gone
-T_NOW_TAG = (741.2, 767.0)                         # NOW rides beside the dot on its way to the centre of the whirl
+T_STRIP = (599.9, 689.44)                          # the score strip: made / taken apart (before the whirl gets there)
+T_ANN_OUT = (662.94, 666.24)                       # the annotations of the journey are taken apart, before the line coils
+PANEL_OUT = dict(journey=663.74, clocks=664.04, heart=664.34, here=664.64)     # when each block under the axis is gone
+T_NOW_TAG = (665.64, 691.44)                       # NOW rides beside the dot on its way to the centre of the whirl
+T_DIM = (662.94, 669.44)                           # what is drawn of the journey dims into the whirl; NOW leaves the axis
+T_RINGS = 688.44                                   # the rings of the first minute come back
+T_TOP = 689.44                                     # the world stays under the header until the strip has gone
 
 
 def fit(size, n_chars, width):
@@ -111,23 +119,8 @@ def _ecg(u):
 
 
 def _body(y):
-    """Front silhouette of a standing figure: y from 0 (feet) to 1 (top of the head) -> [(centre, half width)]."""
-    out = []
-    if y < 0.47:
-        w = 0.026 + 0.03 * (y / 0.47)
-        out += [(-0.052, w), (0.052, w)]
-    elif y < 0.82:
-        q = (y - 0.47) / 0.35
-        out.append((0.0, 0.088 + 0.03 * math.sin(math.pi * min(1.0, q * 1.15)) ** 0.7 + 0.012 * q))
-        if y < 0.8:
-            out += [(-0.162 + 0.02 * q, 0.02), (0.162 - 0.02 * q, 0.02)]
-    elif y < 0.865:
-        out.append((0.0, 0.03))
-    else:
-        v = (y - 0.932) / 0.068
-        if abs(v) < 1:
-            out.append((0.0, 0.05 * math.sqrt(1 - v * v)))
-    return out
+    """Front silhouette of the figure of YOU: y from 0 (feet) to 1 (top of the head) -> [(centre, half width)]."""
+    return human.front_spans(y)
 
 
 class Outro(Scene):
@@ -138,19 +131,20 @@ class Outro(Scene):
         super().__init__(ctx)
         s = sd.said
         self.c = dict(
-            chose=s("nothing chose when", 652.0), returns=s("everything returns", 655.5), nothing=s("nothing", 662.5),
-            billions=s("Travelling for billions of years", 690.25), stretched=s("Travelling so fast", 693.25),
-            heartbeat=s("Living, for less than a heartbeat", 705.5), reach=s("Just long enough to reach you", 709.0),
-            endless=s("An endless, fleeting existence", 722.0), body=s("passing through your body", 725.0),
-            moment=s("In this moment", 726.5), universe=s("The universe does not stop", 736.0),
-            own=s("It keeps its own time", 739.73), continues=s("It continues", 748.37),
-            always=s("As it always has", 751.23), part=s("You are part of this", 760.0),
-            were=s("You always were", 762.43))
+            chose=s("nothing chose when", 588.0), returns=s("everything returns", 591.05), nothing=s("nothing", 598.42),
+            billions=s("Travelling for billions of years", 614.67), stretched=s("Travelling so fast", 617.75),
+            heartbeat=s("Living, for less than a heartbeat", 629.83), reach=s("Just long enough to reach you", 633.33),
+            endless=s("An endless, fleeting existence", 646.33), body=s("passing through your body", 649.43),
+            moment=s("In this moment", 650.93), universe=s("The universe does not stop", 660.85),
+            own=s("It keeps its own time", 664.33), continues=s("It continues", 672.97),
+            always=s("As it always has", 675.67), part=s("You are part of this", 684.47),
+            were=s("You always were", 687.07))
         c = self.c
         self.t_dep, self.t_arr = c["billions"], c["reach"] + 2.0
-        # the drums of the swirl: the strongest low hit around 12:51
-        kt, ka = ctx.cues.kicks(768.0, 775.0)
-        self.t_hit = float(kt[int(np.argmax(ka))]) if len(kt) else 771.1
+        self.t_dot = c["nothing"] + 0.5                 # out of 'nothing.': one red dot
+        # the drums of the swirl: the strongest low hit around 11:35.5
+        kt, ka = ctx.cues.kicks(692.44, 699.44)
+        self.t_hit = float(kt[int(np.argmax(ka))]) if len(kt) else 695.54
         # story markers on the axis: (seconds before now, title, value, preferred rows, priority)
         self.marks = [
             (T_STAR, "A STAR COLLAPSES", "-5.0 GYR", (2, 1, 0), 0),
@@ -180,7 +174,7 @@ class Outro(Scene):
         self.d_b = 0.35 + 0.65 * rng.random(N_DOTS) ** 2
         self.d_tau = 0.1 + 0.1 * rng.random(N_DOTS)
         self.d_act = c["universe"] + (self.t_hit - c["universe"]) * (k / N_DOTS) ** (1 / 2.6)
-        # what is left of the disintegration at 10:52
+        # what is left of the disintegration at 09:48
         n = 130
         self.rem = dict(x=rng.uniform(L.FX0 + 60, L.FX1 - 60, n), y=rng.uniform(L.HEAD_Y + 30, L.FY1 - 120, n),
                         gone=rng.uniform(T0 + 1.5, c["nothing"], n), r=0.9 + 1.6 * rng.random(n) ** 3,
@@ -248,7 +242,7 @@ class Outro(Scene):
         placed = []                                           # (xa, xb, row, x)
         for i in sorted(range(len(self.marks)), key=lambda j: self.marks[j][4]):
             sec, title, val, rows, _ = self.marks[i]
-            x = float(self.X(math.log10(sec if sec else 700.0)))
+            x = float(self.X(math.log10(sec if sec else 615.0)))       # (this show began ~10:15 before)
             w = max(len(title) * L.T_SMALL, len(val or "-00:00") * L.T_MICRO) * CHAR_W + 4.0
             best = None
             for row in rows:
@@ -352,7 +346,7 @@ class Outro(Scene):
         return math.exp((t - self.c["universe"]) / 66.0) / 25.0
 
     def _coil(self, t):
-        return float(smoothstep(742.0, self.t_hit - 0.2, t))
+        return float(smoothstep(T_COIL + 2.0, self.t_hit - 0.2, t))
 
     def _path(self, u, t, th_off=0.0, lane=0.0):
         """Point of the journey at phase u (0 = the star, 1 = now): the straight axis, coiling into a
@@ -361,7 +355,7 @@ class Outro(Scene):
         cp = self._coil(t)
         m = np.clip(cp * 1.6 - (1.0 - u) * 0.6, 0.0, 1.0)
         m = m * m * (3 - 2 * m)
-        w_line = 26.0 * float(smoothstep(self.c["universe"], 744.0, t))
+        w_line = 26.0 * float(smoothstep(self.c["universe"], T_COIL + 4.0, t))
         xl = self.ax0 + u * (self.x_now - self.ax0)
         yl = AX_Y + lane * w_line
         r = self.r_out * (1.0 - u)
@@ -434,19 +428,19 @@ class Outro(Scene):
         self._lattice(f, 0.72 + 0.28 * drain)
         if t < c["nothing"] + 1.0:
             self._remains(f, t)
-        a_img = float(1 - smoothstep(738.5, 745.0, t))           # what is DRAWN of the journey dims into the whirl
+        a_img = float(1 - smoothstep(*T_DIM, t))                 # what is DRAWN of the journey dims into the whirl
         if t >= c["universe"]:            # the world stays under the header until the strip has gone
-            top = L.HEAD_Y + 6 - (L.HEAD_Y + 4 - L.FY0) * float(smoothstep(765.0, self.t_hit, t))
+            top = L.HEAD_Y + 6 - (L.HEAD_Y + 4 - L.FY0) * float(smoothstep(T_TOP, self.t_hit, t))
             f.set_clip(L.FX0 + 2, top, L.FX1 - 2, L.FY1 - 2)
-        if t >= 663.0:
+        if t >= self.t_dot:
             self._axis(f, t, ctx, drain)
-        if 663.0 <= t < 745.0:
+        if self.t_dot <= t < T_DIM[1]:
             self._stations(f, t, ctx, a_img)
             if T_AXIS[0] <= t < T_ANN_OUT[1]:
                 self._panels(f, t, ctx)
         if t >= c["universe"]:
             self._travellers(f, t, ctx, drain)
-        if t >= 764.0:
+        if t >= T_RINGS:
             self._rings(f, t, ctx, drain)
         self._now_dot(f, t, ctx, drain)
         f.set_clip()
@@ -661,7 +655,7 @@ class Outro(Scene):
         if t >= self.t_fig:               # you, at the end of the line
             self._you(f, t, a_img)
         # the traveller and its clock reading
-        fade_in = float(smoothstep(663.0, 665.0, t))
+        fade_in = float(smoothstep(self.t_dot, self.t_dot + 2.0, t))
         pulse = 0.5 + 0.5 * math.sin(t * 3.0) ** 2
         f.dots("r", [xd], [AX_Y], 7.5 + 2.0 * pulse, 1.5 * fade_in * a_img)
         f.dots("w", [xd], [AX_Y], 2.4, 1.2 * fade_in * a_img)
@@ -675,7 +669,7 @@ class Outro(Scene):
                           anchor="rs" if side < 0 else "ls", cps=70.0, key=8)     # above the headers of the blocks below
                     break
         elif t < T_AXIS[0] and self._fits(xd + 16, xd + 180):
-            age = B.io(t - 664.5, T_AXIS[0] - t, out=0.4, span=1.2)      # unwritten before the line starts through it
+            age = B.io(t - self.t_dot - 1.5, T_AXIS[0] - t, out=0.4, span=1.2)      # unwritten before the line starts through it
             f.text("r", xd + 22, AX_Y + 7, B.decode("ALMOST NOTHING", age, cps=14.0, band=2, key=3), size=L.T_SMALL,
                    alpha=0.9)
 
@@ -843,7 +837,7 @@ class Outro(Scene):
 
     def _rings(self, f, t, ctx, drain):
         """The rings of the first minute, around the dot, beating on the drums; they fall in at the end."""
-        g = float(smoothstep(764.0, self.t_hit, t)) * (1.0 - 0.4 * float(smoothstep(T_END, T_END + 2.0, t)))
+        g = float(smoothstep(T_RINGS, self.t_hit, t)) * (1.0 - 0.4 * float(smoothstep(T_END, T_END + 2.0, t)))
         kick = min(1.5, ctx.cues.kick(t, 0.2))
         k = np.arange(len(self.rings))
         r = self.rings * (1 + 0.025 * np.sin(t * 0.9 + 1.7 * k) + 0.03 * kick * (1 + k % 3))
@@ -861,7 +855,7 @@ class Outro(Scene):
     def _now_dot(self, f, t, ctx, drain):
         """NOW: the end of the axis. In 11.1 it travels to the focus point and becomes the centre of the whirl
         = the red dot of the first image of the show."""
-        al = float(smoothstep(738.5, 745.0, t))       # before that it is drawn with the figure, on the axis
+        al = float(smoothstep(*T_DIM, t))             # before that it is drawn with the figure, on the axis
         if al <= 0.01:
             return
         x, y, _, m = self._path(np.array([1.0]), t)

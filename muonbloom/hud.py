@@ -84,6 +84,29 @@ def subtitle_box_alpha(t):
     return a
 
 
+def _hero_tag_w(cue, size=86):
+    return len(cue.text.strip(". ")) * size * CHAR_W
+
+
+def top_right_edge(t, rect=None):
+    """Left edge (x) of whatever stands in the top-right corner at time t: the subtitle box while it slides
+    open / closed, the tag of a single word (YOU, A MUON ...), or the frame edge when nobody speaks."""
+    x0, _, x1, _ = rect or L.SUB
+    edge = x1 - (x1 - x0) * float(B.ease(subtitle_box_alpha(t)))
+    for c in sd.subtitles():
+        if _is_hero(c) and c.t - 0.45 <= t < c.end + 0.55:
+            a = float(smoothstep(c.t - 0.45, c.t - 0.05, t) * (1 - smoothstep(c.end + 0.05, c.end + 0.55, t)))
+            edge = min(edge, x1 - (_hero_tag_w(c) + 86.0) * float(B.ease(a)))
+    return edge
+
+
+def strip_rect(t, rect=None):
+    """The score strip of this frame: it takes the whole header band when the top-right corner is free and
+    is scaled back as the subtitle box slides open (the show stores it in L.STRIP before a scene draws)."""
+    x0, y0, _, y1 = L.STRIP0
+    return (x0, y0, max(top_right_edge(t, rect), x0 + 400.0), y1)
+
+
 def subtitle(f, t, rect=None):
     """Voice-over text in the box at the top right, typed on. Clears whatever is behind the box.
     Nothing fades: the box opens from the right edge of the frame and closes back to it, the single words
@@ -97,7 +120,7 @@ def subtitle(f, t, rect=None):
         # a single word: no box, just the tag in the corner (so a bloom on the centre tower stays whole)
         s = cue.text.strip(". ").upper()
         size = 86
-        w = len(s) * size * CHAR_W
+        w = _hero_tag_w(cue, size)
         f.occlude(x1 - 44 - w - 18, y0 + 14, x1 - 12, y0 + 156)
         cps = 40.0
         B.tag(f, "w", x1 - 44 - w, y0 + 118, s, B.io(age, cue.end - t, out=0.25, span=(len(s) + 4) / cps), size=size,
@@ -118,11 +141,14 @@ def subtitle(f, t, rect=None):
     if len(lines) > 2:
         size = int(size * 2 / len(lines) * 0.98)
         lines = wrap(cue.text, int((x1 - x0 - 44) / (size * CHAR_W)))
-    n = int(age * SUB_CPS) + 1
+    dur = cue.end - cue.t
+    cps = max(SUB_CPS, len(cue.text) / max(0.35 * dur, 0.1))     # a short line is typed faster: it has to be read
+    n = int(age * cps) + 1
     left = cue.end - t
-    out = cue.end - cue.t > 1.0 and left < SUB_OUT       # the line leaves the way it came: un-typed from its end
+    t_out = min(SUB_OUT, 0.15 * dur)                              # ... and un-typed faster
+    out = dur > 1.0 and left < t_out                     # the line leaves the way it came: un-typed from its end
     if out:
-        n = min(n, int(sum(len(ln) + 1 for ln in lines) * max(left, 0.0) / SUB_OUT))
+        n = min(n, int(sum(len(ln) + 1 for ln in lines) * max(left, 0.0) / t_out))
     tx = x0 + 22
     typed = 0
     for k, ln in enumerate(lines):

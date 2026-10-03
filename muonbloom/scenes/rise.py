@@ -1,4 +1,4 @@
-"""RISE - everything it was ends as light.   Scene 9, 08:32 - 10:06 (94 s).
+"""RISE - everything it was ends as light.   Scene 9.0 - 9.1, 08:32 - 09:35 (63 s).
 
 A muon that stops in a detector gives everything away. As it slows down its energy loss rises
 (Bethe-Bloch, dE/dx ~ 1/beta^2: the Bragg rise) until it stops; then it decays and the last of it
@@ -15,9 +15,8 @@ detector hits. Linear, follows the sheet and the voice:
                                       mass, the name - and rewritten as light (mass 0, speed c);
                                       on "it ends as light" the centre column becomes a beam that
                                       goes to the top of the wall
-  9.2  09:35-10:06  RISE BREAK       power down, scene 3's switching-on reversed (centre, right,
-                                      left); muons keep rushing through the dark, one per kick,
-                                      until one is seen: "But now, now, you know."
+  9.2  09:35-09:48  is the ending made of the best of scene 10 (cut in the scene 10 edit of the audio):
+                    the disintegration, scenes/disintegrate.py. The detectors no longer power down.
 No score strip here: the fan and the beam need the height above the centre tower (up to the top).
 
 Nothing has a fixed x. The towers stand in front of the wall and nobody knows yet where, how wide
@@ -31,10 +30,8 @@ Nothing that shows data fades in or pops in (build.py). The two cards, the botto
 tag are CONSTRUCTED when the scene starts; the level line and its read-outs when the centre column climbs
 above the bottom band; the ladders when the side columns are high enough; every log line, hit tag and
 rewritten value is decoded when it arrives. Losing things is the subject here, and it is never a fade
-either: what the voice strips is cut and eroded, the level is taken apart when the muon becomes light, and
-at the power-down each card, panel and ladder is taken apart with its tower (build.io: the construction
-runs backwards) while its text falls apart (hud.erode). The towers, the columns of light, the fan, the
-rays, the beam and the rain are the image: they keep their own intensities.
+either: what the voice strips is cut and eroded, the level is taken apart when the muon becomes light. The
+towers, the columns of light, the fan, the rays and the beam are the image: they keep their own intensities.
 """
 from __future__ import annotations
 
@@ -49,10 +46,9 @@ from .. import showdata as sd
 from ..engine import CHAR_W, hash01, smoothstep
 from ..show import Scene
 
-T0, T1 = 512.0, 606.0                          # the scene on the sheet
+T0, T1 = 512.0, 575.0                          # the scene on the sheet (9.2 is the disintegration)
 PEAK = 551.0                                   # end of the crescendo: the muon stops
-SECTIONS = [("9.0", "RISE CRESCENDO / GLOCKS", T0, PEAK), ("9.1", "VOICE OVER", PEAK, 575.0),
-            ("9.2", "RISE BREAK", 575.0, T1)]
+SECTIONS = [("9.0", "RISE CRESCENDO / GLOCKS", T0, PEAK), ("9.1", "VOICE OVER", PEAK, T1)]
 Y_LOW = 1196.0                                 # the ladders and the level stay above the bottom band
 
 # Bethe-Bloch in plastic scintillator (PVT)
@@ -104,19 +100,15 @@ class Rise(Scene):
         super().__init__(ctx)
         rng = np.random.default_rng(seed)
         self.tw = ctx.towers
-        self.off = dict(sd.T_OFF)
+        # the detectors stay on through the scene (the cut to the disintegration comes first): what used to be
+        # their power-down times only bound the event lists now
+        self.off = {k: T1 + 1.0 for k in self.tw}
         # voice-over cues
         self.cue_strip = sd.said("Everything it was, stripped away", 552.667)
         self.cue_speed = sd.said("The speed", 557.2)
         self.cue_mass = sd.said("The mass", 558.167)
         self.cue_name = sd.said("The name", 560.0)
         self.cue_light = sd.said("Wherever it began, it ends as light", 561.15)
-        self.cue_here = sd.said("Here", 591.0, nth=0)
-        if self.cue_here < T0:                                  # "Here, Right now..." of the intro matched
-            self.cue_here = 591.0
-        self.cue_rush = sd.said("Right now, something is rushing through you", 593.083)
-        self.cue_feel = sd.said("You still cannot feel it", 599.55)
-        self.know = sd.said("But now, now, you know", 602.2)
         # where the column heads arrive at the peak, and the top the beam reaches
         self.head = {k: t.top - (13.0 if k == "C" else 46.0) for k, t in self.tw.items()}
         self.top = L.FY0 + 6.0
@@ -185,13 +177,10 @@ class Rise(Scene):
         prev = [t for t in tws if t.x1 <= hero.x0]
         nxt = [t for t in tws if t.x0 >= hero.x1]
         self.lvl = (prev[-1].x1 + 6.0 if prev else lo, nxt[0].x0 - 6.0 if nxt else hi)
-        # room for the ladder rays of each side tower (towards the hero), and for the 'seen' tag
+        # room for the ladder rays of each side tower (towards the hero)
         # (the intensity read-out stands on the right of the hero: rays coming from that side stop before it)
         self.ray_room = {k: max(60.0, (hero.x0 - t.x1 - 104.0) if sg > 0 else (t.x0 - hero.x1 - 194.0))
                          for k, t, sg in self.sides}
-        room_r = (nxt[0].x0 if nxt else hi) - hero.x1
-        room_l = hero.x0 - (prev[-1].x1 if prev else lo)
-        self.know_side = 1.0 if (room_r >= 430.0 or room_r >= room_l) else -1.0
         # bottom panels, widest first: Bragg curve, PMT barcode, level
         panels = sorted(ctx.slots["panels"], key=lambda q: q[0] - q[1])
         self.pan_bragg = panels[0] if panels and panels[0][1] - panels[0][0] >= 300.0 else None
@@ -254,18 +243,6 @@ class Rise(Scene):
                              float(rng.normal(0, 0.09))))
         hits.sort()
         self.hits = hits
-        # 9.2: muons still rushing through the dark, one per kick, filtered; one bright one when "you know"
-        kt, ka = cues.kicks(self.off["L"] + 1.0, T1 - 0.4)
-        rain = [(float(tk), float(60.0 + hash01(k, 31) * (L.W - 120.0)), float((hash01(k, 32) - 0.5) * 0.22),
-                 float(0.22 + 0.16 * min(ak, 1.3))) for k, (tk, ak) in enumerate(zip(kt, ka))
-                if abs(tk - self.know) > 0.7]
-        rain.append((self.know, self.hero.x0 + 0.32 * self.hero.w, 0.0, 1.0))
-        self.rain = rain
-        soft = []
-        for key in sd.KEYS:                                        # hits arriving while the tower is off: filtered
-            tt, ee, ec = det.hits(key, self.off[key] + 0.5, T1)
-            soft += [(float(th), key, float(e)) for th, e, echo in zip(tt, ee, ec) if not echo]
-        self.soft = soft
 
     # ------------------------------------------------------------------ state
     def _power(self, key, t):
@@ -322,7 +299,6 @@ class Rise(Scene):
         self._draw_towers(f, t, st)
         self._draw_arps(f, t, st)
         self._draw_muons(f, t, st)
-        self._draw_rain(f, t, ctx)
         f.set_clip()
         self._draw_level(f, t, st)
         self._draw_header(f, t, st)
@@ -380,13 +356,6 @@ class Rise(Scene):
                 else:
                     f.dots("r", [tw.cx], [yh[k] - 3], 7.0 if k == "C" else 5.0, 1.8 * pw[k])
                     f.dots("w", [tw.cx], [yh[k] - 3], 2.2, 1.0 * pw[k])
-        # "now you know": the three towers answer once
-        a = t - self.know
-        if 0 <= a < 3.8:
-            e = math.exp(-a / 0.9)
-            for tw in self.tw.values():
-                f.rect("w", tw.x0, tw.top, tw.x1, tw.bot, 1.4 * e, width=L.LW_FRAME)
-                f.rects("w", tw.x0 + 3, tw.top + 3, tw.x1 - 3, tw.bot - 3, 0.12 * e)
 
     def _draw_arps(self, f, t, st):
         yh, pw = st["yh"], st["pw"]
@@ -399,7 +368,8 @@ class Rise(Scene):
             room = self.ray_room[k]
             ys = np.array([self._rung_y(i, yh[k]) for i in range(N_RUNG)])
             # the ladder itself is data: its rungs are thrown out from the bottom up when the column has climbed
-            # high enough, their numbers decoded; it is taken apart when its tower powers down (no fade)
+            # high enough, their numbers decoded (it would be taken apart if its tower powered down; the cut to 9.2
+            # comes first)
             xa, xb = sorted((edge - sgn * 2.0, edge + sgn * 50.0))
             with f.build(B.io(t - self.t_lad[k], self.off[k] + 0.4 - t, out=0.4, span=0.9),
                          (xa, float(yh[k]), xb, Y_LOW), flow="bt", wave=0.4, marks=False, key=60 + (k == "R")):
@@ -456,75 +426,6 @@ class Rise(Scene):
                 e = math.exp(-(a - dur) / 0.16)
                 f.dots("w", [x], [tw.top], 3.4, 1.6 * e)
                 f.rings("r", [x], [tw.top], [8 + 70 * e_h * (1 - e)], 0.9 * e, width=L.LW)
-
-    def _draw_rain(self, f, t, ctx):
-        y0, y1 = L.FY0 + 3, L.FY1 - 3
-        # the flux nobody sees: a faint drizzle over the whole wall once the detectors are dark
-        dark = float(smoothstep(self.off["L"] + 0.8, self.off["L"] + 3.2, t))
-        if dark > 0.01:
-            k = np.arange(120)
-            P = 1.3 + 2.3 * hash01(k, 41)
-            tt = t + hash01(k, 42) * P
-            cyc = np.floor(tt / P)
-            a = tt - cyc * P
-            dur = 0.2 + 0.2 * hash01(k, 43)
-            x = 60.0 + hash01(k, cyc, 44) * (L.W - 120.0)
-            ang = (hash01(k, cyc, 45) - 0.5) * 0.2
-            u = np.clip(a / dur, 0.0, 1.0)
-            fade = np.where(a < dur, 1.0, np.exp(-(a - dur) / 0.45))
-            m = fade > 0.03
-            xe = x + np.tan(ang) * (y1 - y0)
-            inten = dark * (0.16 + 0.24 * hash01(k, 46)) * fade
-            f.segments("r", x[m], np.full(int(m.sum()), y0), (x + (xe - x) * u)[m], (y0 + (y1 - y0) * u)[m],
-                       inten[m] * 0.4, inten[m], width=1.2)
-            hm = m & (a < dur)
-            f.dots("r", (x + (xe - x) * u)[hm], (y0 + (y1 - y0) * u)[hm], 2.0, 3.0 * inten[hm])
-        for (tm, x, ang, amp) in self.rain:
-            a = t - tm
-            if not (0 <= a < (6.0 if amp >= 1.0 else 1.3)):
-                continue
-            dur = (y1 - y0) / 5200.0
-            u = min(1.0, a / dur)
-            xe = x + math.tan(ang) * (y1 - y0)
-            fade = 1.0 if a < dur else math.exp(-(a - dur) / (0.35 if amp < 1 else 0.7))
-            f.segments("r", [x], [y0], [x + (xe - x) * u], [y0 + (y1 - y0) * u], (0.5 + 0.6 * amp) * amp * fade * 2.6
-                       if amp < 1 else 0.5 + 1.1 * fade, width=1.0 + 0.9 * amp if amp < 1 else 3.0)
-            if a < dur:
-                f.dots("r", [x + (xe - x) * u], [y0 + (y1 - y0) * u], 2.2 + 2.2 * amp, 1.5 * max(amp, 0.5))
-            if amp >= 1.0:                           # where it crosses the centre detector: rings
-                twc = self.tw["C"]
-                for j in range(3):
-                    aj = a - 0.05 - 0.22 * j
-                    if 0 <= aj < 2.2:
-                        uj = aj / 2.2
-                        f.rings("r", [x], [twc.top + 0.5 * twc.det_h], [14 + 330 * (1 - (1 - uj) ** 3)],
-                                1.3 * (1 - uj) ** 1.6, width=L.LW_BOLD)
-                f.dots("w", [x], [twc.top + 0.5 * twc.det_h], 5.0, 1.8 * math.exp(-a / 0.5))
-            if amp >= 1.0 and a > 0.1:
-                # its read-out is constructed outwards from the crossing point (leader drawn by a pen, tag made,
-                # lines decoded) and would be taken apart, not faded, if the scene went on
-                tw = self.hero
-                y = tw.top + 0.5 * tw.det_h + 24.0
-                xx = x + (xe - x) * (y - y0) / (y1 - y0)
-                sg = self.know_side
-                ex = (tw.x1 + 60.0) if sg > 0 else (tw.x0 - 60.0)
-                anc = "ls" if sg > 0 else "rs"
-                rate = int(round(getattr(ctx, "RATE_YOU", 63.0)))
-                l1, l2 = f"ONE OF {rate} /S THROUGH YOU", f"SEEN BY DET_C AT {sd.tc(self.know)}"
-                xt = ex + sg * (8.0 + max(len(l1) * L.T_LABEL, len(l2) * L.T_MICRO, 3 * 44 + 26) * CHAR_W)
-                with f.build(B.io(a - 0.1, 6.0 - a, out=0.45, span=1.0), (min(xx, xt) - 8.0, y - 104.0, max(xx, xt) + 8.0, y + 34.0),
-                             flow="out", origin=(xx, y), wave=0.25, line=0.2, marks=False, key=95):
-                    f.segments("w", [xx, ex - sg * 34], [y, y - 60], [ex - sg * 34, ex], [y - 60, y - 60], 0.8, width=L.LW)
-                    f.dots("w", [xx], [y], 3.0, 1.4)
-                    f.tag("r", ex + sg * 8, y - 46, "MU-", size=44, pad=8, bold=True, anchor=anc)
-                    f.text("w", ex + sg * 8, y - 6, l1, size=L.T_LABEL, alpha=0.95, anchor=anc)
-                    f.text("w", ex + sg * 8, y + 22, l2, size=L.T_MICRO, alpha=0.7, anchor=anc)
-        for (tm, key, e_h) in self.soft:           # the filtered hits of the break
-            a = t - tm
-            if 0 <= a < 2.5:
-                tw = self.tw[key]
-                u = a / 2.5
-                f.rings("w", [tw.cx], [tw.top], [20 + 200 * (1 - (1 - u) ** 2)], 0.3 * (1 - u) ** 1.5, width=2.0)
 
     # --- the centre: fan of rays, bass blooms, photons, level ----------------------------
     def _draw_fan(self, f, t, st):
@@ -636,29 +537,14 @@ class Rise(Scene):
 
     # --- HUD ------------------------------------------------------------------------
     def _draw_header(self, f, t, st):
-        k = 0 if t < SECTIONS[1][2] else 1 if t < SECTIONS[2][2] else 2
+        k = 0 if t < SECTIONS[1][2] else 1
         code, name, s0, s1 = SECTIONS[k]
         if self.card:
             x0, x1 = self.card
             w = x1 - x0
             # the section tag is made when its section starts
-            B.tag(f, "r" if k < 2 else "w", x0, 266, _fit([f"{code} // {name}", f"{code} // RISE", code], w, L.T_LABEL),
+            B.tag(f, "r", x0, 266, _fit([f"{code} // {name}", f"{code} // RISE", code], w, L.T_LABEL),
                   t - s0 - (0.1 if k == 0 else 0.0), size=L.T_LABEL, pad=4, cps=70.0, key=1)
-            t_dark = self.off["L"] + 0.6
-            if t >= t_dark:                     # the dark: what the voice says, written where the card was
-                size = L.T_SMALL if w >= 300 else L.T_MICRO
-                if 49 * size * CHAR_W <= w:
-                    head = ["DETECTORS OFFLINE // MU FLUX UNCHANGED 1 /CM2/MIN"]
-                else:
-                    head = ["DETECTORS OFFLINE", _fit(["MU FLUX UNCHANGED 1 /CM2/MIN", "MU FLUX UNCHANGED"], w, size, 0)]
-                for j, ln in enumerate(head):   # decoded, not faded in
-                    f.text("w", x0, 306 + j * 24, B.resolve(ln, t - t_dark, 60.0, 0.3 * j, key=2 + j), size=size, alpha=0.85)
-                y = 306 + len(head) * 24 + 22
-                lines = [(self.cue_here, "HERE"), (self.cue_rush, "RUSHING THROUGH YOU"),
-                         (self.cue_feel, "YOU STILL CANNOT FEEL IT"), (self.know, "NOW YOU KNOW")]
-                for j, (tv, word) in enumerate(lines):      # one tag per sentence of the voice, made on the word
-                    B.tag(f, "r" if j == 3 else "w", x0, y + j * 34, word, t - tv, size=size, pad=4, cps=40.0, key=6 + j,
-                          commit=(j == 3))
         if self.yld:
             x1 = self.yld[1]
             with f.build(t - T0 - 0.3, (self.yld[0], 244.0, x1 + 6.0, 298.0), flow="lr", wave=0.25, marks=False, key=9):
@@ -668,7 +554,7 @@ class Rise(Scene):
 
     def _draw_card(self, f, t, st):
         """Identity of the muon, stripped on the voice-over, rewritten as light. The card is constructed when
-        the scene starts and taken apart when the last tower powers down; nothing in it fades."""
+        the scene starts (the cut to 9.2 replaces it - the towers no longer power down); nothing in it fades."""
         pw = st["pw"]["L"]
         if pw < 0.01 or self.card is None:
             return
@@ -753,7 +639,7 @@ class Rise(Scene):
 
     def _draw_light(self, f, t, st):
         """The light it becomes (second outer column, when there is one): constructed when the scene starts,
-        taken apart when its tower powers down."""
+        held to the cut to 9.2."""
         pw = st["pw"]["R"]
         if pw < 0.01 or self.yld is None:
             return
@@ -789,8 +675,8 @@ class Rise(Scene):
                            size=L.T_MICRO, alpha=0.95 if k < 2 else 0.6)
 
     def _draw_bottom(self, f, t, st, ctx):
-        """Bragg curve, PMT barcode, level: constructed one after the other when the scene starts, taken apart
-        with their tower at the power-down (the centre one for the first two, the right one for the level)."""
+        """Bragg curve, PMT barcode, level: constructed one after the other when the scene starts, held to the
+        cut to 9.2."""
         y0, y1 = ctx.slots["y0"], ctx.slots["y1"]
         sa = t - T0
         left_c = self.off["C"] + 0.5 - t

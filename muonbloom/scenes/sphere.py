@@ -646,6 +646,7 @@ def ring_values(lay, cam, n_through, n_all, seed, jit):
 class Sphere(Scene):
     name = "sphere"
     towers = "auto"
+    strip_grows = False     # the top-right slot is taken by the kick grid when nobody speaks (_groove)
 
     def __init__(self, ctx):
         super().__init__(ctx)

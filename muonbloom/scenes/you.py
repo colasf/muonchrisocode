@@ -1,9 +1,10 @@
 """YOU - muons pass through you.   Sheet 1.3, 01:12.4 - 01:41.0 (the "hero WOW moment").
 
-About one muon per square centimetre per minute reaches the ground: ~63 go through a spectator
-every second, ~3 800 a minute, more than fifty thousand during the show (the voice of scene 5).
+About one muon per square centimetre per minute reaches the ground: ~70 go through a spectator
+every second (showdata.RATE_YOU), 4 200 a minute, more than fifty thousand during the show (the voice of
+scene 5).
 
-A 1.80 m body built from lofted ellipse sections: a rim-lit point cloud with CT-like slice
+A 1.80 m body (a real mesh, see muonbloom/human.py): a rim-lit point cloud with CT-like slice
 contours over a dot-lattice floor. Cosmic muons (red) rain through it on the 16th-note grid of
 the music (90 BPM here); each crossing is hit-tested: the part lights up, the slice at that
 height turns red, the energy left behind is logged.
@@ -48,6 +49,7 @@ import numpy as np
 
 from .. import build as B
 from .. import hud
+from .. import human
 from .. import layout as L
 from .. import showdata as sd
 from ..engine import Camera, OrthoCamera, hash01, smoothstep, text_w
@@ -67,38 +69,10 @@ Y_MID = 715.0
 WALL = (L.FX0 + 4.0, Y_TOP, L.FX1 - 4.0, Y_BOT)
 
 DEDX = 0.2                      # GeV per metre of tissue (~2 MeV/cm)
-RATE = 63.0                     # muons / s through one spectator (ctx.RATE_YOU)
+RATE = sd.RATE_YOU              # muons / s through one spectator
 
-_L = [  # name, ys, cx, cz, rx, rz   (figure faces +z, its left side is +x)
-    ("FOOT_L", [0.0, 0.03, 0.075], [0.12, 0.12, 0.115], [0.05, 0.045, 0.01], [0.042, 0.045, 0.036],
-     [0.115, 0.12, 0.055]),
-    ("LEG_L", [0.075, 0.12, 0.33, 0.47, 0.52, 0.72, 0.9], [0.115, 0.115, 0.112, 0.108, 0.106, 0.1, 0.095],
-     [0.0, 0.0, -0.005, 0.005, 0.005, 0.005, 0.0], [0.036, 0.04, 0.058, 0.048, 0.052, 0.075, 0.088],
-     [0.045, 0.048, 0.062, 0.05, 0.055, 0.08, 0.09]),
-    ("TORSO", [0.86, 0.92, 1.0, 1.08, 1.2, 1.3, 1.4, 1.46], [0.0] * 8, [0.0, 0.0, 0.005, 0.01, 0.02, 0.02, 0.01, 0.0],
-     [0.165, 0.178, 0.16, 0.145, 0.16, 0.178, 0.19, 0.12], [0.105, 0.115, 0.105, 0.1, 0.11, 0.12, 0.105, 0.08]),
-    ("NECK", [1.44, 1.5, 1.565], [0.0] * 3, [0.0, 0.0, 0.005], [0.058, 0.052, 0.055], [0.06, 0.055, 0.06]),
-    ("HEAD", [1.555, 1.585, 1.63, 1.68, 1.73, 1.77, 1.795, 1.8], [0.0] * 8, [0.02] * 8,
-     [0.055, 0.07, 0.08, 0.083, 0.078, 0.062, 0.04, 0.01], [0.07, 0.085, 0.095, 0.1, 0.097, 0.08, 0.05, 0.012]),
-    ("ARM_L", [0.84, 0.96, 1.1, 1.14, 1.3, 1.43], [0.335, 0.322, 0.3, 0.295, 0.262, 0.225],
-     [0.02, 0.015, 0.01, 0.005, 0.0, 0.0], [0.028, 0.034, 0.04, 0.042, 0.05, 0.056],
-     [0.03, 0.036, 0.042, 0.044, 0.052, 0.058]),
-    ("HAND_L", [0.64, 0.68, 0.74, 0.8, 0.845], [0.35, 0.35, 0.348, 0.343, 0.338], [0.02, 0.024, 0.025, 0.023, 0.02],
-     [0.012, 0.02, 0.022, 0.024, 0.026], [0.03, 0.046, 0.05, 0.045, 0.03]),
-]
-LOFTS = []
-for _name, _ys, _cx, _cz, _rx, _rz in _L:
-    LOFTS.append((_name, *(np.asarray(v, np.float64) for v in (_ys, _cx, _cz, _rx, _rz))))
-    if _name.endswith("_L"):
-        LOFTS.append((_name[:-2] + "_R", np.asarray(_ys), -np.asarray(_cx), np.asarray(_cz), np.asarray(_rx),
-                      np.asarray(_rz)))
-PART_NAMES = [l[0] for l in LOFTS]
-HEART = np.array([0.045, 1.27, 0.04])
-
-
-def _loft_at(l, y):
-    name, ys, cx, cz, rx, rz = l
-    return (np.interp(y, ys, cx), np.interp(y, ys, cz), np.interp(y, ys, rx), np.interp(y, ys, rz))
+PART_NAMES = human.PART_NAMES   # FOOT_L .. HAND_R (the figure faces +z, its left side is +x)
+HEART = human.HEART
 
 
 def spaced(n):
@@ -225,69 +199,24 @@ class Body:
 
     def __init__(self, seed=33, density=16000.0, floor=3.2):
         rng = np.random.default_rng(seed)
-        P, Nn, part = [], [], []
-        for li, l in enumerate(LOFTS):
-            ys = l[1]
-            y = np.arange(ys[0], ys[-1], 0.004)
-            cx, cz, rx, rz = _loft_at(l, y)
-            per = math.pi * (3 * (rx + rz) - np.sqrt((3 * rx + rz) * (rx + 3 * rz)))
-            cnt = rng.poisson(per * 0.004 * density)
-            yy = np.repeat(y, cnt) + rng.uniform(0, 0.004, cnt.sum())
-            th = rng.uniform(0, 2 * np.pi, cnt.sum())
-            cx, cz, rx, rz = _loft_at(l, yy)
-            n = np.stack([np.cos(th) / rx, np.zeros_like(th), np.sin(th) / rz], 1)
-            n /= np.linalg.norm(n, axis=1, keepdims=True)
-            P.append(np.stack([cx + rx * np.cos(th), yy, cz + rz * np.sin(th)], 1))
-            Nn.append(n)
-            part.append(np.full(len(yy), li, np.int16))
-        self.pts = np.concatenate(P).astype(np.float32)
-        self.nrm = np.concatenate(Nn).astype(np.float32)
-        self.pts_part = np.concatenate(part)
+        self.pts, self.nrm, self.pts_part = human.cloud(rng, density)
         self.rnd = rng.random(len(self.pts)).astype(np.float32)
         self.drift = rng.normal(0, 1, (len(self.pts), 3)).astype(np.float32)
         # CT-like slice contours every 3 cm
-        self.levels = np.arange(0.015, 1.8, 0.03)
-        segs_a, segs_b, lev = [], [], []
-        ang = np.linspace(0, 2 * np.pi, 41)
-        for k, y in enumerate(self.levels):
-            for l in LOFTS:
-                if l[1][0] <= y <= l[1][-1]:
-                    cx, cz, rx, rz = _loft_at(l, y)
-                    e = np.stack([cx + rx * np.cos(ang), np.full_like(ang, y), cz + rz * np.sin(ang)], 1)
-                    segs_a.append(e[:-1])
-                    segs_b.append(e[1:])
-                    lev.append(np.full(40, k, np.int32))
-        self.ca = np.concatenate(segs_a).astype(np.float32)
-        self.cb = np.concatenate(segs_b).astype(np.float32)
-        self.clev = np.concatenate(lev)
+        self.levels, self.ca, self.cb, self.clev = human.LEVELS, human.CA, human.CB, human.CLEV
         g = np.arange(-floor, floor + 1e-3, 0.1)
         X, Z = np.meshgrid(g, g)
         self.lattice = np.stack([X.ravel(), np.zeros(X.size), Z.ravel()], 1).astype(np.float32)
         self.lat_major = ((np.abs(np.round(X * 10)) % 5 == 0) & (np.abs(np.round(Z * 10)) % 5 == 0)).ravel()
 
     def inside(self, p):
-        """Which loft contains each point (N, 3) -> index or -1."""
-        out = np.full(len(p), -1, np.int32)
-        for li, l in enumerate(LOFTS):
-            ys = l[1]
-            m = (p[:, 1] >= ys[0]) & (p[:, 1] <= ys[-1]) & (out < 0)
-            if not m.any():
-                continue
-            cx, cz, rx, rz = _loft_at(l, p[m, 1])
-            ins = ((p[m, 0] - cx) / rx) ** 2 + ((p[m, 2] - cz) / rz) ** 2 <= 1.0
-            out[np.nonzero(m)[0][ins]] = li
-        return out
+        """Which part contains each point (N, 3) -> index or -1."""
+        return human.inside(p)
 
     def target_in(self, name, rng):
         if name == "HEART":
             return HEART + rng.normal(0, 0.012, 3)
-        l = LOFTS[PART_NAMES.index(name)]
-        ys = l[1]
-        y = rng.uniform(ys[0] + 0.25 * (ys[-1] - ys[0]), ys[-1] - 0.25 * (ys[-1] - ys[0]))
-        cx, cz, rx, rz = _loft_at(l, y)
-        a = rng.uniform(0, 2 * np.pi)
-        rr = rng.uniform(0, 0.55)
-        return np.array([cx + rx * rr * math.cos(a), y, cz + rz * rr * math.sin(a)])
+        return human.core(name, rng)
 
     def muon(self, rng, t_hit, tgt, hero, zen_sigma=0.38, speed=22.0, zen=None, top=2.9):
         """A straight track through `tgt`; t_hit = time its head reaches the target."""
@@ -387,17 +316,12 @@ class Body:
             self._outline(f, cam, outline)
 
     def _outline(self, f, cam, alpha):
-        """Dotted silhouette: for every height the extreme screen x of each limb (ortho views)."""
-        for l in LOFTS:
-            ys = np.arange(l[1][0], l[1][-1], 0.012)
-            cx, cz, rx, rz = _loft_at(l, ys)
-            r_, u_ = cam.R[0].astype(np.float64), cam.R[1].astype(np.float64)
-            ext = np.sqrt((rx * r_[0]) ** 2 + (rz * r_[2]) ** 2)
-            c = np.stack([cx, ys, cz], 1) - cam.pos[None]
-            sx = cam.cx + cam.scale * (c @ r_)
-            sy = cam.cy - cam.scale * (c @ u_)
-            for sgn in (-1.0, 1.0):
-                f.dots("w", sx + sgn * cam.scale * ext, sy, 1.5, 0.75 * alpha)
+        """Dotted silhouette: for every height the two ends of every run the figure covers (ortho views)."""
+        r_, u_ = cam.R[0].astype(np.float64), cam.R[1].astype(np.float64)
+        ys, off = human.outline(float(r_[0]), float(r_[2]))
+        sx = cam.cx + cam.scale * (off + ys * r_[1] - float(cam.pos @ r_))
+        sy = cam.cy - cam.scale * (ys * u_[1] - float(cam.pos @ u_))
+        f.dots("w", sx, sy, 1.5, 0.75 * alpha)
 
 
 def draw_muon(f, cam, m, a, col=None, gain=1.0, tag=True, lines=True):
@@ -787,8 +711,8 @@ class You(Scene):
         # what the neighbouring bay is: the same rain, the same floor (it stays through the three views of the
         # figure: built once, at the drop)
         if P.side is not None and kind in ("persp", "ortho", "thorax"):
-            info = fit_text(["YOU // MUON BLOOM // 1.80 M // EFFECTIVE AREA 0.38 M2", "YOU // 1.80 M // AREA 0.38 M2",
-                             "YOU // 1.80 M"], width(P.side), L.T_SMALL)
+            info = fit_text([f"YOU // MUON BLOOM // 1.80 M // EFFECTIVE AREA {sd.AREA_YOU:.2f} M2",
+                             f"YOU // 1.80 M // AREA {sd.AREA_YOU:.2f} M2", "YOU // 1.80 M"], width(P.side), L.T_SMALL)
             x1 = P.side[1] - 6
             box = (x1 - text_w(info, L.T_SMALL) - 10, y0 - 22, x1 + 6, y0 + 34)
             plate(f, box, t - BAR0 - 0.1, flow="lr")
@@ -813,8 +737,8 @@ class You(Scene):
         if kind in self.MEDIA:
             rows_, t_rows = self.MEDIA[kind], self._cut(t)
         else:
-            rows_ = ["MU FLUX    1 /CM2/MIN", "THROUGH YOU   ~63 /S", "HEIGHT       1.800 M", "AREA_EFF     0.38 M2",
-                     "DE/DX     2.0 MEV/CM"]
+            rows_ = ["MU FLUX    1 /CM2/MIN", f"THROUGH YOU   ~{RATE:.0f} /S", "HEIGHT       1.800 M",
+                     f"AREA_EFF     {sd.AREA_YOU:.2f} M2", "DE/DX     2.0 MEV/CM"]
             t_rows = BAR0 + 0.2
         yr = y0 + ts + 64
         with f.build(t - t_rows, (x0 - 6, yr - 24, x1, yr + 5 * 25.5), flow="tb", wave=0.25, marks=False, key=40):
@@ -974,7 +898,8 @@ class You(Scene):
             cx0, cx1 = panels[0]
             with block(0):
                 hud.panel_header(f, cx0, cx1, y0, "MUONS THROUGH YOU")
-                cols = [("PER SECOND", "63"), ("PER MINUTE", "3 780"), ("PER DAY", "5.4 M"), ("IN A LIFE", "159 BN")]
+                cols = [("PER SECOND", sd.through_you_in(1)), ("PER MINUTE", sd.through_you_in(60)),
+                        ("PER DAY", sd.through_you_in(86400, short=True)), ("IN A LIFE", sd.through_you_in(80 * sd.YEAR))]
                 n = int(min(4, max(1, (cx1 - cx0) // 180)))
                 cols = {4: cols, 3: [cols[0], cols[1], cols[3]], 2: [cols[0], cols[3]], 1: [cols[0]]}[n]
                 cw = (cx1 - cx0) / n
