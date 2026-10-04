@@ -2,4 +2,5 @@
 # [ ] MM:SS:FF | scene | when it was written | the comment      (FF = frames, [x] = done)
 [x] 07:03:07 | glitch | 2026-10-03 19:29 | don't build up during the glitchy sequence they can appear in a cut then desapear with a white flash try to sync it more to the music
 [x] 07:26:52 | glitch | 2026-10-03 19:29 | at the end it fine to deconstruct them like it's already 
-[ ] 00:10:39 | origin | 2026-10-04 16:02 | snapshot snapshots/00-10-39_origin.png
+[x] 00:10:39 | origin | 2026-10-04 16:02 | snapshot snapshots/00-10-39_origin.png
+[x] 00:15:58 | origin | 2026-10-04 18:15 | snapshot snapshots/00-15-58_origin.png

@@ -18,6 +18,7 @@ from .engine import CHAR_W, hash01, smoothstep, text_w
 BLOOM = (0.3, 0.26, 0.2, 0.16, 0.13, 0.1, 0.08, 0.06)
 _GLYPHS = "0123456789ABCDEF#%/*+-=<>"
 SUB_CPS = 46.0                        # typing speed of the subtitles (chars / s)
+NOGLOW_PAD = 6.0                      # the subtitle has no glow (Frame.noglow_rects): its box, and this much around it
 SUB_OUT = 0.3                         # seconds a subtitle line takes to be un-typed when it leaves
 HERO_MAX = 16                         # single-cue paragraphs this short are set as a tag (YOU, A bloom, ...)
 
@@ -114,6 +115,7 @@ def strip_rect(t, rect=None):
 
 def subtitle(f, t, rect=None):
     """Voice-over text in the box at the top right, typed on. Clears whatever is behind the box.
+    The subtitle does not glow: plain white letters in a plain border (also the single words set as a tag).
     Nothing fades: the box opens from the right edge of the frame and closes back to it, the single words
     set as a tag are made (box pushed out, letters decoded) and taken apart, a line that leaves is un-typed."""
     box_a = subtitle_box_alpha(t)
@@ -127,6 +129,7 @@ def subtitle(f, t, rect=None):
         size = 86
         w = _hero_tag_w(cue, size)
         f.occlude(x1 - 44 - w - 18, y0 + 14, x1 - 12, y0 + 156)
+        f.noglow_rects.append((x1 - 44 - w - 18, y0 + 14, x1 - 12, y0 + 156))
         cps = 40.0
         B.tag(f, "w", x1 - 44 - w, y0 + 118, s, B.io(age, cue.end - t, out=0.25, span=(len(s) + 4) / cps), size=size,
               pad=14, bold=True, cps=cps, key=7)
@@ -135,6 +138,7 @@ def subtitle(f, t, rect=None):
         return
     xa = x1 - (x1 - x0) * float(B.ease(box_a))            # the plate slides open from the frame edge
     f.occlude(xa, y0, x1, y1)
+    f.noglow_rects.append((xa - NOGLOW_PAD, y0 - NOGLOW_PAD, x1 + NOGLOW_PAD, y1 + NOGLOW_PAD))    # border included
     f.rect("w", xa, y0, x1, y1, 0.95, width=L.LW_FRAME)
     if box_a < 1.0:
         f.dots("w", [xa], [y1], 3.6, 1.7)

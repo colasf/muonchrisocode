@@ -143,17 +143,30 @@ def _up2(a, shape):
     return a[..., : shape[0], : shape[1]]
 
 
-def bloom(stack, weights):
-    """Multi-scale glow. `weights[k]` scales pyramid level k+1 (1/2, 1/4, ... res)."""
+def half_boxes(boxes):
+    """Pixel boxes -> the boxes of the half-size level of the bloom that cover them."""
+    return [(max(x0, 0) // 2, max(y0, 0) // 2, (max(x1, 0) + 1) // 2, (max(y1, 0) + 1) // 2) for (x0, y0, x1, y1) in boxes]
+
+
+def bloom(stack, weights, mute=()):
+    """Multi-scale glow. `weights[k]` scales pyramid level k+1 (1/2, 1/4, ... res).
+    mute = boxes of the half-size level (half_boxes) that have NO GLOW: what is in them is taken out of the
+    source of the glow (level 1, before the smaller levels are made of it), and the glow summed at level 1 is
+    put out in them before it goes back to full size - nothing in the box glows, nothing glows into it."""
     levels = [stack]
     cur = stack
-    for _ in weights:
+    for k in range(len(weights)):
         cur = _down2(cur)
+        if k == 0:
+            for (x0, y0, x1, y1) in mute:
+                cur[..., y0:y1, x0:x1] = 0.0
         levels.append(cur)
     acc = None
     for k in range(len(weights), 0, -1):
         lv = _blur(levels[k]) * weights[k - 1]
         acc = lv if acc is None else _up2(acc, lv.shape[-2:]) + lv
+    for (x0, y0, x1, y1) in mute:
+        acc[..., y0:y1, x0:x1] = 0.0
     return _up2(acc, stack.shape[-2:])
 
 
@@ -177,6 +190,7 @@ class Frame:
         self._occl = []
         self.post = []              # callables(base, frame) applied to the light layers before the bloom
         self.invert_rects = []      # design-space rects shown inverted (white field, black lines)
+        self.noglow_rects = []      # design-space rects without glow (see bloom): the subtitle box
         self._bld = None            # the block being constructed (see build()), or build.MUTE: draw nothing
         self.set_view()
         self.set_clip()
@@ -619,6 +633,12 @@ class Frame:
         img.paste(255, (int(self.tx(x)), int(self.ty(y)) - tmp.size[1]), tmp)
 
     # -- output --------------------------------------------------------------
+    def pixel_boxes(self, rects):
+        """Design-space rects -> the pixel boxes that cover them, cut to the picture."""
+        s = self.s
+        return [(max(int(x0 * s), 0), max(int(y0 * s), 0), min(int(math.ceil(x1 * s)), self.W), min(int(math.ceil(y1 * s)), self.H))
+                for (x0, y0, x1, y1) in rects]
+
     def finish(self, bloom_weights=(0.5, 0.45, 0.38, 0.34, 0.3, 0.28, 0.24, 0.2), bloom_gain=1.0,
                text_gain=1.0, exposure=1.0, invert=False, invert_rect=None, dither_seed=3, palette=None,
                palette_mix=1.0):
@@ -634,7 +654,8 @@ class Frame:
                 base[j] += np.asarray(self._txt[k], np.float32) * (text_gain / 255.0)
         for fn in self.post:                    # glitch-type effects: fn(base (2, H, W) float32, frame) -> base
             base = fn(base, self)
-        light = base + bloom(base, bloom_weights) * bloom_gain if bloom_gain else base
+        mute = half_boxes(self.pixel_boxes(self.noglow_rects))
+        light = base + bloom(base, bloom_weights, mute) * bloom_gain if bloom_gain else base
         wt = _tonemap(light[0])
         rt = _tonemap(light[1])
         rgb = np.empty((H, W, 3), np.float32)

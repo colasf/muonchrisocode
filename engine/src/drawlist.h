@@ -10,7 +10,8 @@ constexpr uint32_t VERSION = 1;
 constexpr size_t HEADER = 256;
 constexpr size_t SECTION_TABLE = 96;
 
-enum Section { STATES, SEGS, DOTS, SPLATS, RECTS, LIGHTOPS, OCCL, TEXTOPS, CHARS, GLYPHS, INVERT, POSTOPS, NSEC };
+enum Section { STATES, SEGS, DOTS, SPLATS, RECTS, LIGHTOPS, OCCL, TEXTOPS, CHARS, GLYPHS, INVERT, POSTOPS, NOGLOW, NSEC };
+// NOGLOW came without a new VERSION: a blob made before it has zeros there (no box).
 
 enum Flags : uint32_t { POST_UNKNOWN = 1, PALETTE = 2 };
 
@@ -57,7 +58,7 @@ struct View {
         p = data;
         size = h->bytes;
         static const size_t stride[NSEC] = { sizeof(State), sizeof(Seg), sizeof(Dot), sizeof(Splat), sizeof(Rect), sizeof(LightOp),
-                                             sizeof(Box), sizeof(TextOp), 4, 0, sizeof(Box), sizeof(PostOp) };
+                                             sizeof(Box), sizeof(TextOp), 4, 0, sizeof(Box), sizeof(PostOp), sizeof(Box) };
         for (int k = 0; k < NSEC; k++) {
             memcpy(&sec[k], data + SECTION_TABLE + 12 * k, 12);
             if ((size_t)sec[k].offset + sec[k].bytes > size) return false;

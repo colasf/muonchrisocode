@@ -26,6 +26,7 @@ What is recorded, and what is left to the renderer:
                              bitmaps: every glyph a frame uses for the first time travels with it (`glyphs`)
     occl                     the boxes of the tags: geometry under them is zeroed at the very end
     invert, post, options    what Frame.finish needs
+    noglow                   pixel boxes without glow (engine.bloom: `mute`), e.g. the subtitle box
 
 `replay(blob)` rasterises a blob on the CPU with the code of engine.Frame: it is the specification of the
 format, and the check that a recorded frame is the frame (engine/tools/check_drawlist.py).
@@ -52,8 +53,9 @@ _HEAD = struct.Struct("<4sIIIdIIffff8fII")        # magic, version, bytes, flags
 #                                                   text_gain, bloom weights (8), dither seed, frame number
 _SEC0 = 96                                          # the section table starts here: (offset, count, bytes) each
 (S_STATES, S_SEGS, S_DOTS, S_SPLATS, S_RECTS, S_LIGHTOPS, S_OCCL, S_TEXTOPS, S_CHARS, S_GLYPHS, S_INVERT,
- S_POSTOPS) = range(12)
-NSEC = 12
+ S_POSTOPS, S_NOGLOW) = range(13)
+NSEC = 13           # S_NOGLOW was added without a new VERSION: an older blob has zeros there (no box), an
+#                     older engine does not read it (it draws the glow everywhere)
 
 FLAG_POST_UNKNOWN = 1          # the frame had a `post` callable the recorder does not know: it is not in the list
 FLAG_PALETTE = 2               # finish() was asked for a palette (not used by the show): ignored
@@ -193,6 +195,7 @@ class DrawList(_E.Frame):
         self._occl = []
         self.post = []
         self.invert_rects = []
+        self.noglow_rects = []
         self._bld = None
         b = _POOL.pop() if _POOL else dict(seg=np.empty((1 << 15, SEG_F), np.float32), dot=np.empty((1 << 14, DOT_F), np.float32),
                                            splat=np.empty((1 << 15, SPLAT_F), np.float32), rect=np.empty((1 << 12, RECT_F), np.float32))
@@ -455,7 +458,8 @@ class DrawList(_E.Frame):
         inv = [(max(int(x0 * s), 0), max(int(y0 * s), 0), min(int(math.ceil(x1 * s)), W), min(int(math.ceil(y1 * s)), H))
                for (x0, y0, x1, y1) in rects]
         self.opt = dict(bloom_weights=w, bloom_gain=float(bloom_gain or 0.0), text_gain=float(text_gain),
-                        exposure=float(exposure), dither_seed=int(dither_seed), flags=flags, invert=inv, postops=postops)
+                        exposure=float(exposure), dither_seed=int(dither_seed), flags=flags, invert=inv, postops=postops,
+                        noglow=_E.Frame.pixel_boxes(self, self.noglow_rects))
         return self
 
     def counts(self):
@@ -502,6 +506,7 @@ class DrawList(_E.Frame):
             (glyphs, ng),
             (np.array(o["invert"], BOX), len(o["invert"])),
             (np.array(o["postops"], POSTOP), len(o["postops"])),
+            (np.array(o["noglow"], BOX), len(o["noglow"])),
         ]
         sizes = [len(d) if isinstance(d, bytes) else d.nbytes for d, _ in secs]
         total = HEADER + sum(sizes)
@@ -676,6 +681,7 @@ class Blob:
         self.lightops, self.occl, self.textops = rec(S_LIGHTOPS, LIGHTOP), rec(S_OCCL, BOX), rec(S_TEXTOPS, TEXTOP)
         self.chars = np.frombuffer(mv, "<u4", sec[S_CHARS][1], sec[S_CHARS][0])
         self.invert, self.postops = rec(S_INVERT, BOX), rec(S_POSTOPS, POSTOP)
+        self.noglow = rec(S_NOGLOW, BOX)
         self.glyphs = {}                            # (font key, code point) -> (adv, ox, oy, bitmap (h, w) uint8)
         off = sec[S_GLYPHS][0]
         for _ in range(sec[S_GLYPHS][1]):
@@ -801,7 +807,8 @@ def _finish(fr, b, as_float):
             base[j] += np.asarray(fr._txt[k], np.float32) * (b.text_gain / 255.0)
     for fn in fr.post:
         base = fn(base, fr)
-    light = base + _E.bloom(base, b.bloom_weights) * b.bloom_gain if b.bloom_gain else base
+    mute = _E.half_boxes([tuple(int(v) for v in r) for r in b.noglow])
+    light = base + _E.bloom(base, b.bloom_weights, mute) * b.bloom_gain if b.bloom_gain else base
     wt, rt = _E._tonemap(light[0]), _E._tonemap(light[1])
     rgb = np.empty((b.H, b.W, 3), np.float32)
     for c in range(3):

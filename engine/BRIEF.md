@@ -113,7 +113,9 @@ Things to get right:
 - **Finish** (`Frame.finish`, called through `hud.finish`): layers times `exposure`, text
   added, `post` callables, bloom (8-level pyramid, weights `hud.BLOOM`, gain 0.75 by default),
   soft-knee tonemap (knee 0.72) per layer, white + red times the red colour, optional inverted
-  rects (white field, black lines, red stays red), dither.
+  rects (white field, black lines, red stays red), dither. `Frame.noglow_rects` (the subtitle
+  box, `hud.subtitle`) are left out of the bloom: black on its level 1, as a source and as a
+  sum (`engine.bloom(mute=)`, section `noglow` of the draw list, `Renderer::mute`).
 - **One pixel-space effect:** `scenes/glitch.py: make_post` tears, repeats and smears the
   light buffers on the beat (06:55 to 07:34). It has to be rewritten as a shader, or kept on
   the CPU for that scene.

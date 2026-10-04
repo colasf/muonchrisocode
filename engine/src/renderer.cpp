@@ -64,6 +64,7 @@ bool Renderer::init(ID3D11Device* dev, ID3D11DeviceContext* ctx, const std::wstr
     if (!compile(L"finish.hlsl", "VSFull", "PSBlurUp", mBlurUp, err)) return false;
     if (!compile(L"finish.hlsl", "VSFull", "PSFinal", mFinal, err)) return false;
     if (!compile(L"finish.hlsl", "VSBox", "PSFinal", mFinalBox, err)) return false;
+    if (!compile(L"finish.hlsl", "VSBoxAt", "PSZero", mMuteBox, err)) return false;
     if (!compile(L"post.hlsl", "VSRect", "PSRoll", mRoll, err)) return false;
     if (!compile(L"post.hlsl", "VSRect", "PSStamp", mStamp, err)) return false;
     if (!compile(L"post.hlsl", "VSRect", "PSPour", mPour, err)) return false;
@@ -612,6 +613,17 @@ void Renderer::finish(bool floatOut)
     mCtx->OMSetRenderTargets(1, &none, nullptr);
 }
 
+// Black in the boxes without glow, on a half-size level of the bloom (the target bound).
+void Renderer::mute(Target& t)
+{
+    if (mMuteCpu.empty()) return;
+    srv(4, mMute.srv.Get());
+    DrawCB c = {};
+    c.p0[0] = (float)t.w;
+    c.p0[1] = (float)t.h;
+    draw(mMuteBox, (UINT)mMuteCpu.size(), 0, &c);
+}
+
 bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::string& err)
 {
     dl::View v;
@@ -659,6 +671,14 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
     mBoxesCpu.assign(v.at<dl::Box>(dl::INVERT), v.at<dl::Box>(dl::INVERT) + ninv);
     for (auto& o : mBoxesCpu)
         if (o.x1 <= o.x0 || o.y1 <= o.y0) o.x1 = o.x0, o.y1 = o.y0;
+    // the boxes without glow (the subtitle), as boxes of the half-size level of the bloom (engine.half_boxes)
+    const uint32_t nmute = v.count(dl::NOGLOW);
+    mMuteCpu.assign(v.at<dl::Box>(dl::NOGLOW), v.at<dl::Box>(dl::NOGLOW) + nmute);
+    for (auto& o : mMuteCpu) {
+        o.x0 = std::max(o.x0, 0) / 2, o.y0 = std::max(o.y0, 0) / 2;
+        o.x1 = (std::max(o.x1, 0) + 1) / 2, o.y1 = (std::max(o.y1, 0) + 1) / 2;
+        if (o.x1 <= o.x0 || o.y1 <= o.y0) o.x1 = o.x0, o.y1 = o.y0;
+    }
 
     // text ops -> one instance per rect and per glyph, in order
     mInstCpu.clear();
@@ -701,7 +721,8 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
            && upload(mRects, v.at<dl::Rect>(dl::RECTS), nrect, sizeof(dl::Rect), true)
            && upload(mOps, mOpsCpu.data(), mOpsCpu.size(), sizeof(dl::LightOp), true)
            && upload(mInst, mInstCpu.data(), mInstCpu.size(), sizeof(TextInst), true)
-           && upload(mBoxes, mBoxesCpu.data(), ninv, sizeof(dl::Box), true);
+           && upload(mBoxes, mBoxesCpu.data(), ninv, sizeof(dl::Box), true)
+           && upload(mMute, mMuteCpu.data(), nmute, sizeof(dl::Box), true);
     if (!ok) { err = "cannot create the geometry buffers"; return false; }
 
     mInfo.segs = nseg;
@@ -791,6 +812,7 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
             c.p0[0] = (float)(src.w - 1);
             c.p0[1] = (float)(src.h - 1);
             full(mDown, c);
+            if (k == 1) mute(mDownT[1]);         // what is in a box without glow is not a source of the glow
         }
         for (int k = 8; k >= 1; k--) {
             unbind();
@@ -807,6 +829,7 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
                 c.p1[1] = 1.0f;
             }
             full(mBlurUp, c);
+            if (k == 1) mute(mAcc[1]);           // ... and no glow comes into it
         }
     }
 

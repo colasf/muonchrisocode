@@ -1,5 +1,5 @@
 // Frame.finish: light * exposure + text, bloom (8-level pyramid), soft-knee tonemap per layer,
-// white + red, inverted rects, dither. The lift of the output is the one thing here the reference does
+// white + red, inverted rects, dither. Boxes without glow (the subtitle) are put out in the bloom. The lift of the output is the one thing here the reference does
 // not have: it is the engine's own, set on site (0 = the picture of the reference).
 #include "common.hlsl"
 
@@ -94,4 +94,18 @@ float4 VSBox(uint vid : SV_VertexID, uint iid : SV_InstanceID) : SV_Position
 {
     Box r = gBoxes[dBase + iid];
     return clipFromWindow(float2((vid & 1) ? r.x1 : r.x0, (vid & 2) ? r.y1 : r.y0));
+}
+
+// A box of a smaller target (a level of the bloom).   dP0.xy = size of the target
+float4 VSBoxAt(uint vid : SV_VertexID, uint iid : SV_InstanceID) : SV_Position
+{
+    Box r = gBoxes[dBase + iid];
+    float2 w = float2((vid & 1) ? r.x1 : r.x0, (vid & 2) ? r.y1 : r.y0);
+    return float4(w.x / dP0.x * 2.0 - 1.0, 1.0 - w.y / dP0.y * 2.0, 0.0, 1.0);
+}
+
+// the boxes without glow (the subtitle): black on level 1 of the bloom, as a source and as a sum
+float4 PSZero(float4 pos : SV_Position) : SV_Target
+{
+    return float4(0.0, 0.0, 0.0, 0.0);
 }

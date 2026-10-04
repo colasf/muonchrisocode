@@ -41,7 +41,7 @@ class NullFrame(engine.Frame):
         self.acc = {}
         self._pend = {k: [] for k in engine.LAYERS}
         self._diff, self._txt, self._txt_draw, self._occl = {}, {}, {}, []
-        self.post, self.invert_rects, self._bld = [], [], None
+        self.post, self.invert_rects, self.noglow_rects, self._bld = [], [], [], None
         self.set_view()
         self.set_clip()
 

@@ -106,12 +106,13 @@ private:
     void place(ID3D11RenderTargetView* rtv, int w, int h, Target& src, float x0, float y0, float x1, float y1, const float* around);
     void pass(const Shader& sh, Target& dst, int x0, int y0, int x1, int y1, float a = 0, float b = 0, float c = 0);
     void copy(Target& dst, Target& src, int x0, int y0, int x1, int y1);
+    void mute(Target& t);
 
     ID3D11Device* mDev = nullptr;
     ID3D11DeviceContext* mCtx = nullptr;
     std::wstring mShaderDir;
 
-    Shader mSeg, mDot, mSplat, mRect, mOp, mText, mBase, mDown, mBlurUp, mFinal, mFinalBox;
+    Shader mSeg, mDot, mSplat, mRect, mOp, mText, mBase, mDown, mBlurUp, mFinal, mFinalBox, mMuteBox;
     Shader mRoll, mStamp, mPour, mBright, mDrag, mSmear, mBlit, mOver;
     ComPtr<ID3D11BlendState> mBlendLight, mBlendText, mBlendNone, mBlendAlpha;
     ComPtr<ID3D11RasterizerState> mRaster;
@@ -130,10 +131,11 @@ private:
     Target mScratch[3];                        // for the post-process: what an operation reads
     Target mDownT[9], mAcc[9];                 // bloom pyramid, levels 1..8
 
-    GpuBuffer mStates, mSegs, mExpand, mDots, mSplats, mRects, mOps, mInst, mBoxes;
+    GpuBuffer mStates, mSegs, mExpand, mDots, mSplats, mRects, mOps, mInst, mBoxes, mMute;
     std::vector<uint32_t> mExpandCpu;
     std::vector<dl::LightOp> mOpsCpu;
     std::vector<dl::Box> mBoxesCpu;
+    std::vector<dl::Box> mMuteCpu;             // the boxes without glow, at the half size of the bloom
     std::vector<TextInst> mInstCpu;
 
     ComPtr<ID3D11Texture2D> mAtlas;
