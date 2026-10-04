@@ -1,41 +1,5 @@
 # Muon Bloom - comments written in the engine window (key C, or the COMMENT button).
 # [ ] MM:SS:FF | scene | when it was written | the comment      (FF = frames, [x] = done)
-[x] 00:34:50 | star | 2026-10-03 12:27 | i don't like the stepped way th supernova grow
-[x] 01:03:29 | messenger | 2026-10-03 12:28 | galaxy labels should not jump from left to right
-[x] 01:07:38 | shower | 2026-10-03 12:30 | we should create a variant of that scene with the muon that hit the atmoshpere as it's coming back later. i really like the stylise way we illustrate the phenomene but it should be different that the scene that come later
-[x] 01:19:22 | you | 2026-10-03 12:34 | add an hud element uder meanwhire every square metters could be something that illustrate the start the muon are "comming from" check image star.jpg in claude/ref/hud
-[x] 01:23:30 | you | 2026-10-03 12:35 | motion of the hit barcode is not smooth
-[x] 01:28:20 | you | 2026-10-03 12:36 | i really like that illustration in the center but it should be more animated
-[x] 01:31:07 | you | 2026-10-03 12:37 | the point of the illustration in the center should be animated a little bit and the voronoi diagram should fellow
-[x] 01:35:55 | you | 2026-10-03 12:37 | that illustration in the center don't match the stylise style we should go with dna more stylise and graphical
-[x] 01:45:35 | detector | 2026-10-03 12:38 | we should make the muon detector more details check the image in claude/ref/muon detector
-[x] 01:55:15 | detector | 2026-10-03 12:40 | energy code light and sound hud elements should be more animated 
-[x] 02:02:09 | detector | 2026-10-03 12:40 | more energy brighter louder hud elements should be more animated
-[x] 02:06:38 | detector | 2026-10-03 12:41 | motion of the detector is not good add ease in ease out 
-[x] 02:16:14 | bloom | 2026-10-03 12:43 | motion of the red elements on top of the central tower in not good look at the scene1and2.mov example file at 2:35
-[x] 02:29:09 | bloom | 2026-10-03 12:45 | motion of the white line is not good look at the move1and2.mov 2:35 as reference the way it was done in touchdesigner was by applying a noise to the positon of the points of the line the amplitude of the noise was driven by the distance of the start 0 close to the tower 1 in the center
-[x] 02:51:31 | bloom | 2026-10-03 12:46 | line are jupping and are duplicated it should stay smooth they should just grow
-[x] 02:56:16 | bloom | 2026-10-03 12:46 | motion of the line is not good it's jaggy and the line duplicate
-[x] 03:48:50 | galaxy | 2026-10-03 12:48 | rotation curve // V(R) should be animated
-[x] 03:58:26 | sphere | 2026-10-03 13:02 | view 1 : deformation of the sphere should be more animated. tomogram : should contains more animation
-[x] 03:59:42 | sphere | 2026-10-03 13:02 | detector hud should be more animated
-[x] 04:23:55 | sphere | 2026-10-03 13:03 | stream bacode motion is a little bit jaggy
-[x] 04:52:21 | flood | 2026-10-03 13:03 | add a hud element under entries // last 10 s
-[x] 04:53:39 | flood | 2026-10-03 13:05 | there is a small jump between the subtitle box and the graph on is left remove it
-[x] 05:22:59 | dance | 2026-10-03 13:09 | i really like that scene with the muon that hit the atmoshpere but it's repeating too much in that sequence we need to add some variation. the show will be projected on a wall in cincinati at the cross of 9th street and vine street add some stylise 3d view of the city and that location to that sequence
-[x] 05:28:51 | dance | 2026-10-03 13:09 | red graph element should be animated when the line pass over them
-[x] 05:43:16 | dance | 2026-10-03 13:10 | bird rate >> bare code motion is a little bit jaggy
-[x] 05:53:21 | dance | 2026-10-03 13:11 | remove that bar code overlay
-[x] 06:08:53 | dance | 2026-10-03 13:11 | remove that barcode everlay
-[x] 06:24:13 | dance | 2026-10-03 13:12 | remove all the bar code overlay from that sequence
-[x] 07:03:03 | glitch | 2026-10-03 13:28 | replace that glitch sequence by something more graphical and in the hud style the idea is to have hud elements that illustrage muon, quantum physics and general relativity that change really fast to keep that sensory overload feeling you can look in claude/ref/muon folder for reference and look online everything should be scientifically relevent 
-[x] 07:11:54 | glitch | 2026-10-03 13:28 | and use the audio to drive the sequence 
-[x] 08:34:09 | rise | 2026-10-03 13:30 | the line that lever the detector should be connected to the top of the white particles streams
-[x] 08:35:20 | rise | 2026-10-03 13:31 | pmt c >> bare code is jaggy
-[x] 09:38:43 | disintegrate | 2026-10-03 13:32 | tomogram hud should be more animated 
-[x] 10:04:58 | outro | 2026-10-03 13:33 | star colapse circle should be animated
-[x] 10:17:37 | outro | 2026-10-03 13:33 | human body should rotate
-[x] 11:38:16 | outro | 2026-10-03 13:35 | when the circle grow it's jaggy it should be more smooth
-[x] 12:01:33 | outro | 2026-10-03 13:36 | we should add something more impressive for the grand final
-[x] 12:11:33 | credits | 2026-10-03 13:38 | concept and music : Christo Squier, visual : Tyrell, you can remove voice with thanks to : all the team of the blink festival 
-[x] 12:35:45 | credits | 2026-10-03 13:38 | then everything disapear
+[x] 07:03:07 | glitch | 2026-10-03 19:29 | don't build up during the glitchy sequence they can appear in a cut then desapear with a white flash try to sync it more to the music
+[x] 07:26:52 | glitch | 2026-10-03 19:29 | at the end it fine to deconstruct them like it's already 
+[ ] 00:10:39 | origin | 2026-10-04 16:02 | snapshot snapshots/00-10-39_origin.png

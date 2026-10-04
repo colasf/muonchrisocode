@@ -1,5 +1,6 @@
 // Frame.finish: light * exposure + text, bloom (8-level pyramid), soft-knee tonemap per layer,
-// white + red, inverted rects, dither.
+// white + red, inverted rects, dither. The lift of the output is the one thing here the reference does
+// not have: it is the engine's own, set on site (0 = the picture of the reference).
 #include "common.hlsl"
 
 Texture2D<float2> gA : register(t0);
@@ -77,6 +78,10 @@ float4 PSFinal(float4 pos : SV_Position) : SV_Target
     float wt = tonemap(light.x), rt = tonemap(light.y);
     float3 rgb = dA == 1 ? float3(1.0 - wt, 1.0 - wt - rt, 1.0 - wt - rt) : wt + rt * float3(1.0, 0.045, 0.035);
     rgb = saturate(rgb);
+    if (gLift > 0.0) {                    // the lift of the OUTPUT panel: v -> v (1 + lift) / (1 + lift v), on the
+        float m = max(rgb.r, max(rgb.g, rgb.b));       // strongest channel so that a colour keeps its hue
+        rgb *= (1.0 + gLift) / (1.0 + gLift * m);
+    }
     if (gDither > 0.5)
         rgb = floor(clamp(rgb * 255.0 + hash(uint2(p), gDitherSeed) - 0.5, 0.0, 255.0)) / 255.0;
     return float4(rgb, 1.0);

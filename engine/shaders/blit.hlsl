@@ -10,11 +10,15 @@ float4 VSFull(uint vid : SV_VertexID) : SV_Position
     return float4((vid == 1) ? 3.0 : -1.0, (vid == 2) ? -3.0 : 1.0, 0.0, 1.0);
 }
 
-// dP0 = where the picture goes in the window (x0, y0, x1, y1), in pixels
+// dP0 = where the picture goes in the window (x0, y0, x1, y1), in pixels; dP1.rgb = what is around it;
+// dA = 1: the pixels around it are left as they are
 float4 PSBlit(float4 pos : SV_Position) : SV_Target
 {
     float2 uv = (pos.xy - dP0.xy) / (dP0.zw - dP0.xy);
-    if (any(uv < 0.0) || any(uv > 1.0)) return float4(0.02, 0.02, 0.02, 1.0);
+    if (any(uv < 0.0) || any(uv > 1.0)) {
+        if (dA == 1) discard;
+        return float4(dP1.rgb, 1.0);
+    }
     return float4(gPicture.SampleLevel(gLinear, uv, 0.0).rgb, 1.0);
 }
 

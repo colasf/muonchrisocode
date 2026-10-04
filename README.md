@@ -33,6 +33,10 @@ python tools/analyze_audio.py                   # rebuild data/cues.npz when the
 python tools/check_frames.py                    # every look: identical across processes? errors?
 python tools/check_frames.py --sweep 5          # one low-res frame every 5 s over the show, errors only
 python tools/filmstrip.py 12.0 13.4 --crop 620,1180,2340,1354   # frame-by-frame sheet of a region -> previews/strips
+python tools/test_card.py                       # the test card for the site, in the 3000 x 1688 delivery raster -> previews/testcard
+                                                # (the engine shows it: OUTPUT panel, TEST CARD)
+python tools/wall_proof.py 7:20.1 2:58          # a still as it should land on the wall: four projectors, brick, stray light
+                                                # (a simulation from the projector study) -> previews/wall/proof_*
 ```
 
 A full-resolution frame takes 2 to 6 s; the board uses all the cores. The first dance / glitch

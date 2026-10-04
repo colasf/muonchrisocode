@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 
 namespace {
 
@@ -432,10 +433,16 @@ void Renderer::post(const dl::View& v)
 
 void Renderer::overlay(const std::vector<Over>& rects)
 {
-    mHasOver = !rects.empty() && mW;
-    if (!mHasOver || !upload(mOverBuf, rects.data(), rects.size(), sizeof(Over), true)) { mHasOver = false; return; }
+    mHasOver = mW && (mCardOn || !rects.empty());
+    if (!mHasOver) return;
     unbind();
-    mCtx->CopyResource(mShow.tex.Get(), mOut.tex.Get());
+    if (mCardOn) {                                  // the part of the card where the picture of the show sits
+        D3D11_BOX box = { (UINT)mCardX, (UINT)mCardY, 0, (UINT)(mCardX + mW), (UINT)(mCardY + mH), 1 };
+        mCtx->CopySubresourceRegion(mShow.tex.Get(), 0, 0, 0, 0, mCard.tex.Get(), 0, &box);
+    } else {
+        mCtx->CopyResource(mShow.tex.Get(), mOut.tex.Get());
+    }
+    if (rects.empty() || !upload(mOverBuf, rects.data(), rects.size(), sizeof(Over), true)) return;
     bind(mShow);
     mCtx->OMSetBlendState(mBlendAlpha.Get(), nullptr, 0xFFFFFFFF);
     mCtx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
@@ -476,14 +483,10 @@ void Renderer::windowRects(ID3D11RenderTargetView* rtv, int w, int h, const std:
     mCtx->OMSetRenderTargets(1, &none, nullptr);
 }
 
-void Renderer::blit(ID3D11RenderTargetView* rtv, int w, int h, int below)
+// The picture `src` scaled into a rect of a target (filtered). The rest of the target takes the colour
+// `around`, or is left as it is (nullptr).
+void Renderer::place(ID3D11RenderTargetView* rtv, int w, int h, Target& src, float x0, float y0, float x1, float y1, const float* around)
 {
-    if (w <= 0 || h <= 0) return;
-    if (!mW) {                                      // no picture yet: an empty window, not the garbage of a new buffer
-        const float dark[4] = { 0.02f, 0.02f, 0.02f, 1.0f };
-        mCtx->ClearRenderTargetView(rtv, dark);
-        return;
-    }
     unbind();
     mCtx->OMSetRenderTargets(1, &rtv, nullptr);
     D3D11_VIEWPORT vp = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
@@ -497,16 +500,113 @@ void Renderer::blit(ID3D11RenderTargetView* rtv, int w, int h, int below)
     mCtx->PSSetConstantBuffers(0, 2, cbs);
     ID3D11SamplerState* smp = mLinear.Get();
     mCtx->PSSetSamplers(0, 1, &smp);
-    srv(0, shown().srv.Get());
+    srv(0, src.srv.Get());
+    DrawCB c = {};
+    c.p0[0] = x0;
+    c.p0[1] = y0;
+    c.p0[2] = x1;
+    c.p0[3] = y1;
+    if (around) for (int k = 0; k < 3; k++) c.p1[k] = around[k];
+    else c.a = 1;
+    full(mBlit, c);
+    unbind();
+    ID3D11RenderTargetView* none = nullptr;
+    mCtx->OMSetRenderTargets(1, &none, nullptr);
+}
+
+void Renderer::blit(ID3D11RenderTargetView* rtv, int w, int h, int below)
+{
+    if (w <= 0 || h <= 0) return;
+    const float dark[4] = { 0.02f, 0.02f, 0.02f, 1.0f };
+    if (!mW) {                                      // no picture yet: an empty window, not the garbage of a new buffer
+        mCtx->ClearRenderTargetView(rtv, dark);
+        return;
+    }
     const int hp = std::max(1, h - below);                      // the part of the window the picture may use
     float k = std::min((float)w / mW, (float)hp / mH);          // fit the picture, keep its shape
     float pw = mW * k, ph = mH * k;
+    place(rtv, w, h, shown(), 0.5f * (w - pw), 0.5f * (hp - ph), 0.5f * (w + pw), 0.5f * (hp + ph), dark);
+}
+
+bool Renderer::output(ID3D11Texture2D* back, ID3D11RenderTargetView* rtv, int w, int h, int rw, int rh, int ox, int oy, int px, int py)
+{
+    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    const bool exact = ox >= 0 && oy >= 0 && ox + rw <= w && oy + rh <= h;
+    unbind();
+    mCtx->ClearRenderTargetView(rtv, black);
+    if (!mW) return exact;
+    if (exact) {                                    // copies: not one pixel is filtered on the way
+        if (mCardOn) mCtx->CopySubresourceRegion(back, 0, (UINT)ox, (UINT)oy, 0, mCard.tex.Get(), 0, nullptr);
+        mCtx->CopySubresourceRegion(back, 0, (UINT)(ox + px), (UINT)(oy + py), 0, shown().tex.Get(), 0, nullptr);
+        return true;
+    }
+    const float k = std::min((float)w / rw, (float)h / rh);     // a display smaller than the raster: all of it, as large as it fits
+    const float x0 = 0.5f * (w - rw * k), y0 = 0.5f * (h - rh * k);
+    if (mCardOn) place(rtv, w, h, mCard, x0, y0, x0 + rw * k, y0 + rh * k, nullptr);
+    place(rtv, w, h, shown(), x0 + px * k, y0 + py * k, x0 + (px + mW) * k, y0 + (py + mH) * k, nullptr);
+    return false;
+}
+
+void Renderer::lift(float v)
+{
+    mLift = std::max(0.0f, v);
+    if (mW) finish(false);
+}
+
+bool Renderer::loadCard(const std::wstring& file, int w, int h)
+{
+    std::vector<uint8_t> px((size_t)w * h * 4);
+    std::ifstream f(file, std::ios::binary);
+    if (!f.read((char*)px.data(), (std::streamsize)px.size()) || f.peek() != EOF) return false;       // not a card of this raster
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width = w;
+    td.Height = h;
+    td.MipLevels = td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA init = { px.data(), (UINT)w * 4, 0 };
+    Target t;
+    if (FAILED(mDev->CreateTexture2D(&td, &init, &t.tex)) || FAILED(mDev->CreateShaderResourceView(t.tex.Get(), nullptr, &t.srv))) return false;
+    t.w = w;
+    t.h = h;
+    mCard = t;
+    return true;
+}
+
+bool Renderer::card(bool on, int x, int y)
+{
+    mCardOn = on && mCard.tex && mW && x >= 0 && y >= 0 && x + mW <= mCard.w && y + mH <= mCard.h;
+    mCardX = x;
+    mCardY = y;
+    return mCardOn == on;
+}
+
+// From the light of the last frame drawn (mBaseT, its bloom in mAcc[1], its inverted rects in mBoxes) to
+// the picture: tonemap, colour, the lift of the output, inverted rects, dither.
+void Renderer::finish(bool floatOut)
+{
+    mFrame.lift = mLift;
+    mCtx->UpdateSubresource(mFrameCB.Get(), 0, nullptr, &mFrame, 0, 0);
+    ID3D11Buffer* cbs[2] = { mFrameCB.Get(), mDrawCB.Get() };
+    mCtx->VSSetConstantBuffers(0, 2, cbs);
+    mCtx->PSSetConstantBuffers(0, 2, cbs);
+    mCtx->IASetInputLayout(nullptr);
+    mCtx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    mCtx->RSSetState(mRaster.Get());
+    mCtx->OMSetBlendState(mBlendNone.Get(), nullptr, 0xFFFFFFFF);
+    Target& o = floatOut ? mOutF : mOut;
+    unbind();
+    bind(o);
+    srv(0, mBaseT.srv.Get());
+    srv(1, mAcc[1].srv.Get());
+    srv(4, mBoxes.srv.Get());
     DrawCB c = {};
-    c.p0[0] = 0.5f * (w - pw);
-    c.p0[1] = 0.5f * (hp - ph);
-    c.p0[2] = c.p0[0] + pw;
-    c.p0[3] = c.p0[1] + ph;
-    full(mBlit, c);
+    c.p0[2] = (float)(mAcc[1].w - 1);
+    c.p0[3] = (float)(mAcc[1].h - 1);
+    full(mFinal, c);
+    c.a = 1;
+    draw(mFinalBox, (UINT)mBoxesCpu.size(), 0, &c);
     unbind();
     ID3D11RenderTargetView* none = nullptr;
     mCtx->OMSetRenderTargets(1, &none, nullptr);
@@ -614,7 +714,7 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
     mInfo.postops = v.count(dl::POSTOPS);
 
     FrameCB fc = { { (float)h.W, (float)h.H }, h.s, std::pow(h.s, 0.35f), h.exposure, h.text_gain, h.bloom_gain,
-                   floatOut ? 0.0f : 1.0f, h.dither_seed, { 0, 0, 0 } };
+                   floatOut ? 0.0f : 1.0f, h.dither_seed, mLift, { 0, 0 } };
     mFrame = fc;
     mCtx->UpdateSubresource(mFrameCB.Get(), 0, nullptr, &fc, 0, 0);
     ID3D11Buffer* cbs[2] = { mFrameCB.Get(), mDrawCB.Get() };
@@ -710,21 +810,7 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
         }
     }
 
-    // 5 - tonemap, colour, inverted rects, dither
-    Target& o = floatOut ? mOutF : mOut;
-    unbind();
-    bind(o);
-    srv(0, mBaseT.srv.Get());
-    srv(1, mAcc[1].srv.Get());
-    srv(4, mBoxes.srv.Get());
-    DrawCB c = {};
-    c.p0[2] = (float)(mAcc[1].w - 1);
-    c.p0[3] = (float)(mAcc[1].h - 1);
-    full(mFinal, c);
-    c.a = 1;
-    draw(mFinalBox, ninv, 0, &c);
-    unbind();
-    ID3D11RenderTargetView* none = nullptr;
-    mCtx->OMSetRenderTargets(1, &none, nullptr);
+    // 5 - tonemap, colour, the lift of the output, inverted rects, dither
+    finish(floatOut);
     return true;
 }

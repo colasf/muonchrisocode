@@ -48,12 +48,31 @@ public:
     bool render(const uint8_t* blob, size_t size, bool floatOut, std::string& err);
 
     // Rects laid over the finished picture (pixels of the picture, colour with alpha): the tower placement
-    // tool. The picture with them is shown(); with no rect, shown() is out().
+    // tool. The picture with them is shown(); with no rect, shown() is out() - or, while the test card is
+    // on, the part of the card where the picture of the show sits.
     struct Over { float x0, y0, x1, y1, r, g, b, a; };
     void overlay(const std::vector<Over>& rects);
     Target& shown() { return mHasOver ? mShow : mOut; }
     // Copy shown() into a window (letterboxed, filtered), leaving `below` pixels free under it.
     void blit(ID3D11RenderTargetView* rtv, int w, int h, int below = 0);
+
+    // The lift of the output (0 = none): the mid levels of the picture are raised, black and white stay
+    // where they are. Changing it draws the last picture again (colour, inverted rects, dither).
+    void lift(float v);
+    float lift() const { return mLift; }
+
+    // The test card: a raw BGRA picture of the whole raster (w x h, rows from the top, as tools/test_card.py
+    // writes it). card(true, x, y) shows it in place of the show, the picture of the show sitting at (x, y)
+    // of the raster; false when there is no card, or no picture yet to take its size from. Call overlay()
+    // after it, as after a new picture.
+    bool loadCard(const std::wstring& file, int w, int h);
+    bool card(bool on, int x, int y);
+    bool cardOn() const { return mCardOn; }
+
+    // The raster on an output (the back buffer of a window that fills a display): a rw x rh raster with its
+    // top left corner at (ox, oy), black but for shown() at (px, py) of it - or the whole test card. Pixel
+    // for pixel when the raster fits in the target (true); else scaled to fit, filtered (false).
+    bool output(ID3D11Texture2D* back, ID3D11RenderTargetView* rtv, int w, int h, int rw, int rh, int ox, int oy, int px, int py);
     // Rects drawn straight into a window (pixels of the window): the time bar. They are not in the picture.
     void windowRects(ID3D11RenderTargetView* rtv, int w, int h, const std::vector<Over>& rects);
 
@@ -68,7 +87,7 @@ private:
     };
     struct Glyph { int ax, ay, w, h, ox, oy, adv; };
     struct TextInst { int32_t x0, y0, x1, y1, u, v; uint32_t mode, pad; float cw, cr, fw, fr; };
-    struct FrameCB { float size[2], s, s035, exposure, textGain, bloomGain, dither; uint32_t seed, pad[3]; };
+    struct FrameCB { float size[2], s, s035, exposure, textGain, bloomGain, dither; uint32_t seed; float lift; uint32_t pad[2]; };
     struct DrawCB { uint32_t base, a, b, c; float p0[4], p1[4]; };
 
     bool compile(const wchar_t* file, const char* vsEntry, const char* psEntry, Shader& sh, std::string& err);
@@ -83,6 +102,8 @@ private:
     void srv(UINT slot, ID3D11ShaderResourceView* v);
     void unbind();
     void post(const dl::View& v);
+    void finish(bool floatOut);
+    void place(ID3D11RenderTargetView* rtv, int w, int h, Target& src, float x0, float y0, float x1, float y1, const float* around);
     void pass(const Shader& sh, Target& dst, int x0, int y0, int x1, int y1, float a = 0, float b = 0, float c = 0);
     void copy(Target& dst, Target& src, int x0, int y0, int x1, int y1);
 
@@ -100,6 +121,10 @@ private:
     int mW = 0, mH = 0;
     Target mLight, mTextT, mBaseT, mOut, mOutF, mShow;
     bool mHasOver = false;
+    float mLift = 0.0f;
+    Target mCard;                              // the test card (texture and view only: nothing is drawn into it)
+    bool mCardOn = false;
+    int mCardX = 0, mCardY = 0;                // where the picture of the show sits in it
     GpuBuffer mOverBuf, mWinBuf;
     FrameCB mFrame = {};                       // the frame constants of the last picture drawn
     Target mScratch[3];                        // for the post-process: what an operation reads

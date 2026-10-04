@@ -283,7 +283,7 @@ also go to `engine/out/engine.log`. The machine is kept awake while it runs.
 Keys: Space play / pause; Left / Right 5 s (Shift 30 s, Ctrl one frame); Page Up / Down
 scene; Home start; F full screen; B time bar; T tower placement; R reload the scenes; `[` `]`
 picture 5 ms earlier / later than the clock (the value is shown in the title: put it in
-`--offset`); with live detectors, D detector meters, 1 2 3 0 and Up / Down the trigger
+`--offset`); P the output panel, K the test card, S a snapshot; with live detectors, D detector meters, 1 2 3 0 and Up / Down the trigger
 level; Esc quit. The title bar shows the time code, the scene, where the clock comes from,
 the frame rate, the frames dropped, the time the scenes take and the trigger levels.
 
@@ -297,6 +297,47 @@ Added 2026-10-03, in the bar under the picture (`engine/src/gui.h`, drawn with a
   repository folder as `[ ] MM:SS:FF | scene | date | text`, Esc cancels. The show is paused while it is
   typed (not when it follows `/muonbloom/time`). The comments show as yellow marks on the time line,
   grey once their line starts with `[x]`.
+
+Added 2026-10-03 (evening), for the site: the picture goes to the media server of the production (a
+Disguise) over HDMI, and three things are set from the window (`engine/src/live.cpp`: `OutWindow`,
+`OutputPanel`; `Renderer::output`, `lift`, `card`).
+
+- `OUTPUT` button in the bar, or key P: the output panel, above the bar (in the preview window only).
+  - **LIFT**: raises the mid levels of the picture, `v -> v (1 + lift) / (1 + lift v)` on the strongest
+    channel, black and white staying where they are (0 = the picture as rendered; 1 takes a level 0.6
+    to 0.75 and 0.42 to 0.59). Drag the slider; a click on the name puts it back to 0. It is applied
+    before the dither, in the last pass of the renderer, so it is in the Spout output, the HDMI output
+    and the preview alike. For a wall where the dim greys sink into the stray light.
+  - **TEST CARD** (or key K): the test card instead of the show, on every output (the show goes on
+    underneath). `tools/test_card.py` makes it (`engine/out/testcard_3000x1688.bgra`, and a PNG in
+    `previews/testcard/`); the engine runs that tool by itself when the card is missing or older than
+    `data/towers.json`. The OUTPUT button is red while the card is on. The lift does not touch the card.
+  - **OUTPUT**: `OFF`, or the display that takes the raster: a window that fills that display, without
+    border or mouse pointer, on top of everything there, which never takes the keyboard. It shows the
+    delivery raster (3000 x 1688) with its top left corner at the top left of the display, black but for
+    the picture of the show at 11, 272 of it - copied, not drawn: **pixel for pixel**. So the HDMI output
+    has to be set to 3840 x 2160 at 60 Hz (Windows display settings), RGB full range (NVIDIA control
+    panel), and the media server takes the top left 3000 x 1688 of what it captures. A display smaller
+    than the raster gets it scaled to fit, and the panel says so in yellow (fine as a second preview,
+    not as the feed). The display this window is on cannot be chosen. If the display of the output goes
+    away (a cable), the title and the log say OUTPUT LOST and it is taken again as soon as it is back.
+  - What is set in the panel is kept in `engine/output.json` (lift, display) and used at the next start,
+    also when `run.bat` starts the engine again after a crash. The test card is never kept.
+  - At start: `--output 2` (a display as the panel numbers them: the log lists them; or its device name;
+    `off`), `--lift 0.6`, `--card`, `--raster 3000x1688`, `--picture-at 11,272`, `--raster-at 0,0`.
+- The Spout sender is unchanged (the 2978 x 1400 picture): MadMapper can still be fed, at the same time.
+
+Added 2026-10-04, to annotate pictures of the show (`engine/src/live.cpp`: `snapshot`; `gui::savePng`):
+
+- `SNAPSHOT` button in the bar, or key S: the picture that is on screen (2978 x 1400, as it leaves the
+  engine: with the lift, with the tower tool or the test card when they are on, never the bar) is written
+  to `snapshots/MM-SS-FF_scene.png` in the repository folder; the name is the time code of that frame. A
+  second snapshot of the same frame gets `_2`: a picture that is there is never written over. The show
+  does not stop (the PNG is packed by a thread of its own).
+  A copy that nobody touches goes to `snapshots/untouched/`: what was drawn on a snapshot is what differs
+  from that copy. A line `[ ] MM:SS:FF | scene | date | snapshot snapshots/<file>` is added to
+  `comments.txt`, so that the snapshot has its mark on the time line and is read with the comments.
+  Shift+S, or Shift and the button, opens the folder. PNG files are not versioned (`.gitignore`).
 
 - **Time bar**: under the picture, in the preview window only (never in the Spout output).
   A play / pause button at its left, then one block per scene; click or drag to move in the
@@ -378,6 +419,7 @@ Added 2026-10-03, in the bar under the picture (`engine/src/gui.h`, drawn with a
 python tools/check_frames.py                       the look session's check: must stay green
 python engine/tools/check_drawlist.py --sweep 7    a recorded frame, rasterised by the reference code, is the preview
 python engine/tools/compare.py --probes            the GPU picture against the reference, in floats (exit 1 on a wrong picture)
+python engine/tools/check_output.py 2:58 7:20.1    what the HDMI output is sent, byte for byte: the picture untouched in the raster
 engine\build\muonengine.exe bench                  60 fps over the whole show
 ```
 
@@ -398,6 +440,13 @@ engine\build\muonengine.exe bench                  60 fps over the whole show
 
 ### Not done, or not verified
 
+- The output window (2026-10-03) was tried on a second display of 1920 x 1200 only: smaller than the
+  raster, so what was seen on a real display is the scaled case. The pixel-for-pixel case is checked
+  byte for byte on a 3840 x 2160 target without a display (`check_output.py`), not on a 4K display, and
+  not through an HDMI capture: the test card is there to check that on site (gratings even, red lines
+  red, the steps near black and near white all there). The loss of the display (a cable pulled) was not
+  tried. The OUTPUT panel was driven with posted mouse messages, not by hand.
+- The SNAPSHOT button and its key (2026-10-04) were driven with posted messages too, not by hand.
 - The clock by OSC was tried with a pretend sender only (`fake_clock.py`: play, a stop, a
   locate, the sender disappearing; with messages up to 12 ms late the clock stays on the
   freshest ones). Not tried with Ableton or TouchDesigner. The delay of the chain has to be

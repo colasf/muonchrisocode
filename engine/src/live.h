@@ -28,6 +28,16 @@ struct LiveOptions {
     double quitAfter = 0.0;             // seconds of play after which the program stops by itself (tests); 0 = never
     float volume = 1.0f;
     bool loop = false;
+    // The output: a window that fills one display (the HDMI output that feeds the media server) and shows the
+    // delivery raster pixel for pixel, the picture of the show in it. "" = the display of the last run
+    // (engine/output.json; none if there was none), "off" = none, else a display as the OUTPUT panel numbers
+    // them (1, 2 ...) or its device name. While the show runs it is chosen in the OUTPUT panel (key P).
+    std::string output;
+    int rasterW = 3000, rasterH = 1688; // the delivery raster (4Wall projector study, Site 3.1)
+    int picX = 11, picY = 272;          // where the picture of the show sits in it
+    int rasterX = 0, rasterY = 0;       // where the raster sits on the display: its top left corner
+    float lift = -1.0f;                 // lift of the mid levels of the output (0 = none); negative = as in the last run
+    bool card = false;                  // start with the test card
     std::wstring log;                   // file the messages of the engine are also written to ("" = none)
     std::wstring position;              // file the show time is written to every second ("" = none): run.bat starts
                                         // the engine again from there after a crash

@@ -1,6 +1,8 @@
 @echo off
 rem Play the show: preview window, Spout sender "MuonBloom". Arguments are passed on, for example
 rem     engine\run.bat --paused --detectors live      the show: waits for the time sent by OSC, live detectors
+rem     engine\run.bat --paused --detectors live --output 2     ... and the raster on display 2 (the HDMI output);
+rem                                                   without --output: the display chosen in the OUTPUT panel last time
 rem     engine\run.bat --from 180 --paused
 rem     engine\run.bat --loop --detectors live
 rem See the top of engine\src\main.cpp (or engine\BRIEF.md, section 11) for the options and the keys.

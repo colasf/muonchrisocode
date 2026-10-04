@@ -1,9 +1,12 @@
 // muonengine - realtime engine of the Muon Bloom show.
 //
-//   muonengine render <frames.mbdl> <out prefix> [--float] [--repeat N]
+//   muonengine render <frames.mbdl> <out prefix> [--float] [--repeat N] [--lift V]
 //       draw every frame of a draw-list file (muonbloom/drawlist.py) without a window and write
 //       <prefix>NNNN.rgba (W x H x 4 bytes), or <prefix>NNNN.rgbaf (float32, no dither) with --float.
-//       --repeat N draws each frame N times and prints the time of one.
+//       --repeat N draws each frame N times and prints the time of one. --lift V: with the lift of the
+//       output (the OUTPUT panel of `live`) at V. --display WxH: also write <prefix>NNNN.display, what the
+//       output of `live` sends to a display of that size (--raster, --raster-at, --picture-at as there;
+//       --card-file F: with that test card on): the check that the raster leaves pixel for pixel.
 //
 //   muonengine bench [--from S] [--to S] [--workers N] [--lead N] [--fps F]
 //       play the show (or a part of it) in real time without a window or sound, and report per scene how
@@ -19,6 +22,17 @@
 //       button): choose the WAV file(s) the engine plays and follows from then on; Shift+O: no sound again.
 //       C (or the COMMENT button): type a comment, Enter writes it with its time code to comments.txt in
 //       the repository folder (Esc cancels); the show is paused while it is typed.
+//       S (or the SNAPSHOT button): the picture on screen is written to snapshots/MM-SS-FF_scene.png in the
+//       repository folder, to be drawn and written on, and a line of comments.txt names it. Shift+S (or
+//       Shift and the button) opens that folder.
+//       P (or the OUTPUT button): the output panel. LIFT raises the mid levels of the picture (0 = as
+//       rendered; drag the slider, click its name for 0). TEST CARD (or K) shows the test card instead of
+//       the show (tools/test_card.py makes it). OUTPUT chooses the display the raster is sent to: a window
+//       that fills it, no border, no pointer - the HDMI output to the media server. The raster (--raster
+//       3000x1688) sits at the top left of that display (--raster-at X,Y) with the picture of the show at
+//       --picture-at 11,272 of it, pixel for pixel; a display smaller than the raster gets it scaled to fit.
+//       At start: --output 2 (a display as the panel numbers them, or its device name; off = none; default:
+//       as in the last run), --lift 0.6, --card. What is set in the panel is kept in engine/output.json.
 //       The clock: the sound is played by Ableton, and the time of the show comes by OSC:
 //       /muonbloom/time <seconds>, sent all the time. The show follows it (plays when it moves, pauses when
 //       it stands still, goes on by the machine's timer if nothing arrives any more). Without it the engine
@@ -106,6 +120,19 @@ struct Args {
         return it != v.end() && it + 1 != v.end() ? _wtof((it + 1)->c_str()) : def;
     }
 };
+
+// An option made of two whole numbers (--raster 3000x1688, --picture-at 11,272). False when it is there and
+// is not that; left as it is when it is not there.
+static bool pairArg(const Args& a, const wchar_t* name, wchar_t sep, int& x, int& y)
+{
+    if (!a.flag(name)) return true;
+    std::wstring v = a.str(name, L"");
+    size_t j = v.find(sep);
+    if (j == std::wstring::npos) return false;
+    x = _wtoi(v.substr(0, j).c_str());
+    y = _wtoi(v.substr(j + 1).c_str());
+    return true;
+}
 
 static PlayerOptions playerOptions(const Args& a)
 {
@@ -221,7 +248,7 @@ static int cmdBench(const Args& a)
 static int cmdRender(const Args& a)
 {
     if (a.v.size() < 4) {
-        fprintf(stderr, "usage: muonengine render <frames.mbdl> <out prefix> [--float] [--repeat N] [--debug]\n");
+        fprintf(stderr, "usage: muonengine render <frames.mbdl> <out prefix> [--float] [--repeat N] [--lift V] [--display WxH] [--debug]\n");
         return 2;
     }
     bool asFloat = a.flag(L"--float");
@@ -236,8 +263,38 @@ static int cmdRender(const Args& a)
     Renderer r;
     double t0 = now();
     if (!r.init(g.dev.Get(), g.ctx.Get(), shaderDir(), err)) { fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    r.lift((float)a.num(L"--lift", 0.0));
     g.finish();
     printf("gpu: %ls, start-up %.0f ms\n", g.name.c_str(), (now() - t0) * 1e3);
+
+    // --display WxH: a target of the size of a display, to send it what the output of `live` would
+    LiveOptions lo;
+    int dw = 0, dh = 0;
+    ComPtr<ID3D11Texture2D> display;
+    ComPtr<ID3D11RenderTargetView> displayRtv;
+    const std::wstring cardFile = a.str(L"--card-file", L"");
+    if (!pairArg(a, L"--display", L'x', dw, dh) || !pairArg(a, L"--raster", L'x', lo.rasterW, lo.rasterH)
+        || !pairArg(a, L"--raster-at", L',', lo.rasterX, lo.rasterY) || !pairArg(a, L"--picture-at", L',', lo.picX, lo.picY)) {
+        fprintf(stderr, "--display WxH, --raster WxH, --raster-at X,Y, --picture-at X,Y\n");
+        return 2;
+    }
+    if (dw > 0 && dh > 0 && !asFloat) {
+        D3D11_TEXTURE2D_DESC td = {};
+        td.Width = (UINT)dw;
+        td.Height = (UINT)dh;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET;
+        if (FAILED(g.dev->CreateTexture2D(&td, nullptr, &display)) || FAILED(g.dev->CreateRenderTargetView(display.Get(), nullptr, &displayRtv))) {
+            fprintf(stderr, "cannot create a %d x %d target\n", dw, dh);
+            return 1;
+        }
+        if (!cardFile.empty() && !r.loadCard(cardFile, lo.rasterW, lo.rasterH)) {
+            fprintf(stderr, "cannot read the test card %ls (%d x %d, raw BGRA)\n", cardFile.c_str(), lo.rasterW, lo.rasterH);
+            return 1;
+        }
+    }
 
     size_t off = 0;
     int n = 0;
@@ -263,6 +320,17 @@ static int cmdRender(const Args& a)
         std::ofstream o(a.v[3] + name, std::ios::binary);
         o.write((const char*)px.data(), (std::streamsize)px.size());
         if (!o) { fprintf(stderr, "cannot write %ls%ls\n", a.v[3].c_str(), name); return 1; }
+        if (display) {
+            if (!cardFile.empty() && !r.card(true, lo.picX, lo.picY)) { fprintf(stderr, "the picture does not fit in the card at %d, %d\n", lo.picX, lo.picY); return 1; }
+            r.overlay({});
+            const bool exact = r.output(display.Get(), displayRtv.Get(), dw, dh, lo.rasterW, lo.rasterH, lo.rasterX, lo.rasterY, lo.picX, lo.picY);
+            if (!g.readback(display.Get(), 4, px)) { fprintf(stderr, "frame %d: cannot read the display back\n", n); return 1; }
+            swprintf(name, 32, L"%04d.display", n);
+            std::ofstream d(a.v[3] + name, std::ios::binary);
+            d.write((const char*)px.data(), (std::streamsize)px.size());
+            if (!d) { fprintf(stderr, "cannot write %ls%ls\n", a.v[3].c_str(), name); return 1; }
+            printf("         a %d x %d display gets it %s\n", dw, dh, exact ? "pixel for pixel" : "scaled to fit");
+        }
         off += bytes;
         n++;
     }
@@ -346,6 +414,15 @@ int wmain(int argc, wchar_t** argv)
         lo.log = a.str(L"--log", (fs::path(o.root) / L"engine" / L"out" / L"engine.log").wstring());
         if (a.flag(L"--no-log")) lo.log.clear();
         lo.position = a.str(L"--position-file", L"");
+        // the output: --output 2 | \\.\DISPLAY2 | off, --raster 3000x1688, --picture-at 11,272, --raster-at 0,0
+        for (wchar_t c : a.str(L"--output", L"")) lo.output += (char)(c < 128 ? c : '_');
+        if (!pairArg(a, L"--raster", L'x', lo.rasterW, lo.rasterH) || !pairArg(a, L"--picture-at", L',', lo.picX, lo.picY)
+            || !pairArg(a, L"--raster-at", L',', lo.rasterX, lo.rasterY) || lo.rasterW <= 0 || lo.rasterH <= 0) {
+            fprintf(stderr, "--raster WxH (the delivery raster), --picture-at X,Y (the picture of the show in it), --raster-at X,Y (the raster on the display)\n");
+            return 2;
+        }
+        if (a.flag(L"--lift")) lo.lift = (float)std::clamp(a.num(L"--lift", 0.0), 0.0, 3.0);
+        lo.card = a.flag(L"--card");
         // The sound of the show is played by Ableton, and the time comes from there (/muonbloom/time). For work
         // at the desk the engine can play sound itself, and then follows it: --sound (the stems of the
         // previews) or --audio FILE. (--no-audio is what it does by default now; still accepted.)
@@ -369,7 +446,7 @@ int wmain(int argc, wchar_t** argv)
         }
         return runLive(o, lo);
     }
-    fprintf(stderr, "muonengine live [--from S] [--paused] [--loop] [--sound] [--no-spout] [--offset MS] [--detectors live]\n"
+    fprintf(stderr, "muonengine live [--from S] [--paused] [--loop] [--sound] [--no-spout] [--offset MS] [--detectors live] [--output N]\n"
                     "muonengine bench [--from S] [--to S] [--workers N] [--lead N] [--fps F]\n"
                     "muonengine render <frames.mbdl> <out prefix> [--float] [--repeat N]\n");
     return 2;

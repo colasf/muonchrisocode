@@ -2,18 +2,23 @@
 #include "osc.h"                            // first: winsock2.h has to come before windows.h
 
 #include <windows.h>
+#include <shellapi.h>
 #include <timeapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "SpoutDX.h"
@@ -33,9 +38,12 @@ const float BAR_PAD = 12.0f;                // its margin left and right
 const float BTN_W = 44.0f;                  // the play / pause button, at its left
 const float TC_W = 114.0f;                  // the time code MM:SS:FF, after the button
 const float BAR_X0 = BTN_W + TC_W + BAR_PAD; // where the time line starts
-const float SND_W = 78.0f, CMT_W = 102.0f;  // the SOUND and COMMENT buttons, at its right
-const float RIGHT_W = SND_W + CMT_W;
+const float OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W = 102.0f;      // the OUTPUT, SOUND, SNAPSHOT and COMMENT buttons, at its right
+const float RIGHT_W = OUT_W + SND_W + SNP_W + CMT_W;
 const float BOX_H = 40.0f;                  // the line a comment is typed in, above the bar
+const float PANEL_H = 92.0f;                // the OUTPUT panel, above the bar
+const float LIFT_MAX = 3.0f;                // the end of the LIFT slider
+const float SLIDER_X0 = 150.0f, SLIDER_W = 300.0f;
 
 // ------------------------------------------------------------------------------------------------
 // messages: the console, and a file that is still there the morning after
@@ -112,7 +120,10 @@ struct Window {
             case WM_SIZE:
                 if (wp != SIZE_MINIMIZED) { s->w = LOWORD(lp); s->h = HIWORD(lp); s->resized = true; }
                 return 0;
-            case WM_KEYDOWN: s->keys.push_back(wp); return 0;
+            case WM_KEYDOWN:
+                if (wp == 'S' && (lp & (1 << 30))) return 0;       // (a key held down repeats: one snapshot per press)
+                s->keys.push_back(wp);
+                return 0;
             case WM_CHAR: if (wp >= 32 && wp != 127) s->chars.push_back((wchar_t)wp); return 0;
             case WM_MOUSEMOVE: s->mx = GET_X_LPARAM(lp); s->my = GET_Y_LPARAM(lp); return 0;
             case WM_LBUTTONDOWN: s->mx = GET_X_LPARAM(lp); s->my = GET_Y_LPARAM(lp); s->down = s->pressed = true; SetCapture(h); return 0;
@@ -226,7 +237,9 @@ struct Window {
     }
     bool overBar() const { return bar > 0 && my >= h - bar && my < h && mx >= 0 && mx < w; }
     bool overButton() const { return overBar() && mx < BTN_W; }         // the play / pause button
-    bool overSound() const { return overBar() && mx >= w - RIGHT_W && mx < w - CMT_W; }
+    bool overOutput() const { return overBar() && mx >= w - RIGHT_W && mx < w - RIGHT_W + OUT_W; }
+    bool overSound() const { return overBar() && mx >= w - RIGHT_W + OUT_W && mx < w - SNP_W - CMT_W; }
+    bool overSnapshot() const { return overBar() && mx >= w - SNP_W - CMT_W && mx < w - CMT_W; }
     bool overComment() const { return overBar() && mx >= w - CMT_W; }
     float lineEnd() const { return std::max(BAR_X0 + 1.0f, (float)w - RIGHT_W - BAR_PAD); }    // where the time line ends
     bool overLine() const { return overBar() && mx >= BAR_X0 - 6.0f && mx <= lineEnd() + 6.0f; }
@@ -453,13 +466,17 @@ struct BarState {
     std::string tc;                         // the time code, MM:SS:FF
     bool sound = false;                     // the engine plays sound itself
     bool commenting = false;                // a comment is being typed
-    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT
+    int output = 0;                         // 0 no output window, 1 it is on a display, 2 its display is gone
+    bool card = false;                      // the test card is shown instead of the show
+    bool panel = false;                     // the OUTPUT panel is open
+    bool snapped = false;                   // a snapshot has just been taken
+    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT, 4 OUTPUT, 5 SNAPSHOT
     const std::vector<gui::Comments::Mark>* marks = nullptr;
 };
 
 // The time bar of the preview window: a play / pause button, the time code, then the scenes of the show as
 // blocks, what has been played, where the clock is, where the mouse points, where the comments are; at the
-// right the SOUND and COMMENT buttons. Window pixels.
+// right the OUTPUT, SOUND, SNAPSHOT and COMMENT buttons. Window pixels.
 void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Pool::Look>& looks, double end, double t, double hover,
              bool playing, const BarState& st)
 {
@@ -501,14 +518,27 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
     o.push_back({ X(t) - 1.5f, y0 + 2.0f, X(t) + 1.5f, y1 - 2.0f, 1.0f, 0.1f, 0.06f, 1.0f });     // the clock
     // the time code
     gui::text(o, BTN_W + 11.0f, y0 + 11.0f, st.tc, 2.0f, 1.0f, 1.0f, 1.0f);
-    // the buttons at the right: SOUND (white while the engine plays sound), COMMENT (yellow while one is typed)
-    const float xs = (float)w - RIGHT_W, xc = (float)w - CMT_W;
+    // the buttons at the right: OUTPUT (white while a display takes the raster, yellow when that display is
+    // gone, red while the test card is on), SOUND (white while the engine plays sound), SNAPSHOT (lit for a
+    // moment when one is taken), COMMENT (yellow while one is typed)
+    const float xo = (float)w - RIGHT_W, xs = xo + OUT_W, xc = (float)w - CMT_W, xn = xc - SNP_W;
+    o.push_back({ xo, y0 + 6.0f, xo + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+    if (st.hot == 4) o.push_back({ xo + 4.0f, y0 + 4.0f, xs - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    {
+        const float r = st.card || st.output ? 1.0f : 0.55f, g = st.card ? 0.12f : st.output == 2 ? 0.85f : r, b = st.card ? 0.08f : st.output == 2 ? 0.0f : r;
+        const float tx = xo + 0.5f * (OUT_W - gui::textWidth(6, 2.0f));
+        gui::text(o, tx, y0 + 11.0f, "OUTPUT", 2.0f, r, g, b);
+        if (st.panel) o.push_back({ tx, y1 - 8.0f, tx + gui::textWidth(6, 2.0f), y1 - 6.0f, r, g, b, 1.0f });
+    }
     o.push_back({ xs, y0 + 6.0f, xs + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
     o.push_back({ xc, y0 + 6.0f, xc + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
-    if (st.hot == 2) o.push_back({ xs + 4.0f, y0 + 4.0f, xc - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    o.push_back({ xn, y0 + 6.0f, xn + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+    if (st.hot == 2) o.push_back({ xs + 4.0f, y0 + 4.0f, xn - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    if (st.hot == 5 || st.snapped) o.push_back({ xn + 4.0f, y0 + 4.0f, xc - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, st.snapped ? 0.32f : 0.14f });
     if (st.hot == 3) o.push_back({ xc + 4.0f, y0 + 4.0f, (float)w - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
-    const float gs = st.sound ? 1.0f : 0.55f;
+    const float gs = st.sound ? 1.0f : 0.55f, gn = st.snapped ? 1.0f : 0.8f;
     gui::text(o, xs + 0.5f * (SND_W - gui::textWidth(5, 2.0f)), y0 + 11.0f, "SOUND", 2.0f, gs, gs, gs);
+    gui::text(o, xn + 0.5f * (SNP_W - gui::textWidth(8, 2.0f)), y0 + 11.0f, "SNAPSHOT", 2.0f, gn, gn, gn);
     gui::text(o, xc + 0.5f * (CMT_W - gui::textWidth(7, 2.0f)), y0 + 11.0f, "COMMENT", 2.0f, st.commenting ? 1.0f : 0.8f,
               st.commenting ? 0.85f : 0.8f, st.commenting ? 0.0f : 0.8f);
 }
@@ -531,6 +561,249 @@ void commentBox(std::vector<Renderer::Over>& o, int w, int h, int bar, const std
     o.push_back({ xe, y0 + 11.0f, xe + 5.0f * px, y0 + 29.0f, 1.0f, 1.0f, 1.0f, 0.9f });          // the cursor
     const char* help = "ENTER SAVE   ESC CANCEL";
     if (typed.empty()) gui::text(o, xe + 24.0f, y0 + 13.0f, help, px, 0.5f, 0.5f, 0.5f);
+}
+
+// ------------------------------------------------------------------------------------------------
+// the output: a window that fills one display (the HDMI output that feeds the media server)
+// ------------------------------------------------------------------------------------------------
+
+struct Display {
+    std::wstring device;                    // \\.\DISPLAY2
+    RECT rc = {};                           // where it is on the desktop, in its own pixels
+    int hz = 0;
+    int w() const { return rc.right - rc.left; }
+    int h() const { return rc.bottom - rc.top; }
+};
+
+// The displays of the machine, in the order of their names: 1, 2 ... in the OUTPUT panel. Asked as a thread
+// that knows every display has its own scaling: the preview window does not, and is told sizes that are
+// not pixels.
+std::vector<Display> displays()
+{
+    std::vector<Display> out;
+    DPI_AWARENESS_CONTEXT old = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    EnumDisplayMonitors(nullptr, nullptr, [](HMONITOR m, HDC, LPRECT, LPARAM p) -> BOOL {
+        MONITORINFOEXW mi = {};
+        mi.cbSize = sizeof mi;
+        if (!GetMonitorInfoW(m, &mi)) return TRUE;
+        DEVMODEW dm = {};
+        dm.dmSize = sizeof dm;
+        EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm);
+        Display d;
+        d.device = mi.szDevice;
+        d.rc = mi.rcMonitor;
+        d.hz = (int)dm.dmDisplayFrequency;
+        ((std::vector<Display>*)p)->push_back(d);
+        return TRUE;
+    }, (LPARAM)&out);
+    if (old) SetThreadDpiAwarenessContext(old);
+    auto number = [](const std::wstring& s) {
+        size_t k = s.find_last_not_of(L"0123456789");
+        return k + 1 < s.size() ? _wtoi(s.c_str() + k + 1) : 0;
+    };
+    std::sort(out.begin(), out.end(), [&](const Display& a, const Display& b) { return number(a.device) < number(b.device); });
+    return out;
+}
+
+// The display a window is on.
+std::wstring displayOf(HWND h)
+{
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof mi;
+    return GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi) ? mi.szDevice : L"";
+}
+
+// The window of the output: no border, no mouse pointer, above everything on its display, never the window
+// the keyboard goes to. What it shows is Renderer::output: the raster, pixel for pixel.
+struct OutWindow {
+    HWND hwnd = nullptr;
+    ComPtr<IDXGISwapChain1> swap;
+    ComPtr<ID3D11Texture2D> back;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    Display on;                             // the display it fills
+    bool exact = false;                     // the raster fits in it: pixel for pixel
+    bool lost = false;
+
+    static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
+    {
+        switch (m) {
+        case WM_SETCURSOR: SetCursor(nullptr); return TRUE;
+        case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+        case WM_CLOSE: return 0;            // only the engine closes it
+        case WM_ERASEBKGND: return 1;
+        }
+        return DefWindowProcW(h, m, wp, lp);
+    }
+
+    bool open(Gpu& g, const Display& d, std::string& err)
+    {
+        close();
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = proc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"MuonBloomOutput";
+        RegisterClassW(&wc);
+        // made as a window that counts in pixels, whatever the scaling of its display
+        DPI_AWARENESS_CONTEXT old = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, wc.lpszClassName, L"MUON : BLOOM output", WS_POPUP,
+                               d.rc.left, d.rc.top, d.w(), d.h(), nullptr, nullptr, wc.hInstance, nullptr);
+        if (old) SetThreadDpiAwarenessContext(old);
+        if (!hwnd) { err = "cannot create the window of the output"; return false; }
+        DXGI_SWAP_CHAIN_DESC1 sd = {};
+        sd.Width = (UINT)d.w();
+        sd.Height = (UINT)d.h();
+        sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount = 2;
+        sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        sd.Scaling = DXGI_SCALING_NONE;
+        if (FAILED(g.factory->CreateSwapChainForHwnd(g.dev.Get(), hwnd, &sd, nullptr, nullptr, &swap))
+            || FAILED(swap->GetBuffer(0, IID_PPV_ARGS(&back))) || FAILED(g.dev->CreateRenderTargetView(back.Get(), nullptr, &rtv))) {
+            close();
+            err = "cannot create the swap chain of the output";
+            return false;
+        }
+        g.factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_WINDOW_CHANGES);
+        on = d;
+        lost = false;
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        return true;
+    }
+
+    void close()
+    {
+        rtv.Reset();
+        back.Reset();
+        swap.Reset();
+        if (hwnd) DestroyWindow(hwnd);
+        hwnd = nullptr;
+    }
+
+    void present(Renderer& r, const LiveOptions& lo)
+    {
+        if (!hwnd || lost) return;
+        exact = r.output(back.Get(), rtv.Get(), on.w(), on.h(), lo.rasterW, lo.rasterH, lo.rasterX, lo.rasterY, lo.picX, lo.picY);
+        HRESULT hr = swap->Present(0, 0);
+        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) lost = true;
+    }
+};
+
+// The OUTPUT panel, above the bar (in the preview window only): what is sent out, and how.
+//     LIFT       the mid levels of the picture raised (Renderer::lift): a slider, 0 at its left; a click on the name: 0
+//     TEST CARD  the test card instead of the show
+//     OUTPUT     OFF, or the display that takes the raster (the one this window is on cannot be chosen)
+struct OutputPanel {
+    struct Hit { float x0, y0, x1, y1; int id; };
+    bool open = false;
+    int drag = 0;                           // 2: the slider is being dragged
+    std::vector<Hit> hits;                  // 1 the name LIFT, 2 its slider, 3 TEST CARD, 10 OFF, 11 .. the displays
+    std::vector<Display> list;              // the displays, as shown
+
+    int at(int mx, int my) const
+    {
+        for (auto& h : hits) if (mx >= h.x0 && mx < h.x1 && my >= h.y0 && my < h.y1) return h.id;
+        return 0;
+    }
+
+    void rects(std::vector<Renderer::Over>& o, int w, int h, int bar, float lift, bool card, const std::string& cardNote, const std::wstring& active,
+               bool gone, bool exact, const std::wstring& own, const LiveOptions& lo, int mx, int my)
+    {
+        const float y1 = (float)(h - bar), y0 = y1 - PANEL_H, px = 2.0f;
+        hits.clear();
+        o.push_back({ 0.0f, y0, (float)w, y1, 0.0f, 0.0f, 0.0f, 0.92f });
+        o.push_back({ 0.0f, y0, (float)w, y0 + 1.0f, 1.0f, 1.0f, 1.0f, 1.0f });
+        auto button = [&](float x, float y, const std::string& s, int id, bool lit, bool dead = false) {
+            const float bw = gui::textWidth(s.size(), px) + 20.0f, bh = 28.0f;
+            const bool hot = !dead && mx >= x && mx < x + bw && my >= y && my < y + bh;
+            const float g = lit ? 1.0f : hot ? 0.75f : 0.3f, in = lit ? 1.0f : hot ? 0.14f : 0.0f, t = lit ? 0.0f : dead ? 0.4f : 0.85f;
+            o.push_back({ x, y, x + bw, y + bh, g, g, g, 1.0f });
+            o.push_back({ x + 1.0f, y + 1.0f, x + bw - 1.0f, y + bh - 1.0f, in, in, in, 1.0f });
+            gui::text(o, x + 10.0f, y + 7.0f, s, px, t, t, t);
+            if (!dead) hits.push_back({ x, y, x + bw, y + bh, id });
+            return x + bw + 10.0f;
+        };
+        // the lift and the test card
+        float y = y0 + 10.0f;
+        char b[96];
+        snprintf(b, sizeof b, "LIFT %.2f", lift);
+        gui::text(o, 14.0f, y + 7.0f, b, px, 1.0f, 1.0f, 1.0f);
+        hits.push_back({ 8.0f, y, SLIDER_X0 - 16.0f, y + 28.0f, 1 });
+        const float xk = SLIDER_X0 + SLIDER_W * std::clamp(lift / LIFT_MAX, 0.0f, 1.0f);
+        o.push_back({ SLIDER_X0, y + 13.0f, SLIDER_X0 + SLIDER_W, y + 15.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+        o.push_back({ SLIDER_X0, y + 13.0f, xk, y + 15.0f, 1.0f, 1.0f, 1.0f, 1.0f });
+        o.push_back({ xk - 3.0f, y + 4.0f, xk + 3.0f, y + 24.0f, 1.0f, 1.0f, 1.0f, 1.0f });
+        hits.push_back({ SLIDER_X0 - 10.0f, y, SLIDER_X0 + SLIDER_W + 10.0f, y + 28.0f, 2 });
+        float x = button(SLIDER_X0 + SLIDER_W + 40.0f, y, "TEST CARD", 3, card);
+        if (!cardNote.empty()) gui::text(o, x + 6.0f, y + 7.0f, cardNote, px, 1.0f, 0.85f, 0.0f);
+        // the display of the output
+        y = y0 + 52.0f;
+        gui::text(o, 14.0f, y + 7.0f, "OUTPUT", px, 1.0f, 1.0f, 1.0f);
+        x = button(110.0f, y, "OFF", 10, active.empty());
+        for (size_t k = 0; k < list.size(); k++) {
+            const bool self = list[k].device == own;
+            snprintf(b, sizeof b, "%d: %d x %d %d HZ%s", (int)k + 1, list[k].w(), list[k].h(), list[k].hz, self ? " (THIS SCREEN)" : "");
+            x = button(x, y, b, 11 + (int)k, list[k].device == active && !gone, self);
+        }
+        int hz = 60;
+        for (auto& d : list) if (d.device == active && d.hz) hz = d.hz;
+        if (gone) gui::text(o, x + 6.0f, y + 7.0f, "THE DISPLAY OF THE OUTPUT IS GONE", px, 1.0f, 0.85f, 0.0f);
+        else if (!active.empty() && !exact) gui::text(o, x + 6.0f, y + 7.0f, "SMALLER THAN THE RASTER: SCALED TO FIT", px, 1.0f, 0.85f, 0.0f);
+        else if (!active.empty() && hz < 59) gui::text(o, x + 6.0f, y + 7.0f, "UNDER 60 HZ: FRAMES OF THE SHOW ARE LOST", px, 1.0f, 0.85f, 0.0f);
+        else if (!active.empty()) gui::text(o, x + 6.0f, y + 7.0f, "PIXEL FOR PIXEL", px, 0.8f, 0.8f, 0.8f);
+        snprintf(b, sizeof b, "RASTER %d x %d, PICTURE AT %d, %d", lo.rasterW, lo.rasterH, lo.picX, lo.picY);
+        const float tw = gui::textWidth(strlen(b), px);
+        if ((float)w - 14.0f - tw > SLIDER_X0 + SLIDER_W + 400.0f) gui::text(o, (float)w - 14.0f - tw, y0 + 17.0f, b, px, 0.5f, 0.5f, 0.5f);
+    }
+};
+
+// What was set in the OUTPUT panel, kept from one run to the next: engine/output.json
+//     { "lift": 0.60, "display": "\\\\.\\DISPLAY2" }
+bool loadOutput(const fs::path& path, float& lift, std::wstring& display)
+{
+    std::ifstream f(path);
+    if (!f) return false;
+    std::stringstream ss;
+    ss << f.rdbuf();
+    const std::string s = ss.str();
+    size_t a = s.find("\"lift\""), c = a == std::string::npos ? a : s.find(':', a);
+    if (c != std::string::npos) {
+        const double v = atof(s.c_str() + c + 1);
+        if (v >= 0.0 && v <= LIFT_MAX) lift = (float)v;
+    }
+    a = s.find("\"display\"");
+    c = a == std::string::npos ? a : s.find(':', a);
+    const size_t q0 = c == std::string::npos ? c : s.find('"', c), q1 = q0 == std::string::npos ? q0 : s.find('"', q0 + 1);
+    if (q1 != std::string::npos) {
+        display.clear();
+        for (size_t k = q0 + 1; k < q1; k++) {
+            if (s[k] == '\\' && k + 1 < q1) k++;
+            display += (wchar_t)(unsigned char)s[k];
+        }
+    }
+    return true;
+}
+
+bool saveOutput(const fs::path& path, float lift, const std::wstring& display)
+{
+    fs::path tmp = path;
+    tmp += L".tmp";
+    {
+        std::ofstream f(tmp);
+        if (!f) return false;
+        std::string d;
+        for (wchar_t ch : display) {
+            if (ch == L'\\') d += '\\';
+            d += (char)(ch < 128 ? ch : '?');
+        }
+        char b[64];
+        snprintf(b, sizeof b, "{\n  \"lift\": %.2f,\n  \"display\": \"", lift);
+        f << b << d << "\"\n}\n";
+        if (!f) return false;
+    }
+    std::error_code ec;
+    fs::rename(tmp, path, ec);
+    return !ec;
 }
 
 }  // namespace
@@ -647,6 +920,11 @@ static int detectorOf(const std::string& last)
 int runLive(const PlayerOptions& options, const LiveOptions& lo)
 {
     PlayerOptions o = options;
+    if (lo.picX < 0 || lo.picY < 0 || lo.picX + PIC_W > lo.rasterW || lo.picY + PIC_H > lo.rasterH) {
+        fprintf(stderr, "the picture of the show (%d x %d) does not fit in a %d x %d raster at %d, %d (--raster, --picture-at)\n", PIC_W, PIC_H,
+                lo.rasterW, lo.rasterH, lo.picX, lo.picY);
+        return 2;
+    }
     if (!lo.log.empty()) {
         std::error_code ec;
         fs::create_directories(fs::path(lo.log).parent_path(), ec);
@@ -737,6 +1015,130 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     TowerTool tool;
     tool.tw.path = fs::path(o.root) / L"data" / L"towers.json";
     if (lo.towers && tool.tw.load()) tool.on = tool.dirty = true;
+
+    // ---- the output: the lift, the test card, the display that takes the raster (the OUTPUT panel) ----
+    const fs::path outputFile = fs::path(o.root) / L"engine" / L"output.json";
+    float lift = 0.0f;
+    std::wstring outDevice;                         // the display of the output ("" = none)
+    loadOutput(outputFile, lift, outDevice);
+    if (lo.lift >= 0.0f) lift = std::min(lo.lift, LIFT_MAX);
+    p.renderer.lift(lift);
+    OutWindow out;
+    OutputPanel outPanel;
+    bool outGone = false;                           // that display is not there at the moment
+    bool outDirty = false;                          // what is sent out has to be composed again
+    bool settingsDirty = false;
+    int panelMx = -1, panelMy = -1;
+    // the test card: engine/out/testcard_<W>x<H>.bgra, made by tools/test_card.py - run from here when the card
+    // is missing, or older than the tower placement it shows
+    wchar_t cardName[64];
+    swprintf(cardName, 64, L"testcard_%dx%d.bgra", lo.rasterW, lo.rasterH);
+    const fs::path cardFile = fs::path(o.root) / L"engine" / L"out" / cardName;
+    HANDLE cardMaker = nullptr;                     // tools/test_card.py at work
+    bool cardWanted = lo.card;
+    bool cardBroken = false;                        // it could not be made: not tried again by itself
+    std::string cardNote;
+    auto cardStale = [&] {
+        std::error_code ec;
+        const auto made = fs::last_write_time(cardFile, ec);
+        if (ec) return true;
+        for (const wchar_t* dep : { L"data/towers.json", L"tools/test_card.py" }) {
+            const auto t = fs::last_write_time(fs::path(o.root) / dep, ec);
+            if (!ec && t > made) return true;
+        }
+        return false;
+    };
+    auto makeCard = [&] {
+        wchar_t cmd[2048];
+        swprintf(cmd, 2048, L"\"%ls\" \"%ls\" --raster %dx%d --at %d,%d", o.python.c_str(), (fs::path(o.root) / L"tools" / L"test_card.py").c_str(),
+                 lo.rasterW, lo.rasterH, lo.picX, lo.picY);
+        STARTUPINFOW si = { sizeof si };
+        PROCESS_INFORMATION pi = {};
+        if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, 0, nullptr, o.root.c_str(), &si, &pi)) return false;
+        CloseHandle(pi.hThread);
+        cardMaker = pi.hProcess;
+        return true;
+    };
+    std::function<void(bool)> showCard = [&](bool on) {
+        cardWanted = on;
+        cardBroken = false;
+        outDirty = true;
+        if (!on) {
+            if (p.renderer.cardOn()) say("test card off");
+            p.renderer.card(false, 0, 0);
+            cardNote.clear();
+            return;
+        }
+        if (cardMaker || p.renderer.cardOn()) return;
+        if (cardStale()) {
+            if (makeCard()) cardNote = "MAKING IT ...";
+            else { cardNote = "CANNOT RUN tools/test_card.py"; cardWanted = false; }
+            return;
+        }
+        if (p.shown() < 0) { cardNote = "WITH THE FIRST PICTURE"; return; }        // (tried again then)
+        if (!p.renderer.loadCard(cardFile.wstring(), lo.rasterW, lo.rasterH) || !p.renderer.card(true, lo.picX, lo.picY)) {
+            cardNote = "THE CARD CANNOT BE READ";
+            cardWanted = false;
+        } else {
+            cardNote.clear();
+            say("test card on");
+        }
+    };
+    auto setLift = [&](float v) {
+        v = std::round(std::clamp(v, 0.0f, LIFT_MAX) * 100.0f) / 100.0f;
+        if (v == lift) return;
+        lift = v;
+        p.renderer.lift(lift);
+        outDirty = settingsDirty = true;
+    };
+    auto setOutput = [&](const std::wstring& device) {
+        out.close();
+        outDevice = device;
+        outGone = false;
+        outDirty = true;
+        if (device.empty()) { say("output: off"); return; }
+        const std::vector<Display> list = displays();
+        const auto it = std::find_if(list.begin(), list.end(), [&](const Display& d) { return d.device == device; });
+        std::string e;
+        if (it == list.end()) {
+            outGone = true;
+            warn("OUTPUT: the display %s is not there; it is taken as soon as it is", narrow(device).c_str());
+        } else if (it->device == displayOf(win.hwnd)) {
+            outDevice.clear();
+            note = "THE OUTPUT CANNOT BE THE SCREEN THIS WINDOW IS ON";
+            warn("output: %s is the screen of the preview window: not taken", narrow(device).c_str());
+        } else if (!out.open(p.gpu, *it, e)) {
+            outDevice.clear();
+            note = e;
+            warn("output: %s", e.c_str());
+        } else {
+            const bool exact = lo.rasterX >= 0 && lo.rasterY >= 0 && lo.rasterX + lo.rasterW <= it->w() && lo.rasterY + lo.rasterH <= it->h();
+            say("output: display %d (%s), %d x %d at %d Hz; the %d x %d raster at %d, %d of it, the picture at %d, %d of the raster%s", (int)(it - list.begin()) + 1,
+                narrow(device).c_str(), it->w(), it->h(), it->hz, lo.rasterW, lo.rasterH, lo.rasterX, lo.rasterY, lo.picX, lo.picY,
+                exact ? ": pixel for pixel" : ": THE DISPLAY IS SMALLER THAN THE RASTER, which is scaled to fit (not pixel for pixel)");
+            if (it->hz && it->hz < 59) warn("OUTPUT: that display runs at %d Hz: the show is 60 frames a second, frames are lost on the way", it->hz);
+        }
+    };
+    {
+        const std::vector<Display> list = displays();
+        const std::wstring own = displayOf(win.hwnd);
+        std::string all;
+        for (size_t k = 0; k < list.size(); k++) {
+            char b[160];
+            snprintf(b, sizeof b, "%s%d: %s %d x %d at %d Hz%s", k ? ", " : "", (int)k + 1, narrow(list[k].device).c_str(), list[k].w(), list[k].h(), list[k].hz,
+                     list[k].device == own ? " (this window)" : "");
+            all += b;
+        }
+        say("displays: %s", all.c_str());
+        if (lo.output == "off") outDevice.clear();
+        else if (!lo.output.empty()) {              // a number of that list, or a device name
+            const int n = atoi(lo.output.c_str());
+            if (lo.output.find_first_not_of("0123456789") == std::string::npos && n >= 1 && n <= (int)list.size()) outDevice = list[n - 1].device;
+            else outDevice.assign(lo.output.begin(), lo.output.end());
+        }
+        if (!outDevice.empty()) setOutput(outDevice);
+        if (lift > 0.0f) say("lift of the output: %.2f", lift);
+    }
     Watcher watch;
     watch.root = o.root;
 
@@ -799,6 +1201,74 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     double commentT = 0;
     std::wstring commentText;
     bool askSound = false;                          // the SOUND button: the dialog is opened by the main loop
+
+    // snapshots (key S, or the SNAPSHOT button): the picture that is on screen, written to
+    // <root>/snapshots/MM-SS-FF_scene.png to be drawn and written on, with a copy nobody touches in
+    // snapshots/untouched (what was drawn on a snapshot is what differs from that copy). A line of comments.txt
+    // names the picture, so that it has its mark on the time line and is read with the comments. The PNG is
+    // packed by a thread of its own: the show does not wait for it.
+    const fs::path snapDir = fs::path(o.root) / L"snapshots";
+    std::atomic<int> snapState{ 0 };                // 1 being written, 2 written, 3 could not be written
+    std::jthread snapThread;                        // (declared after snapState: it is joined before that goes)
+    fs::path snapFile;
+    std::string snapScene;
+    double snapT = 0, snapAt = 0;                   // show time of the picture; when it was taken
+    bool snapLit = false;                           // the button is lit for a moment
+    auto snapshot = [&] {
+        Target& pic = p.renderer.shown();
+        if (snapState != 0 || !warmed || !pic.tex) return;          // one at a time; and there has to be a picture
+        std::vector<uint8_t> px;
+        if (!p.gpu.readback(pic.tex.Get(), 4, px)) {
+            note = "THE SNAPSHOT CANNOT BE TAKEN";
+            warn("snapshot: the picture cannot be read back");
+            return;
+        }
+        snapT = p.shown() >= 0 ? p.shown() / o.fps : clock.now();   // the frame that is on screen: its own time code
+        snapScene.clear();
+        if (p.renderer.cardOn()) snapScene = "testcard";
+        else for (auto& l : p.pool->looks) if (snapT >= l.t0 && snapT < l.t1) snapScene = l.name;
+        std::string name = gui::timecode(snapT, o.fps) + "_" + (snapScene.empty() ? "show" : snapScene);
+        for (char& c : name) if (!isalnum((unsigned char)c) && c != '_') c = '-';      // (MM:SS:FF: no colon in a file name)
+        std::error_code ec;
+        fs::create_directories(snapDir / L"untouched", ec);
+        for (int n = 1;; n++) {                     // never over a picture that is there: it may have been drawn on
+            snapFile = snapDir / (name + (n > 1 ? "_" + std::to_string(n) : "") + ".png");
+            if (!fs::exists(snapFile, ec)) break;
+        }
+        snapState = 1;
+        snapAt = now();
+        snapLit = barDirty = true;
+        snapThread = std::jthread([&snapState, file = snapFile, px = std::move(px), w = pic.w, h = pic.h] {
+            const bool ok = gui::savePng(file.wstring(), px.data(), (unsigned)w, (unsigned)h);
+            std::error_code e;
+            if (ok) fs::copy_file(file, file.parent_path() / L"untouched" / file.filename(), fs::copy_options::overwrite_existing, e);
+            snapState = ok ? 2 : 3;
+        });
+    };
+    auto snapDone = [&] {                           // the picture is written, or could not be
+        if (snapState < 2) return;
+        const std::string rel = "snapshots/" + snapFile.filename().string();
+        if (snapState == 2) {
+            char lf[32] = "";
+            if (lift > 0.0f && snapScene != "testcard") snprintf(lf, sizeof lf, " (lift %.2f)", lift);
+            note = "snapshot: " + rel;
+            say("snapshot at %s: %s%s", gui::timecode(snapT, o.fps).c_str(), rel.c_str(), lf);
+            if (!comments.add(snapT, o.fps, snapScene, L"snapshot " + std::wstring(rel.begin(), rel.end()))) {
+                note = "CANNOT WRITE comments.txt";
+                warn("cannot write %s", narrow(comments.path.wstring()).c_str());
+            }
+        } else {
+            note = "THE SNAPSHOT COULD NOT BE WRITTEN";
+            warn("cannot write %s", narrow(snapFile.wstring()).c_str());
+        }
+        snapState = 0;
+        barDirty = true;
+    };
+    auto openSnapshots = [&] {                      // the folder the snapshots are in, in the Explorer
+        std::error_code ec;
+        fs::create_directories(snapDir, ec);
+        ShellExecuteW(nullptr, L"open", snapDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    };
 
     // One turn of the loop. Also called from a timer while Windows holds the window thread (drag, resize).
     auto step = [&] {
@@ -884,7 +1354,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                     else note = "cannot write data/towers.json";
                 } else if (k == VK_ESCAPE || k == 'T') tool.on = false;
                 tool.dirty = true;
-                if (k != VK_SPACE) continue;
+                if (k != VK_SPACE && k != 'S') continue;
             }
             switch (k) {
             case VK_ESCAPE: win.closed = true; break;
@@ -910,6 +1380,13 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             case VK_DOWN: setLevels(levelSel, shift ? -0.05f : -0.01f, true); panel = true; break;
             case 'R': p.reload(); note = "reloading"; break;
             case 'C': startComment(); break;
+            case 'P':                               // the OUTPUT panel
+                outPanel.open = !outPanel.open;
+                outPanel.list = displays();
+                barDirty = true;
+                break;
+            case 'K': showCard(!cardWanted); barDirty = true; break;      // the test card
+            case 'S': if (shift) openSnapshots(); else snapshot(); break;       // a snapshot; Shift: the folder they are in
             case 'O':                               // the sound: choose the files; Shift: no sound from the engine
                 if (!shift) askSound = true;
                 else if (wantAudio) {
@@ -937,7 +1414,38 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
 
         // ---- mouse: the time bar first, then the tower tool ----
         double hover = -1.0;
-        const int hotButton = !win.bar || scrubbing ? 0 : win.overButton() ? 1 : win.overSound() ? 2 : win.overComment() ? 3 : 0;
+        const int hotButton = !win.bar || scrubbing ? 0 : win.overButton() ? 1 : win.overSound() ? 2 : win.overComment() ? 3 : win.overOutput() ? 4
+                              : win.overSnapshot() ? 5 : 0;
+        if (win.bar && win.pressed && win.overOutput()) {       // the OUTPUT button: its panel
+            outPanel.open = !outPanel.open;
+            outPanel.list = displays();
+            win.pressed = false;
+            barDirty = true;
+        }
+        if (outPanel.open && !commenting) {
+            const float py1 = (float)(win.h - win.bar), py0 = py1 - PANEL_H;
+            const bool inside = win.my >= py0 && win.my < py1;
+            if (inside && (win.mx != panelMx || win.my != panelMy)) barDirty = true;        // a button lights under the mouse
+            panelMx = win.mx;
+            panelMy = win.my;
+            if (win.pressed && inside) {
+                const int id = outPanel.at(win.mx, win.my);
+                if (id == 1) setLift(0.0f);
+                else if (id == 2) outPanel.drag = 2;
+                else if (id == 3) showCard(!cardWanted);
+                else if (id == 10) { setOutput(L""); settingsDirty = true; }
+                else if (id >= 11 && id - 11 < (int)outPanel.list.size()) { setOutput(outPanel.list[id - 11].device); settingsDirty = true; }
+                win.pressed = false;                // (the click is taken: not for the tower tool under the panel)
+                barDirty = true;
+            }
+            if (outPanel.drag == 2) {
+                if (win.down) setLift(((float)win.mx - SLIDER_X0) / SLIDER_W * LIFT_MAX);
+                else outPanel.drag = 0;
+                barDirty = true;
+            }
+        } else {
+            outPanel.drag = 0;
+        }
         if (win.bar && win.pressed && win.overButton()) {       // the play / pause button
             if (warmed && !commenting) { if (playing) pause(); else play(); }
             win.pressed = false;
@@ -949,6 +1457,15 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         if (win.bar && win.pressed && win.overComment()) {
             if (commenting) endComment(true); else startComment();
             win.pressed = false;
+        }
+        if (win.bar && win.pressed && win.overSnapshot()) {     // the SNAPSHOT button; with Shift: the folder they are in
+            if (GetKeyState(VK_SHIFT) < 0) openSnapshots(); else snapshot();
+            win.pressed = false;
+        }
+        snapDone();
+        if (snapLit && now() - snapAt > 0.6) {      // the button goes back to grey
+            snapLit = false;
+            barDirty = true;
         }
         if (win.bar && showEnd > 0) {
             if (win.pressed && win.overLine()) scrubbing = true;
@@ -1062,6 +1579,31 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         }
         ring.commit();
 
+        // ---- the test card: made, wanted before there was a picture, older than the towers it shows ----
+        if (cardMaker && WaitForSingleObject(cardMaker, 0) == WAIT_OBJECT_0) {
+            DWORD code = 1;
+            GetExitCodeProcess(cardMaker, &code);
+            CloseHandle(cardMaker);
+            cardMaker = nullptr;
+            if (code == 0 && !cardStale()) {
+                cardNote.clear();
+                if (cardWanted) {
+                    p.renderer.card(false, 0, 0);       // (a card that was on is the old one)
+                    showCard(true);
+                }
+            } else {
+                cardNote = "IT COULD NOT BE MADE (python tools/test_card.py)";
+                cardBroken = true;
+                cardWanted = p.renderer.cardOn();   // (a card that is on stays: it is the one of before)
+                warn("the test card could not be made: python tools/test_card.py ended with code %lu", code);
+            }
+            barDirty = true;
+        }
+        if (cardWanted && !cardMaker && !p.renderer.cardOn() && p.shown() >= 0) {
+            showCard(true);
+            barDirty = true;
+        }
+
         // ---- the files of the show ----
         if (warmed && watch.poll()) {               // (during a reload too: what was being started is already old)
             say(p.reloading() ? "a file of the show changed again: starting the reload again" : "a file of the show changed: reloading the scenes");
@@ -1158,13 +1700,14 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             barDirty = true;
         }
         bool overNow = tool.on || !over.empty();
-        if (drew || (overNow && tool.dirty) || win.resized || barDirty) {
-            if (drew || tool.dirty) {
+        if (drew || (overNow && tool.dirty) || win.resized || barDirty || outDirty) {
+            if (drew || tool.dirty || outDirty) {
                 over.clear();
                 if (tool.on) tool.rects(over);
                 p.renderer.overlay(over);
-                tool.dirty = false;
+                tool.dirty = outDirty = false;
                 if (spoutOn && p.shown() >= 0) sent += spout.SendTexture(p.renderer.shown().tex.Get());
+                out.present(p.renderer, lo);        // before the preview: this is the picture on the wall
             }
             barRects.clear();
             if (win.bar) {
@@ -1173,10 +1716,17 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 st.sound = wantAudio;
                 st.commenting = commenting;
                 st.hot = hotButton;
+                st.output = outDevice.empty() ? 0 : outGone ? 2 : 1;
+                st.card = p.renderer.cardOn();
+                st.panel = outPanel.open;
+                st.snapped = snapLit;
                 st.marks = &comments.marks;
                 timeBar(barRects, win.w, win.h, p.pool->looks, std::max(showEnd, 1e-9), t, hover, playing, st);
             }
             if (commenting) commentBox(barRects, win.w, win.h, win.bar, gui::timecode(commentT, o.fps), commentText);
+            else if (outPanel.open)
+                outPanel.rects(barRects, win.w, win.h, win.bar, lift, cardWanted, cardNote, outDevice, outGone, out.exact, displayOf(win.hwnd), lo, win.mx,
+                               win.my);
             if (panel && liveDet) meter.rects(barRects, level, levelSel, now());
             barDrawnT = t;
             barDrawnHover = hover;
@@ -1203,6 +1753,34 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 rc = 3;
                 win.closed = true;
             }
+            if (!outDevice.empty()) {               // the display of the output: gone, back, or of another size
+                const std::vector<Display> list = displays();
+                const auto it = std::find_if(list.begin(), list.end(), [&](const Display& d) { return d.device == outDevice; });
+                if (it == list.end()) {
+                    if (!outGone) {
+                        out.close();
+                        outGone = true;
+                        warn("OUTPUT LOST: the display %s is gone; it is taken again as soon as it is back", narrow(outDevice).c_str());
+                        barDirty = true;
+                    }
+                } else if (outGone || out.lost || !out.hwnd || !EqualRect(&it->rc, &out.on.rc)) {
+                    std::string e;
+                    if (out.open(p.gpu, *it, e)) {
+                        say("output: the display %s is taken (%d x %d at %d Hz)", narrow(outDevice).c_str(), it->w(), it->h(), it->hz);
+                        outGone = false;
+                        outDirty = barDirty = true;
+                    }
+                }
+            }
+            if (outPanel.open) {
+                outPanel.list = displays();
+                barDirty = true;
+            }
+            if (p.renderer.cardOn() && !cardMaker && !cardBroken && cardStale() && makeCard()) cardNote = "MAKING IT AGAIN ...";   // the towers moved
+            if (settingsDirty && !outPanel.drag) {
+                settingsDirty = false;
+                if (!saveOutput(outputFile, lift, outDevice)) warn("cannot write %s", narrow(outputFile.wstring()).c_str());
+            }
             double dt = w - statAt;
             std::wstring look, hov;
             for (auto& l : p.pool->looks) if (t >= l.t0 && t < l.t1) look.assign(l.name.begin(), l.name.end());
@@ -1218,13 +1796,21 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (liveDet)
                 swprintf(trig, 160, L"   trigger L %.2f  C %.2f  R %.2f  [%ls: Up / Down]", level[0], level[1], level[2],
                          levelSel < 0 ? L"all" : levelSel == 0 ? L"L" : levelSel == 1 ? L"C" : L"R");
-            wchar_t title[800];
+            wchar_t outs[200] = L"";
+            if (!outDevice.empty() || lift > 0.0f || p.renderer.cardOn()) {     // what is sent out, when it is not just the show
+                wchar_t lf[24] = L"";
+                if (lift > 0.0f) swprintf(lf, 24, L"LIFT %.2f", lift);
+                swprintf(outs, 200, L"   %ls%ls%ls%ls%ls", p.renderer.cardOn() ? L"TEST CARD  " : L"",
+                         outDevice.empty() ? L"" : outGone ? L"OUTPUT LOST  " : !out.exact ? L"OUTPUT SCALED  " : L"OUTPUT ON  ",
+                         outDevice.size() > 4 ? outDevice.c_str() + 4 : L"", outDevice.size() > 4 ? L"  " : L"", lf);
+            }
+            wchar_t title[1000];
             std::wstring wnote(note.begin(), note.end());
-            swprintf(title, 800, L"MUON : BLOOM   %ls  %ls   %ls%ls   %.1f fps   dropped %llu   scenes %.0f / %.0f ms (median / max)%ls%ls%ls%ls%ls%ls%ls%ls",
+            swprintf(title, 1000, L"MUON : BLOOM   %ls  %ls   %ls%ls   %.1f fps   dropped %llu   scenes %.0f / %.0f ms (median / max)%ls%ls%ls%ls%ls%ls%ls%ls%ls",
                      timecode(t).c_str(), look.c_str(), !warmed ? L"BUILDING THE SCENES" : playing ? L"PLAYING" : L"PAUSED",
                      ext.following ? L" (time by OSC)" : ext.heard ? L" (TIME BY OSC LOST: own timer)" : wantAudio ? L" (own sound)" : L" (own timer)",
                      (drawnCount - lastDrawn) / dt, (unsigned long long)p.stats.stale, percentile(ms, 0.5), percentile(ms, 1.0), hov.c_str(), off,
-                     trig, wantAudio && !audio.ok() ? L"   NO SOUND" : L"",
+                     outs, trig, wantAudio && !audio.ok() ? L"   NO SOUND" : L"",
                      tool.on ? L"   TOWERS: 1 2 3 select, Tab handle, arrows / mouse move, Enter save, Esc cancel" : L"",
                      p.pool->lastError.empty() ? L"" : L"   SCENE ERROR (see the console)", wnote.empty() ? L"" : L"   ", wnote.c_str());
             SetWindowTextW(win.hwnd, title);
@@ -1307,7 +1893,12 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         std::error_code ec;
         fs::remove(lo.position, ec);
     }
+    if (snapThread.joinable()) snapThread.join();   // (a snapshot that is being written is finished, and gets its line)
+    snapDone();
     audio.close();
+    out.close();
+    if (cardMaker) CloseHandle(cardMaker);
+    if (settingsDirty) saveOutput(outputFile, lift, outDevice);
     if (spoutOn) spout.ReleaseSender();
     SetThreadExecutionState(ES_CONTINUOUS);
     if (gLog) fclose(gLog);

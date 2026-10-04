@@ -12,7 +12,8 @@ cbuffer FrameCB : register(b0)
     float gBloomGain;
     float gDither;       // 1: dither and round to 8 bits, 0: leave the picture in floats (for comparisons)
     uint gDitherSeed;
-    uint3 gPad;
+    float gLift;         // lift of the output (0: none): the mid levels raised, black and white kept
+    uint2 gPad;
 };
 
 cbuffer DrawCB : register(b1)

@@ -1,9 +1,11 @@
 // What the preview window writes and asks: a small bitmap font drawn with the rectangles of the window
 // overlay (the window has no other way to show text: time code, button names, the comment being typed),
-// the comments file, and the dialog that chooses the sound files. Never in the Spout output.
+// the comments file, the snapshots, and the dialog that chooses the sound files. Never in the Spout output.
 #pragma once
 #include <windows.h>
 #include <commdlg.h>
+#include <objbase.h>
+#include <wincodec.h>
 
 #include <cstdio>
 #include <ctime>
@@ -87,7 +89,8 @@ inline std::string utf8(const std::wstring& w)
 // The comments written in the window while the show is looked at: one line each in <root>/comments.txt,
 //     [ ] MM:SS:FF | scene | when it was written | the comment
 // "[x]" once the comment has been dealt with (whoever applies it changes the mark). Lines starting with #
-// are not comments.
+// are not comments. A snapshot is a comment too: its line says "snapshot" and the file of the picture, which
+// is there to be drawn and written on.
 struct Comments {
     struct Mark { double t; bool done; };
     std::filesystem::path path;
@@ -113,7 +116,8 @@ struct Comments {
         if (!f) return false;
         if (fresh)
             f << "# Muon Bloom - comments written in the engine window (key C, or the COMMENT button).\n"
-                 "# [ ] MM:SS:FF | scene | when it was written | the comment      (FF = frames, [x] = done)\n";
+                 "# [ ] MM:SS:FF | scene | when it was written | the comment      (FF = frames, [x] = done)\n"
+                 "# A line that says \"snapshot\" names a picture taken there (key S, or the SNAPSHOT button): draw and write on it.\n";
         time_t now = time(nullptr);
         tm lt;
         localtime_s(&lt, &now);
@@ -127,6 +131,37 @@ struct Comments {
         return true;
     }
 };
+
+// A picture (BGRA, rows from the top) written as a PNG file: a snapshot. Packing a picture of the size of
+// the show takes a few tenths of a second: call it from a thread of its own.
+inline bool savePng(const std::wstring& path, const unsigned char* bgra, unsigned w, unsigned h)
+{
+    std::vector<unsigned char> bgr((size_t)w * h * 3);
+    for (size_t k = 0, n = (size_t)w * h; k < n; k++) {
+        bgr[3 * k] = bgra[4 * k];
+        bgr[3 * k + 1] = bgra[4 * k + 1];
+        bgr[3 * k + 2] = bgra[4 * k + 2];
+    }
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    bool ok = false;
+    {
+        ComPtr<IWICImagingFactory> factory;
+        ComPtr<IWICStream> stream;
+        ComPtr<IWICBitmapEncoder> enc;
+        ComPtr<IWICBitmapFrameEncode> frame;
+        WICPixelFormatGUID fmt = GUID_WICPixelFormat24bppBGR;
+        ok = SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))
+          && SUCCEEDED(factory->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE))
+          && SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc))
+          && SUCCEEDED(enc->Initialize(stream.Get(), WICBitmapEncoderNoCache)) && SUCCEEDED(enc->CreateNewFrame(&frame, nullptr))
+          && SUCCEEDED(frame->Initialize(nullptr)) && SUCCEEDED(frame->SetSize(w, h)) && SUCCEEDED(frame->SetPixelFormat(&fmt))
+          && IsEqualGUID(fmt, GUID_WICPixelFormat24bppBGR)
+          && SUCCEEDED(frame->WritePixels(h, w * 3, (UINT)bgr.size(), bgr.data())) && SUCCEEDED(frame->Commit()) && SUCCEEDED(enc->Commit());
+    }
+    if (com) CoUninitialize();
+    if (!ok) DeleteFileW(path.c_str());             // (half a file is worse than none)
+    return ok;
+}
 
 // The dialog that chooses the sound: one WAV file or several (stems that start together).
 inline bool chooseWav(HWND owner, const std::wstring& dir, std::vector<std::wstring>& files)

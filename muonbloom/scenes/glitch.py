@@ -7,34 +7,44 @@
                                               plots, equations and tables about the muon, quantum physics and
                                               relativity - the figures of a physics textbook redrawn as an
                                               instrument (white line work, red for the muon). Every bay between
-                                              the towers is split into cells; each cell shows one plate and cuts
-                                              to another one on the music: the large ones on the bars, half-bars
-                                              and beats, the medium and small ones on the beats, then on every
-                                              second or third onset of the music. Every two bars the
-                                              whole wall is cut into new cells; on every bar a line reads
-                                              the wall from top to bottom and one plate is committed (shown
-                                              inverted for two frames).
+                                              the towers is split into cells; each cell shows one plate. A plate
+                                              appears in a cut, whole, on a hit of the music; a later hit takes
+                                              it away in a flash of static (for three frames its cell is filled
+                                              with the test-pattern bars of the MUON scene), the cell stays
+                                              dark and the next hit cuts another plate into it. The small cells
+                                              answer every hit, the middle ones the accents, the large ones the
+                                              kicks. Every two bars the whole wall goes in one flash on the
+                                              downbeat and is cut into new cells, which come in over the three
+                                              hits that follow; on every bar a line reads the wall from top to
+                                              bottom.
   7.3  07:27 - 07:34    TRANSITION           the cuts stop; on each of the last, weak kicks one plate is taken
                                               apart, the large ones last. What is left is single muons falling
                                               straight down. Almost black: OUTLAST next (muons falling 15 km).
 
-The audio drives it: the cuts ARE the kicks and the onsets of the music (ctx.cues.kick_t / onset_t, on the
-125 BPM grid of the track), their rate follows the three phrases of the section, and inside the plates the
-cursors, the wave amplitudes, the tilt of the axes follow the bands and the kick envelope; the header of
-every plate carries a six-band meter of the spectrum and its rule swells on the kicks. The schedule
-(which plate, in which cell, from when to when) is built once from the cues and the tower placement with a
-seeded generator: a frame is a pure function of t.
+The audio drives it: every cut and every flash IS a hit of the music (`music_hits`: the onsets and the kicks
+of ctx.cues, moved onto the frame where they sound - the analysis finds a hit LAG = 30 ms before it is heard).
+How much of the wall changes on a hit is how strong the hit is: one small cell on a weak one, a small, a
+middle and a large one on an accented kick, more of them in the third phrase. Inside the plates the cursors,
+the wave amplitudes, the tilt of the axes follow the bands and the kick envelope; the header of every plate
+carries a six-band meter of the spectrum and its rule swells on the kicks. The schedule (which plate, in
+which cell, from which hit to which hit) is built once from the cues and the tower placement with a seeded
+generator: a frame is a pure function of t.
 
 Everything written is real: constants with their measured digits (PDG / CODATA), formulas as they stand
 in the books, curves computed from them (Bethe, Michel, Breit-Rabi, Schwarzschild null geodesics, the
 GW150914 chirp ...). Space Mono has no Greek alphabet (only the micro sign and pi): the letters it lacks are
 drawn as line work in the cell of a character (`fml`).
 
-No large area flashes: the fast change is carried by thin line work in small cells; the only inverted
-area is the one medium plate a bar commits (once every 1.92 s). Nothing fades: a plate is constructed in a
-few frames (`Quick`, the build of the show with a short wave: rules drawn by a pen, curves traced, text
-decoded - but a figure never spins: what is written is right as soon as it is written) and cut away by the
-next one; in the transition the plates, the strip and the bottom panels are taken apart.
+Nothing is built up while the drums play (review of 2026-10-03: "don't build up during the glitchy sequence
+they can appear in a cut then desapear with a white flash"): the plates, the strip and the bottom panels are
+there, whole, on the frame of their hit. Nothing fades either. Only in the transition are the plates, the
+strip and the bottom panels taken apart ("at the end it fine to deconstruct them"): `Quick`, the build of
+the show run backwards with a short wave - rules drawn back by a pen, curves untraced, text scrambled.
+The flash is not a white field ("don't use white for the flash use the same effect that the background at
+01:43:10"): it is the static behind the MUON card as it stands at that time (`muon.static`: rows of bars of
+random width, a few of them red, a new pattern on every frame), in the cell of the plate that leaves. A fast
+one is small (a hit takes at most a quarter of the wall, 7 % on average), a large one is rare (the whole wall
+once every two bars, 3.84 s).
 
 Layout: the cells are cut from ctx.cols (the bays between the towers), the bottom blocks flow into
 ctx.slots, the lone muon of the break falls on ctx.focus. Nothing has a fixed x.
@@ -52,6 +62,7 @@ from .. import showdata as sd
 from ..engine import OrthoCamera, font, hash01, smoothstep
 from ..show import Scene
 from .dance import BEAT, N_PHRASES, PANEL_BLOCKS, PHRASE, T0, Y_GROUND, Dance
+from .muon import ROW_H, static
 from .shower import (VIEW_Y0, VIEW_Y1, altitude_rules, auto_callout, bottom_panels, draw_info, flow, info_layout,
                      stage_for)
 
@@ -62,6 +73,18 @@ T_OUT = 454.0
 BAR = 4 * BEAT
 T_LANES = T_TRANS + 3.5             # the last read-out is made
 V_SHOCK = 2200.0                    # px / s: the ring that leaves the point where the muon of the break lands
+LAG = 0.03                          # s: a hit sounds this long after the time the cues give it (measured on the mix)
+FRAME = 1.0 / 60.0                  # the show plays at 60 frames a second: every cut is put on one of them
+FLASH = 3 * FRAME                   # a plate that leaves leaves its cell full of static for three frames
+MIN_LIFE = {"S": 0.2, "M": 0.3, "L": 0.55, "X": 1.0}       # s a plate is left on the wall at least, by cell size
+
+
+def on_frame(t):
+    """The frame nearest to t, as a time just before it: that frame is the first one of what starts there."""
+    return round(t / FRAME) * FRAME - 1e-4
+
+
+T_ON = on_frame(T_DRUMS + LAG)      # 422.700: the frame on which that kick is heard
 
 # ----------------------------------------------------------------------------
 # what the plates say: measured values (PDG 2024, CODATA 2022) and what follows from them
@@ -2004,41 +2027,77 @@ def _cls(r):
     return "X" if a >= 6.0e5 else "L" if a >= 2.8e5 else "M" if a >= 1.65e5 else "S"
 
 
-def schedule(ctx, land):
-    """The whole sequence: a list of [t_in, t_out, rect, plate, class, first of its cell, taken apart, cell].
+def music_hits(cues, t0, t1):
+    """The hits of the music between t0 and t1, each on the frame where it is heard: (times, strengths,
+    kicks). Every onset of the cues is a hit; a kick is the onset it falls with (within two frames), or a hit
+    of its own. Two hits less than five frames apart are one: a flash (FLASH) is over before the next one."""
+    fr = {}
+    m = (cues.onset_t >= t0 - LAG - 0.02) & (cues.onset_t < t1 - LAG)
+    for t, a in zip(cues.onset_t[m], cues.onset_a[m]):
+        n = int(round((float(t) + LAG) / FRAME))
+        fr[n] = [max(fr.get(n, (0.0, 0.0))[0], float(a)), 0.0]
+    m = (cues.kick_t >= t0 - LAG - 0.02) & (cues.kick_t < t1 - LAG)
+    for t, a in zip(cues.kick_t[m], cues.kick_a[m]):
+        n = int(round((float(t) + LAG) / FRAME))
+        near = [v for v in fr if abs(v - n) <= 2]
+        if near:
+            v = min(near, key=lambda v: abs(v - n))
+            fr[v][1] = max(fr[v][1], float(a))
+        else:
+            fr[n] = [0.0, float(a)]
+    out = []
+    for n in sorted(fr):
+        if out and n - out[-1][0] < 5:
+            out[-1][1], out[-1][2] = max(out[-1][1], fr[n][0]), max(out[-1][2], fr[n][1])
+        else:
+            out.append([n, fr[n][0], fr[n][1]])
+    if len(out) < t1 - t0:                          # no cues to speak of: the eighth notes of the track, a kick on the beats
+        out = [[int(round(v / FRAME)), 1.0 - 0.6 * (k % 2), 1.0 - k % 2]
+               for k, v in enumerate(np.arange(t0 + LAG, t1, 0.5 * BEAT))]
+    return ([o[0] * FRAME - 1e-4 for o in out], [max(o[1], 0.8 * o[2]) for o in out], [o[2] for o in out])
 
-    Every two bars the bays are cut into new cells. A cell cuts to another plate on the music: on the bars
-    (the largest), the half-bars, the beats, the kicks - faster in each of the three phrases. The times are
-    the kicks of the music themselves wherever one falls on the grid. After T_TRANS nothing cuts any more:
-    the plates that are there are taken apart, one or two on each of the last kicks, the large ones last."""
+
+def schedule(ctx, land):
+    """The whole sequence: a list of [t_in, t_out, rect, plate, class, taken apart].
+
+    Every two bars the bays are cut into new cells, whose plates come in over the three hits after the
+    downbeat (the first time: as the ring that leaves the landing point of the muon reaches them). Then every
+    hit takes plates away - they flash - and brings a plate to every cell the hit before left dark. Which
+    cells: the smallest of them are the high voice (every hit; two of them in the third phrase, one more on
+    an accent), the middle ones answer the accents, the largest third the kicks; in a voice the plate that
+    has been there longest goes. A hit never flashes more than a quarter of the wall, a plate stays MIN_LIFE.
+    On the next downbeat everything that is lit goes in one flash. After T_TRANS nothing cuts any more: the
+    plates that are there are taken apart, one or two on each of the last kicks, the large ones last."""
     cues = ctx.cues
     rng = np.random.default_rng(4217)
-    kk = cues.kick_t[(cues.kick_t >= T_DRUMS - 0.05) & (cues.kick_t < T_TRANS)].astype(np.float64)
-    oo = cues.onset_t[(cues.onset_t >= T_DRUMS - 0.05) & (cues.onset_t < T_TRANS)].astype(np.float64)
-
-    def snap(t):
-        if len(kk):
-            j = int(np.argmin(np.abs(kk - t)))
-            if abs(kk[j] - t) < 0.07:
-                return float(kk[j])
-        return float(t)
-
+    ht, hs, hk = music_hits(cues, T_DRUMS, T_TRANS)
+    if ht[0] > T_ON + 0.05:                         # the kick that brings the drums back is a hit, whatever the cues say
+        ht.insert(0, T_ON); hs.insert(0, 1.0); hk.insert(0, 1.0)
+    ht[0] = T_ON
     cols = [c for c in ctx.cols if c[1] - c[0] >= 250.0]
     fx = ctx.focus[0]
     n_lay = int(math.ceil((T_TRANS - T_DRUMS) / (2 * BAR) - 1e-6))
+    edges = [0]                                     # the hit on the downbeat of every second bar (or the beat itself)
+    for j in range(1, n_lay):
+        g = T_DRUMS + LAG + j * 2 * BAR
+        i = int(np.argmin(np.abs(np.asarray(ht) - g)))
+        if abs(ht[i] - g) > 0.07:
+            i = int(np.searchsorted(ht, on_frame(g)))
+            ht.insert(i, on_frame(g)); hs.insert(i, 1.0); hk.insert(i, 0.0)
+        edges.append(i)
+    edges.append(len(ht))
+    ht, hs, hk = np.asarray(ht, np.float64), np.asarray(hs), np.asarray(hk)
     deck = [int(v) for v in rng.permutation(len(PLATES))]
-    busy = np.full(len(PLATES), -1e9)
     by_fn = {pl[0].__name__: k for k, pl in enumerate(PLATES)}
+    kept = set()                                    # plates that are not dealt
     if any(c[1] - c[0] < 300.0 for c in cols):      # a bay only wide enough for the figures: they are its own
-        busy[by_fn["p_const"]] = 1e9
+        kept.add(by_fn["p_const"])
     want = [by_fn["p_frames"], by_fn["p_survival"]]  # the last large plates: why the muon gets here at all
-    out = []
-    prev_pick = {}
+    out, shown, prev_pick = [], set(), {}
     for j in range(n_lay):
-        ta = T_DRUMS if j == 0 else snap(T_DRUMS + j * 2 * BAR)
+        i0, i1 = edges[j], edges[j + 1]
         last = j == n_lay - 1
-        tb = T_OUT if last else snap(T_DRUMS + (j + 1) * 2 * BAR)
-        q = 0 if j < 2 else 1 if j < 4 else 2          # the phrase: how fast the cells cut
+        q = 0 if j < 2 else 1 if j < 4 else 2          # the phrase: how much of the wall a hit changes
         rects = []
         for ci, (x0, x1) in enumerate(cols):
             cells = []
@@ -2051,71 +2110,94 @@ def schedule(ctx, land):
                     break
             prev_pick[ci] = [tuple(np.round(c)) for c in cells]
             rects += cells
-        # births: the first cells are made as the ring that leaves the landing point of the muon reaches them
-        dist = [math.hypot(0.5 * (r[0] + r[2]) - land[0], 0.5 * (r[1] + r[3]) - land[1]) for r in rects]
-        order = sorted(range(len(rects)), key=lambda k: dist[k])
-        birth = {k: ta if j else T_DRUMS + (dist[k] - dist[order[0]]) / V_SHOCK for k in order}
-        stop = min(tb, T_TRANS)
+        n = len(rects)
+        cls = [_cls(r) for r in rects]
+        area = np.array([(r[2] - r[0]) * (r[3] - r[1]) for r in rects])
+        order = np.argsort(area, kind="stable")
+        voice = np.ones(n, int)                       # 0: every hit, 1: the accents, 2: the kicks
+        voice[order[:max(1, int(round(0.4 * n)))]] = 0
+        voice[order[n - max(1, int(round(0.3 * n))):]] = 2
+        still = [r[2] - r[0] < 300.0 for r in rects]  # a column of figures has one plate: it is not taken away
+        cx, cy = np.array([0.5 * (r[0] + r[2]) for r in rects]), np.array([0.5 * (r[1] + r[3]) for r in rects])
+        if j == 0:                                    # births: as the ring that leaves the landing point reaches them
+            dist = np.hypot(cx - land[0], cy - land[1])
+            first = int(np.argmin(dist))
+            dark = {k: int(np.searchsorted(ht, T_ON + (dist[k] - dist[first]) / V_SHOCK - 0.5 * FRAME)) for k in range(n)}
+        else:                                         # ... then from the left, the right, the middle, the edges
+            ox = (L.FX0, L.FX1, 0.5 * (L.FX0 + L.FX1), None)[(j - 1) % 4]
+            d = np.abs(cx - ox) if ox is not None else -np.abs(cx - 0.5 * (L.FX0 + L.FX1))
+            rank = np.argsort(np.argsort(d, kind="stable"), kind="stable")
+            first = -1
+            dark = {k: i0 + 1 + int(3 * rank[k] / n) for k in range(n)}       # cell -> the hit that brings its plate
         if last:
-            busy[want] = 1e9                          # kept for the end
-        events = []                                   # (time, cell, first, end): every cut of this layout
-        for k, r in enumerate(rects):
-            c = _cls(r)
-            # a cell cuts on the grid of the track (step, offset in beats) or on every n-th onset of the music;
-            # neighbours take different offsets: they never cut together, the wall is never empty
-            if c == "X":
-                rule = (4.0, 0.0) if q < 2 else (2.0, 0.0)
-            elif c == "L":
-                rule = (2.0, k % 2) if q < 2 else (1.0, 0.5 * (k % 2))
-            elif c == "M":
-                rule = ((2.0, 0.5 * (k % 4)), (1.0, 0.25 * (k % 4)), (3, k % 3))[q]
-            else:
-                rule = ((1.0, 0.25 * (k % 4)), (2, k % 2), (2, k % 2))[q]
-            if isinstance(rule[0], float):
-                ts = [snap(v) for v in np.arange(T_DRUMS + rule[1] * BEAT, stop, rule[0] * BEAT)]
-            else:
-                ts = [float(v) for n, v in enumerate(oo) if n % rule[0] == rule[1]]
-            hold = BAR - 0.05 if (j == 0 and k == order[0]) else 0.11
-            ts = [birth[k]] + [v for v in ts if birth[k] + hold < v < stop - 0.05]
-            for n, v in enumerate(ts):
-                events.append((v, k, n == 0, ts[n + 1] if n + 1 < len(ts) else tb))
-        events.sort(key=lambda e: (e[0], e[1]))
-        prev, cur = {}, {}
-        for t_in, k, first, t_end in events:
+            kept |= set(want)                         # kept for the end
+        stop = int(np.searchsorted(ht, T_TRANS - 0.3)) if last else i1       # the last flashes: then every cell is lit
+        accent = np.argsort(np.argsort(hs[i0:i1], kind="stable"), kind="stable") / max(i1 - i0 - 1, 1)
+        lit, prev = {}, {}
+
+        def bring(k, h):
+            """A plate cuts into cell k at h: the next one of the deck that fits it and is not on the wall."""
             r = rects[k]
-            c, w = _cls(r), r[2] - r[0]
             pid = None
-            if j == 0 and first and k == order[0] and c in PLATES[by_fn["p_identity"]][4]:
-                pid = by_fn["p_identity"]            # where the lone muon landed: what it is
+            if j == 0 and k == first and k not in prev and cls[k] in PLATES[by_fn["p_identity"]][4]:
+                pid = by_fn["p_identity"]             # where the lone muon landed: what it is
             if pid is None:
-                for n, pp in enumerate(deck):
+                for m, pp in enumerate(deck):
                     pl = PLATES[pp]
-                    if c in pl[4] and w >= pl[5] and busy[pp] <= t_in + 1e-6 and pp != prev.get(k):
+                    if (cls[k] in pl[4] and r[2] - r[0] >= pl[5] and pp not in kept and pp not in shown
+                            and pp != prev.get(k)):
                         pid = pp
-                        deck.append(deck.pop(n))
+                        deck.append(deck.pop(m))
                         break
-            if pid is None and k in cur:              # nothing else fits this cell: it keeps what it shows
-                cur[k][1] = t_end
-                busy[cur[k][3]] = max(busy[cur[k][3]], t_end)
-                continue
             if pid is None:
                 pid = by_fn["p_const"]
-            busy[pid] = max(busy[pid], t_end)
+            shown.add(pid)
             prev[k] = pid
-            cur[k] = [t_in, t_end, r, pid, c, first, False, k]
-            out.append(cur[k])
-        if last:                                      # the plates that are there when the cuts stop: taken apart
-            fin = [e for e in out if e[1] == tb and e[0] <= T_TRANS]
-            wk = cues.kick_t[(cues.kick_t >= T_TRANS + 0.3) & (cues.kick_t <= T_OUT - 1.2)].astype(np.float64)
-            if len(wk) < 3:
-                wk = np.linspace(T_TRANS + 0.5, T_OUT - 1.3, 8)
-            fin.sort(key=lambda e: (RANK[e[4]], -abs(0.5 * (e[2][0] + e[2][2]) - fx)))
-            for n, e in enumerate(fin):
-                e[1] = float(wk[min(len(wk) - 1, int(n * len(wk) / max(len(fin), 1)))]) + 0.35
-                e[6] = True
-            for e in sorted(fin, key=lambda e: (-RANK[e[4]], abs(0.5 * (e[2][0] + e[2][2]) - fx))):
-                if want and e[4] in PLATES[want[0]][4] and e[2][2] - e[2][0] >= PLATES[want[0]][5]:
-                    e[3] = want.pop(0)
+            lit[k] = [h, T_OUT, r, pid, cls[k], False]
+            out.append(lit[k])
+            del dark[k]
+
+        for i in range(i0, i1):
+            h = float(ht[i])
+            for k in [k for k in sorted(dark) if dark[k] <= i]:
+                bring(k, h)
+            if i >= stop:
+                continue
+            hold = {k: BAR - 0.05 if k == first and e[3] == by_fn["p_identity"] else MIN_LIFE[cls[k]]
+                    for k, e in lit.items()}          # what the muon is stays for a bar
+            ready = [k for k in sorted(lit, key=lambda k: (lit[k][0], k)) if h - lit[k][0] >= hold[k] and not still[k]]
+            a = accent[i - i0]
+            take, room = [], 0.25 * L.W * L.H
+            for v, cnt in ((2, 1 if hk[i] > 0 else 0), (0, (1, 1 + (a >= 0.6), 2 + (a >= 0.8))[q]),
+                           (1, 1 if a >= (0.5, 0.5, 0.3)[q] else 0)):
+                for k in [k for k in ready if voice[k] == v][:cnt]:
+                    if area[k] <= room:
+                        take.append(k)
+                        room -= area[k]
+            for k in take:
+                e = lit.pop(k)
+                e[1] = h
+                shown.discard(e[3])
+                dark[k] = i + 1
+        if not last:                                  # the downbeat of the next two bars: the wall goes in one flash
+            for e in lit.values():
+                e[1] = float(ht[i1])
+                shown.discard(e[3])
+            continue
+        for k in sorted(dark):                        # (a cell the last hit left dark)
+            bring(k, on_frame(min(float(ht[-1]) + 0.12, T_TRANS)))
+        # the plates that are there when the cuts stop: taken apart
+        fin = list(lit.values())
+        wk = cues.kick_t[(cues.kick_t >= T_TRANS + 0.3 - LAG) & (cues.kick_t <= T_OUT - 1.2 - LAG)].astype(np.float64) + LAG
+        if len(wk) < 3:
+            wk = np.linspace(T_TRANS + 0.5, T_OUT - 1.3, 8)
+        fin.sort(key=lambda e: (RANK[e[4]], -abs(0.5 * (e[2][0] + e[2][2]) - fx)))
+        for m, e in enumerate(fin):
+            e[1] = float(wk[min(len(wk) - 1, int(m * len(wk) / max(len(fin), 1)))]) + 0.35
+            e[5] = True
+        for e in sorted(fin, key=lambda e: (-RANK[e[4]], abs(0.5 * (e[2][0] + e[2][2]) - fx))):
+            if want and e[4] in PLATES[want[0]][4] and e[2][2] - e[2][0] >= PLATES[want[0]][5]:
+                e[3] = want.pop(0)
     out.sort(key=lambda e: e[0])
     return out
 
@@ -2132,10 +2214,9 @@ BLOCKS = [("spec", 300.0, 560.0), ("count", 150.0, 200.0), ("rate", 200.0, 0.0, 
 
 
 class Quick(B.Block):
-    """The construction of a plate that lives a fraction of a second: the same moves as everywhere in the show
-    (pens, marks thrown out, curves traced), but what is written is right as soon as it is written. Only the
-    three characters at the pen are still noise, and no figure spins: a figure that spins for as long as its
-    plate is there would be a wrong figure on the wall."""
+    """A plate being taken apart in the transition: the moves of the show (pens, marks thrown out, curves
+    traced) run backwards with a short wave. Only the three characters at the pen are noise, and no figure
+    spins: a figure that spins while its plate is still there would be a wrong figure on the wall."""
     HOLD = 0.5                  # everything is in place 0.45 s after the wave has passed: the frame then draws as usual
 
     def _key(self, xl, y):
@@ -2149,6 +2230,12 @@ class Quick(B.Block):
         if a <= 0.0:
             return "", 0.0
         return B.tag_state(s, a, cps=self.cps, wipe=0.05, lead=8, key=self._key(xl, y))
+
+
+def leaving(left, out, span=1.3):
+    """Age for Frame.build of something that was cut in whole and is taken apart in its last `out` seconds
+    (None: it is there, drawn as usual; negative: gone)."""
+    return None if left >= out else B.io(span, left, out=out, span=span)
 
 
 class Glitch(Scene):
@@ -2168,7 +2255,8 @@ class Glitch(Scene):
         self.land = (ctx.focus[0] + 0.12 * (ctx.focus_bay[1] - ctx.focus_bay[0]), Y_GROUND)
         self.cells = schedule(ctx, self.land)
         self.c_in = np.array([c[0] for c in self.cells])
-        self.c_out = np.array([c[1] for c in self.cells])
+        # a plate that is taken apart is gone at its t_out; the others leave static for FLASH after it
+        self.c_end = np.array([c[1] + (0.0 if c[5] else FLASH) for c in self.cells])
         self.cut_t = np.sort(self.c_in)
         self.place = flow(bottom_panels(ctx), BLOCKS)
         # the three phrases on the score strip: how many plates a second each one cuts
@@ -2178,20 +2266,12 @@ class Glitch(Scene):
             n = int(np.searchsorted(self.cut_t, tb) - np.searchsorted(self.cut_t, ta))
             self.marks.append((ta, f"{n / (tb - ta):.0f} CUTS/S"))
         self.marks.append((T_TRANS, "RUN OUT"))
-        # the event of every bar: one plate cut in on its downbeat (a medium one: never a large area) is shown
-        # inverted for two frames on the following eighth note - the 'commit' of the build-ups, once every 1.92 s
-        self.bar_cells = set()
-        for b in range(1, int((T_TRANS - T_DRUMS) / BAR) + 1):
-            tb = T_DRUMS + b * BAR
-            near = [k for k, c in enumerate(self.cells) if abs(c[0] - tb) < 0.08 and c[1] - c[0] > 0.4 and c[4] in "MS"]
-            if near:
-                self.bar_cells.add(max(near, key=lambda k: (RANK[self.cells[k][4]], -k)))
 
     # ------------------------------------------------------------------ draw
     def draw(self, f, t, ctx):
-        if t < T_DRUMS:
+        if t < T_ON:
             return self._break(f, t, ctx)
-        a = audio(ctx.cues, t)
+        a = audio(ctx.cues, t - LAG)                # what is heard now
         self._strip(f, t, ctx)
         self._shock(f, t)
         self._plates(f, t, a)
@@ -2205,25 +2285,36 @@ class Glitch(Scene):
         return {"edge_alpha": 0.5 + 0.5 * float(1.0 - smoothstep(T_TRANS, T_TRANS + 4.5, t))}
 
     def _plates(self, f, t, a):
-        """The cells that are on the wall at t: each one constructs its plate in a few frames when it cuts to
-        it, keeps it alive, and (in the transition) takes it apart."""
-        for k in np.flatnonzero((self.c_in <= t) & (t < self.c_out)):
-            t_in, t_out, rect, pid, cls, first, taken, _ = self.cells[k]
-            u, dur = t - t_in, t_out - t_in
-            flash = int(k) in self.bar_cells
+        """The plates on the wall at t. A plate is there, whole, from the frame of the hit that brings it; the
+        hit that takes it away leaves static in its cell for FLASH. The last ones (the transition) are taken
+        apart instead."""
+        for k in np.flatnonzero((self.c_in <= t) & (t < self.c_end)):
+            t_in, t_out, rect, pid, cls, taken = self.cells[k]
+            if t >= t_out:
+                self._static(f, t, rect, a, int(k))
+                continue
             fn, code, title, cap = PLATES[pid][:4]
-            wave = 0.16 if first else min(0.10, 0.2 * dur)          # a plate is complete for at least half its life
-            line = max(0.04, min(0.12 if flash else 0.2, 0.3 * dur))
-            age = B.io(u, t_out - t, out=0.35, span=wave + line + 0.1) if taken else u
-            with Quick(f, age, rect, wave=wave, line=line, cps=420.0, marks=first and cls in "XL", key=int(k) * 7 + pid):
-                fn(Pl(f, chrome(f, rect, code, title, cap, a, int(k)), u, t, a, key=int(k)))
-            if flash:                                 # the event of the bar: its plate is committed on the off-beat
-                B.flash(f, rect, u, 0.5 * BEAT)
+            with Quick(f, leaving(t_out - t, 0.35, span=0.4) if taken else None, rect, wave=0.1, line=0.2, cps=420.0,
+                       marks=False, key=int(k) * 7 + pid):
+                fn(Pl(f, chrome(f, rect, code, title, cap, a, int(k)), t - t_in, t, a, key=int(k)))
+
+    @staticmethod
+    def _static(f, t, rect, a, key):
+        """The flash: the static behind the MUON card as it stands at 01:43:10, in one cell - the same bars
+        (muon.static), as many of them to the metre, its bands of density drifting through, a few red ones - and
+        a new pattern on every frame (FRAME), each cell its own."""
+        x0, y0, x1, y1 = rect
+        ry = y0 + (np.arange(int((y1 - y0) / ROW_H)) + 0.5) * ROW_H
+        band = 0.55 + 0.45 * np.sin(ry * 0.013 + t * 9.0) * np.sin(ry * 0.0041 - t * 3.1)
+        part = (x1 - x0) / (L.FX1 - L.FX0 - 8.0)      # static() deals its bars for the width of the wall
+        tf = (round(t / FRAME) + 977 * key) / 30.0    # ... and a new pattern every 1 / 30 s: a cell takes its own run of them
+        static(f, tf, rect, (0.26 + 0.1 * a["loud"]) * (0.55 + 0.75 * band ** 2) * part, seed=3 + 17 * key)
+        static(f, tf, rect, 0.012 * part, seed=11 + 17 * key, layer="r")
 
     def _shock(self, f, t):
         """The kick that brings the drums back is the muon of the break reaching the ground: rings leave the
-        point where it landed, and the plates are made as the first one reaches them."""
-        a = t - T_DRUMS
+        point where it landed, and the plates cut in on the hits of the music as the first one reaches them."""
+        a = t - T_ON
         if a >= 1.3:
             return
         f.set_clip(L.FX0, L.HEAD_Y, L.FX1, VIEW_Y1)
@@ -2238,31 +2329,31 @@ class Glitch(Scene):
 
     def _sweep(self, f, t):
         """On every bar a line reads the wall from top to bottom (and stops with the cuts)."""
-        ph = (t - T_DRUMS) % BAR
-        if ph < 0.24 and T_DRUMS + BAR - 0.01 <= t < T_TRANS:
+        ph = (t - T_ON) % BAR
+        if ph < 0.24 and T_ON + BAR - 0.01 <= t < T_TRANS:
             y = Y_TOP + (Y_BOT - Y_TOP) * float(B.ease(ph / 0.24))
             f.segments("w", [L.FX0 + 30.0], [y], [L.FX1 - 30.0], [y], 0.8, width=L.LW)
 
     def _strip(self, f, t, ctx):
         """Score strip: the loudness of the music and the hits of the towers over the whole sequence, the
-        three phrases, the time."""
-        age = B.io(t - T_DRUMS, T_OUT - 0.5 - t, out=0.6, span=1.2)
-        if age < 0.0:
+        three phrases, the time. There on the kick; taken apart at the end."""
+        left = T_OUT - 0.5 - t
+        if left <= 0.0:
             return
         n = int(np.searchsorted(self.cut_t, t, side="right"))
-        hud.show_strip(f, t, ctx, f"OVERLOAD // MUON + QUANTUM + RELATIVITY // CUT ON THE KICKS // PLATE {n:04d}",
-                       T_DRUMS, T_OUT, marks=self.marks, age=age)
+        hud.show_strip(f, t, ctx, f"OVERLOAD // MUON + QUANTUM + RELATIVITY // CUT ON EVERY HIT // PLATE {n:04d}",
+                       T_DRUMS, T_OUT, marks=self.marks, age=leaving(left, 0.6, span=1.2))
 
     def _bottom(self, f, t, ctx, a):
         """Bottom band: the spectrum of the music (what drives the cuts), the count of plates, the cuts as a
-        barcode; then, alone, the count of the falling muons."""
+        barcode - there on the kick, taken apart in the transition; then, alone, the count of the falling muons."""
         y0, y1 = ctx.slots["y0"], ctx.slots["y1"]
         pl = self.place
         box = lambda p: (p[0] - 8.0, y0 - 24.0, p[1] + 8.0, y1 + 8.0)
         if "spec" in pl:
             x0, x1 = pl["spec"]
-            with f.build(B.io(t - T_DRUMS - 0.1, T_LANES - 0.9 - t, out=0.4), box(pl["spec"]), key=71):
-                hud.panel_header(f, x0, x1, y0, "DRIVE // THE MUSIC, 30 HZ - 16 KHZ // ITS KICKS CUT THE PLATES"
+            with f.build(leaving(T_LANES - 0.9 - t, 0.4), box(pl["spec"]), key=71):
+                hud.panel_header(f, x0, x1, y0, "DRIVE // THE MUSIC, 30 HZ - 16 KHZ // ITS HITS CUT THE PLATES"
                                  if x1 - x0 > 520 else "DRIVE // THE MUSIC")
                 sp = a["spec"]
                 bw = (x1 - x0 - 150.0) / len(sp)
@@ -2279,14 +2370,14 @@ class Glitch(Scene):
         n = int(np.searchsorted(self.cut_t, t, side="right"))
         if "count" in pl:
             x0, x1 = pl["count"]
-            with f.build(B.io(t - T_DRUMS - 0.25, T_LANES - 0.7 - t, out=0.4), box(pl["count"]), key=72):
+            with f.build(leaving(T_LANES - 0.7 - t, 0.4), box(pl["count"]), key=72):
                 hud.panel_header(f, x0, x1, y0, "PLATES SHOWN")
                 f.text("w", x0, y0 + 84.0, f"{n:04d}", size=fsz(4, x1 - x0, 58.0))
                 rate = n - int(np.searchsorted(self.cut_t, t - 1.0, side="right"))
                 f.text("w", x0 + 2.0, y0 + 112.0, f"{rate:02d} A SECOND", size=L.T_MICRO, alpha=0.75)
         if "rate" in pl:
             x0, x1 = pl["rate"]
-            with f.build(B.io(t - T_DRUMS - 0.4, T_LANES - 0.5 - t, out=0.4), box(pl["rate"]), key=73):
+            with f.build(leaving(T_LANES - 0.5 - t, 0.4), box(pl["rate"]), key=73):
                 hud.panel_header(f, x0, x1, y0, "CUTS >> BARCODE // LAST 3 S" if x1 - x0 > 300 else "CUTS >> BARCODE")
                 cols = int(np.clip((x1 - x0) / 3.6, 40, 160))
                 kk, frac, dt = hud.barcode_keys(t, 3.0, cols)
@@ -2339,7 +2430,7 @@ class Glitch(Scene):
         dim = 0.3
         cam = OrthoCamera((0.0, 0.0, 60.0), (0.0, 0.0, 0.0), scale=geo.S, screen_center=(geo.x_mid, Y_GROUND))
         # the only muon: it takes the whole break to come down on the focus, and lands when the drums come back
-        p = float(np.clip((t - T_IN) / (T_DRUMS - T_IN), 0.0, 1.0))
+        p = float(np.clip((t - T_IN) / (T_ON - T_IN), 0.0, 1.0))
         ytop = view[1] + 4
         y = ytop + p * (Y_GROUND - ytop)
         slope = math.tan(math.radians(5.0))
