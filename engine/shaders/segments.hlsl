@@ -52,9 +52,10 @@ V2P VS(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     if (L <= 0.0) { dir = float2(1.0, 0.0); live = false; }
     float2 n = float2(-dir.y, dir.x);
     float gain = gS035;
-    if (g.width > 1.25)
+    float width = g.width + gWeight;              // the WEIGHT of the OUTPUT panel
+    if (width > 1.25)
     {
-        float ws = g.width * gS;
+        float ws = width * gS;
         float reps = clamp(ceil(ws / 0.6), 2.0, 255.0);       // as many passes as renderer.cpp made instances
         float off = (k / (reps - 1.0) - 0.5) * (ws - 1.0);
         a += n * off;

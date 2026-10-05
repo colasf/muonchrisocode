@@ -859,6 +859,7 @@ class Origin(Scene):
         self.C = self.lay.C
         far = self.lay.far
         self.field = StreakField(n=120, r_max=far + 80.0, r_min=18.0)
+        self.field.red[117] = True                           # a third red line, picked on the frame (the long one to the right)
         self.rip = Ripples(T_HERE, list(ctx.cues.onset_t), far)
         self.nova = Nova(self.lay)
         rng = np.random.default_rng(3)
@@ -925,8 +926,7 @@ class Origin(Scene):
             self._star(f, t, ctx)
         else:
             return self._nova(f, t, ctx)
-        ca = t - (T_STAR + 0.5)          # the counter of the show is built here, with the furniture of the star
-        return {"cell": ca > 0.0, "cell_age": ca}
+        return {"cell": False}           # no bottom band under the star: the counter is built with the supernova
 
     def _panels(self, f, fns, alpha=1.0, age=None, lag=0.12):
         """Bottom band: the panels, by priority, in the free slots between the towers (extra ones dropped).
@@ -1138,7 +1138,8 @@ class Origin(Scene):
         if T_HERE <= t < T_ALWAYS:                  # each note is taken apart before the next one is made
             left = T_ALWAYS - 0.1 - t
             a = B.io(t - T_HERE, left, out=0.45)
-            box_note(f, lay, [("HERE", a), ("RIGHT NOW", a - 0.75)], a)
+            axis_note(f, lay, "HERE", above=["CINCINNATI // 147 M ASL", "39.103 N  084.512 W"], title2="RIGHT NOW",
+                      below=[f"T {sd.tc(t)}", "1 MUON EVERY 16 MS"], age=a, age2=a - 0.75, build=True, commit=left > 0.45)
         if mini > 0:
             g = 150.0 - 118.0 * mini
             for sx in (-1, 1):
@@ -1335,14 +1336,6 @@ class Origin(Scene):
                                     ("RHO_CORE  1E10 G/CM3", None),
                                     (f"COLLAPSE  T-{left:06.3f} S", f"T-{left:06.3f} S")], a, red_rows=(7,), build=True)
         self._star_notes(f, t, R, core, a, implode)
-        self._panels(f, [lambda f, x0, x1, y0, y1, a_: self._p_core_mass(f, t, x0, x1, y0, y1, a_, a, implode),
-                         lambda f, x0, x1, y0, y1, a_: self._p_shells(f, t, x0, x1, y0, y1, a_, a, implode),
-                         lambda f, x0, x1, y0, y1, a_: self._p_pressure(f, t, ctx, x0, x1, y0, y1, a_),
-                         lambda f, x0, x1, y0, y1, a_: self._p_core_radius(f, t, x0, x1, y0, y1, a_, implode)],
-                     age=a - 0.3)
-        with f.build(a - 0.5, lay.cell_r, marks=False, key=41):
-            cell_right(f, lay, "YEAR // BEFORE NOW", f"-{YEAR0:,.0f}".replace(",", " "), sub="LOOKING BACK", red=True,
-                       value_short=f"-{YEAR0:.1E}".replace("E+0", "E"))
 
     def _star_notes(self, f, t, R, core, a, implode):
         """Three read-outs in the notes column with leaders to the star; the core sits on the axis. Each one is
@@ -1481,13 +1474,12 @@ class Origin(Scene):
         f.set_clip(*FRAME_CLIP)
         self._ray_tags(f, cam, t)
         f.set_clip()
-        self._panels(f, [lambda f, x0, x1, y0, y1, a_: self._p_neutrino(f, t, x0, x1, y0, y1),
-                         lambda f, x0, x1, y0, y1, a_: self._p_messengers(f, t, x0, x1, y0, y1, a),
-                         lambda f, x0, x1, y0, y1, a_: self._p_light(f, t, x0, x1, y0, y1),
-                         lambda f, x0, x1, y0, y1, a_: self._p_ejecta(f, t, x0, x1, y0, y1, a)], age=a - 0.1)
-        cell_right(f, lay, "YEAR // BEFORE NOW", f"-{YEAR0:,.0f}".replace(",", " "), sub="T+" + f"{a:05.2f} S", red=True,
-                   value_short=f"-{YEAR0:.1E}".replace("E+0", "E"))
-        return {"exposure": 1.0 + (0.5 * flash + 1.2 * burst) * out, "bloom_gain": 0.75 + 0.5 * flash * out}
+        with f.build(a - 0.1, lay.cell_r, marks=False, key=41):
+            cell_right(f, lay, "YEAR // BEFORE NOW", f"-{YEAR0:,.0f}".replace(",", " "), sub="T+" + f"{a:05.2f} S", red=True,
+                       value_short=f"-{YEAR0:.1E}".replace("E+0", "E"))
+        # no counter of the show under the supernova: it is built at the cut to the messenger
+        return {"exposure": 1.0 + (0.5 * flash + 1.2 * burst) * out, "bloom_gain": 0.75 + 0.5 * flash * out,
+                "cell": False}
 
     def _ray_text(self, k):
         return f"{self.nova.kind[k]} {0.3 * 10 ** (2 + 4 * hash01(k, 7)):.1E} GEV".replace("E+0", "E")

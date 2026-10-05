@@ -22,6 +22,8 @@
 //       button): choose the WAV file(s) the engine plays and follows from then on; Shift+O: no sound again.
 //       C (or the COMMENT button): type a comment, Enter writes it with its time code to comments.txt in
 //       the repository folder (Esc cancels); the show is paused while it is typed.
+//       A (or the CLAUDE button): the same line, sent to Claude Code; its answer comes in a panel above the
+//       bar (Shift+A hides and shows it).
 //       S (or the SNAPSHOT button): the picture on screen is written to snapshots/MM-SS-FF_scene.png in the
 //       repository folder, to be drawn and written on, and a line of comments.txt names it. Shift+S (or
 //       Shift and the button) opens that folder.

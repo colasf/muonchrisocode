@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -38,11 +39,14 @@ const float BAR_PAD = 12.0f;                // its margin left and right
 const float BTN_W = 44.0f;                  // the play / pause button, at its left
 const float TC_W = 114.0f;                  // the time code MM:SS:FF, after the button
 const float BAR_X0 = BTN_W + TC_W + BAR_PAD; // where the time line starts
-const float OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W = 102.0f;      // the OUTPUT, SOUND, SNAPSHOT and COMMENT buttons, at its right
-const float RIGHT_W = OUT_W + SND_W + SNP_W + CMT_W;
+const float OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W = 102.0f, ASK_W = 90.0f;      // the OUTPUT, SOUND, SNAPSHOT, COMMENT
+const float RIGHT_W = OUT_W + SND_W + SNP_W + CMT_W + ASK_W;                                  // and CLAUDE buttons, at its right
 const float BOX_H = 40.0f;                  // the line a comment is typed in, above the bar
-const float PANEL_H = 92.0f;                // the OUTPUT panel, above the bar
+const float PANEL_H = 134.0f;               // the OUTPUT panel, above the bar
+const float GLOW_MAX = 1.0f, RED_MAX = 3.0f, WEIGHT_MAX = 1.5f;      // the ends of its GLOW, RED and WEIGHT sliders
+const float TUNE_X0 = 176.0f, TUNE_W = 180.0f, TUNE_PITCH = 420.0f;  // where those sliders are
 const float LIFT_MAX = 3.0f;                // the end of the LIFT slider
+const int MOVE_MAX = 400;                   // how far MOVE can take the output from its place, pixels
 const float SLIDER_X0 = 150.0f, SLIDER_W = 300.0f;
 
 // ------------------------------------------------------------------------------------------------
@@ -238,9 +242,10 @@ struct Window {
     bool overBar() const { return bar > 0 && my >= h - bar && my < h && mx >= 0 && mx < w; }
     bool overButton() const { return overBar() && mx < BTN_W; }         // the play / pause button
     bool overOutput() const { return overBar() && mx >= w - RIGHT_W && mx < w - RIGHT_W + OUT_W; }
-    bool overSound() const { return overBar() && mx >= w - RIGHT_W + OUT_W && mx < w - SNP_W - CMT_W; }
-    bool overSnapshot() const { return overBar() && mx >= w - SNP_W - CMT_W && mx < w - CMT_W; }
-    bool overComment() const { return overBar() && mx >= w - CMT_W; }
+    bool overSound() const { return overBar() && mx >= w - RIGHT_W + OUT_W && mx < w - SNP_W - CMT_W - ASK_W; }
+    bool overSnapshot() const { return overBar() && mx >= w - SNP_W - CMT_W - ASK_W && mx < w - CMT_W - ASK_W; }
+    bool overComment() const { return overBar() && mx >= w - CMT_W - ASK_W && mx < w - ASK_W; }
+    bool overAsk() const { return overBar() && mx >= w - ASK_W; }
     float lineEnd() const { return std::max(BAR_X0 + 1.0f, (float)w - RIGHT_W - BAR_PAD); }    // where the time line ends
     bool overLine() const { return overBar() && mx >= BAR_X0 - 6.0f && mx <= lineEnd() + 6.0f; }
     // mouse position -> 0..1 along the time line
@@ -461,6 +466,245 @@ float percentile(std::vector<float> v, double q)
     return v[(size_t)std::min<double>((double)v.size() - 1, q * v.size())];
 }
 
+// ------------------------------------------------------------------------------------------------
+// the prompt box: what is typed in the window goes to Claude Code, its answer comes back in a panel
+// ------------------------------------------------------------------------------------------------
+
+// Claude Code without its terminal: `claude -p`, started in the repository folder, the prompt on its standard
+// input, its answer read from a pipe by a thread. Every prompt of one run of the engine goes on in the same
+// conversation (--session-id for the first, --resume for the next ones). Nobody can answer a permission
+// request in that mode: what it may do is given on the command line (ARGS, or the one line of
+// engine/claude_args.txt when that file exists). Never in the Spout output: it is drawn with the bar.
+struct Claude {
+    static constexpr const wchar_t* ARGS = L"--permission-mode acceptEdits --allowedTools \"Read,Edit,Write,Glob,Grep,Bash(python:*),PowerShell(python:*)\"";
+    static constexpr const wchar_t* SYSTEM =
+        L"You are called from the prompt box of the Muon Bloom engine window, not from a terminal. Your answer is shown in a "
+        L"small panel with a 5 x 7 pixel ASCII font: answer in plain text, at most 8 short lines, no markdown, no tables, no "
+        L"accents. Each message starts with the show time and the scene that are on screen. The engine reloads the scenes "
+        L"as soon as a .py file under muonbloom is saved: save such a file only in a state that imports and draws. "
+        L"After a change of the picture, look at it before you answer: run  python tools/engine_frame.py MM:SS:FF  (several "
+        L"times, and --crop x0,y0,x1,y1 in wall pixels for a part at full size) - it draws those frames with the renderer of "
+        L"the engine and the lift the user has, and prints the paths of the pictures: read them, and say what you saw. "
+        L"Nobody can approve a permission request here: if something you need is refused, say what. "
+        L"Do not commit or push unless the message asks for it.";
+
+    fs::path root;
+    std::wstring exe, args = ARGS;
+    std::string session;                    // the conversation of this run
+    bool begun = false;                     // it exists: the next prompt resumes it
+    bool running = false, show = false;
+    double startedAt = 0;
+    std::vector<std::string> lines;         // what the panel shows: the questions ("> ...") and the answers
+    HANDLE proc = nullptr, rd = nullptr;
+    std::thread reader;
+    std::mutex mu;
+    std::string buf;                        // what the process has written so far
+    std::atomic<bool> eof{ false };
+
+    static std::string uuid()
+    {
+        GUID g;
+        if (CoCreateGuid(&g) != S_OK) return "00000000-0000-4000-8000-000000000000";
+        char b[40];
+        snprintf(b, sizeof b, "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x", g.Data1, g.Data2, g.Data3, g.Data4[0], g.Data4[1],
+                 g.Data4[2], g.Data4[3], g.Data4[4], g.Data4[5], g.Data4[6], g.Data4[7]);
+        return b;
+    }
+
+    void init(const fs::path& r)
+    {
+        root = r;
+        session = uuid();
+        wchar_t found[MAX_PATH];
+        if (SearchPathW(nullptr, L"claude.exe", nullptr, MAX_PATH, found, nullptr)) exe = found;
+        else {
+            wchar_t home[MAX_PATH];
+            std::error_code ec;
+            if (GetEnvironmentVariableW(L"USERPROFILE", home, MAX_PATH) && fs::exists(fs::path(home) / L".local/bin/claude.exe", ec))
+                exe = (fs::path(home) / L".local/bin/claude.exe").wstring();
+        }
+        std::ifstream f(root / L"engine" / L"claude_args.txt");
+        std::string line;
+        if (f && std::getline(f, line) && !line.empty()) args = std::wstring(line.begin(), line.end());
+    }
+
+    // Sends a prompt (UTF-8). False when it cannot be started: `why` says it.
+    bool ask(const std::string& prompt, const std::string& shown, std::string& why)
+    {
+        if (running) { why = "CLAUDE IS STILL WORKING"; return false; }
+        if (exe.empty()) { why = "claude.exe NOT FOUND (is Claude Code installed?)"; return false; }
+        SECURITY_ATTRIBUTES sa{ sizeof sa, nullptr, TRUE };
+        HANDLE inR = nullptr, inW = nullptr, outR = nullptr, outW = nullptr;
+        if (!CreatePipe(&inR, &inW, &sa, 0) || !CreatePipe(&outR, &outW, &sa, 0)) { why = "CANNOT OPEN A PIPE"; return false; }
+        SetHandleInformation(inW, HANDLE_FLAG_INHERIT, 0);
+        SetHandleInformation(outR, HANDLE_FLAG_INHERIT, 0);
+        std::wstring cmd = L"\"" + exe + L"\" -p " + (begun ? L"--resume " : L"--session-id ") + std::wstring(session.begin(), session.end())
+                           + L" " + args + L" --append-system-prompt \"" + SYSTEM + L"\"";
+        STARTUPINFOW si{};
+        si.cb = sizeof si;
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = inR;
+        si.hStdOutput = outW;
+        si.hStdError = outW;
+        PROCESS_INFORMATION pi{};
+        std::vector<wchar_t> line(cmd.begin(), cmd.end());
+        line.push_back(0);
+        const BOOL ok = CreateProcessW(nullptr, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, root.wstring().c_str(), &si, &pi);
+        CloseHandle(inR);
+        CloseHandle(outW);
+        if (!ok) {
+            CloseHandle(inW);
+            CloseHandle(outR);
+            why = "CLAUDE CANNOT BE STARTED";
+            return false;
+        }
+        CloseHandle(pi.hThread);
+        DWORD n = 0;
+        WriteFile(inW, prompt.data(), (DWORD)prompt.size(), &n, nullptr);
+        CloseHandle(inW);                   // the end of the prompt
+        proc = pi.hProcess;
+        rd = outR;
+        buf.clear();
+        eof = false;
+        reader = std::thread([this] {
+            char b[4096];
+            DWORD got = 0;
+            while (ReadFile(rd, b, sizeof b, &got, nullptr) && got) {
+                std::lock_guard<std::mutex> g(mu);
+                buf.append(b, got);
+            }
+            eof = true;
+        });
+        running = show = true;
+        startedAt = now();
+        lines.push_back("> " + shown);
+        return true;
+    }
+
+    // True once, when the answer is there (it is then in `lines`); `code` = how the process ended.
+    bool poll(DWORD& code)
+    {
+        if (!running || !eof) return false;
+        reader.join();
+        WaitForSingleObject(proc, 2000);
+        code = 1;
+        GetExitCodeProcess(proc, &code);
+        CloseHandle(proc);
+        CloseHandle(rd);
+        proc = rd = nullptr;
+        running = false;
+        if (code == 0) begun = true;
+        else if (!begun) session = uuid();  // (a conversation that did not start cannot be given the same name again)
+        std::string cur;
+        size_t added = 0;
+        for (unsigned char c : buf) {       // the 5 x 7 font is ASCII: one '?' for a character it does not have
+            if (c == '\n') { lines.push_back(cur); cur.clear(); added++; }
+            else if (c == '\r' || (c >= 0x80 && c < 0xC0)) continue;
+            else cur += (char)(c >= 32 && c < 127 ? c : c == '\t' ? ' ' : '?');
+        }
+        if (!cur.empty() || !added) lines.push_back(cur.empty() ? (code ? "(no answer: it ended with an error)" : "(done)") : cur);
+        lines.push_back("");
+        if (lines.size() > 400) lines.erase(lines.begin(), lines.end() - 400);
+        return true;
+    }
+
+    void close()
+    {
+        if (!running) return;
+        TerminateProcess(proc, 1);
+        reader.join();
+        CloseHandle(proc);
+        CloseHandle(rd);
+        running = false;
+    }
+
+    // The panel above the bar (above the line being typed): the end of the conversation, wrapped to the window.
+    void rects(std::vector<Renderer::Over>& o, int w, int h, int bar, bool typing) const
+    {
+        const float px = 2.0f, lh = 20.0f, bottom = (float)(h - bar) - (typing ? BOX_H : 0.0f);
+        const size_t room = (size_t)std::max(20.0f, ((float)w - 28.0f) / (6.0f * px));
+        std::vector<std::pair<std::string, bool>> out;      // (text, it is a question)
+        for (const std::string& l : lines) {
+            const bool q = l.rfind("> ", 0) == 0;
+            size_t i = 0;
+            do {
+                size_t n = std::min(room, l.size() - i);
+                if (i + n < l.size()) {                     // break at a space when there is one
+                    size_t sp = l.rfind(' ', i + n);
+                    if (sp != std::string::npos && sp > i + room / 2) n = sp - i;
+                }
+                out.push_back({ l.substr(i, n), q });
+                i += n;
+                while (i < l.size() && l[i] == ' ') i++;
+            } while (i < l.size());
+        }
+        while (!out.empty() && out.back().first.empty()) out.pop_back();
+        const size_t maxLines = (size_t)std::max(3.0f, std::min(16.0f, (bottom - 60.0f) / lh));
+        const size_t first = out.size() > maxLines ? out.size() - maxLines : 0, n = out.size() - first;
+        const float y0 = bottom - 34.0f - (float)n * lh;
+        o.push_back({ 0.0f, y0, (float)w, bottom, 0.0f, 0.0f, 0.0f, 0.88f });
+        o.push_back({ 0.0f, y0, (float)w, y0 + 1.0f, 0.35f, 0.8f, 1.0f, 1.0f });
+        char head[96];
+        if (running) snprintf(head, sizeof head, "CLAUDE IS WORKING   %d S", (int)(now() - startedAt));
+        else snprintf(head, sizeof head, "CLAUDE   A: ASK   SHIFT+A: HIDE");
+        gui::text(o, 14.0f, y0 + 9.0f, head, px, 0.35f, 0.8f, 1.0f);
+        for (size_t k = 0; k < n; k++) {
+            const auto& l = out[first + k];
+            const float c = l.second ? 0.6f : 1.0f;
+            gui::text(o, 14.0f, y0 + 30.0f + (float)k * lh, l.first, px, c, c, c);
+        }
+    }
+};
+
+// What is drawn on the frame while a prompt is typed (drag on the picture): strokes, in pixels of the picture.
+// They are shown over the preview, and painted into the snapshot that goes with the prompt.
+struct Sketch {
+    static constexpr float R = 0.2f, G = 0.9f, B = 1.0f;       // their colour: the blue of the prompt box (not a colour of the show)
+    std::vector<std::vector<std::pair<float, float>>> strokes;
+    bool drawing = false;
+
+    bool empty() const { return strokes.empty(); }
+    void clear() { strokes.clear(); drawing = false; }
+
+    // Over the preview: window pixels (the picture is fitted and centred above the bar, as Window::toPicture has it).
+    void rects(std::vector<Renderer::Over>& o, int w, int h, int bar) const
+    {
+        const int hp = std::max(1, h - bar);
+        const float k = std::min((float)w / PIC_W, (float)hp / PIC_H), ox = 0.5f * (w - PIC_W * k), oy = 0.5f * (hp - PIC_H * k);
+        for (auto& st : strokes)
+            for (size_t i = 0; i < st.size(); i++) {
+                const float x1 = st[i].first * k + ox, y1 = st[i].second * k + oy;
+                const float x0 = i ? st[i - 1].first * k + ox : x1, y0 = i ? st[i - 1].second * k + oy : y1;
+                const int n = std::max(1, (int)(std::hypot(x1 - x0, y1 - y0) / 1.5f));
+                for (int j = 0; j <= n; j++) {
+                    const float x = x0 + (x1 - x0) * j / n, y = y0 + (y1 - y0) * j / n;
+                    o.push_back({ x - 1.5f, y - 1.5f, x + 1.5f, y + 1.5f, R, G, B, 1.0f });
+                }
+            }
+    }
+
+    // Into a picture read back from the renderer (BGRA, w x h): lines 7 pixels thick at the size of the show.
+    void paint(std::vector<uint8_t>& px, int w, int h) const
+    {
+        const float k = (float)w / PIC_W, rad = std::max(1.5f, 3.5f * k);
+        auto disc = [&](float cx, float cy) {
+            for (int y = std::max(0, (int)(cy - rad)); y <= std::min(h - 1, (int)(cy + rad)); y++)
+                for (int x = std::max(0, (int)(cx - rad)); x <= std::min(w - 1, (int)(cx + rad)); x++)
+                    if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= rad * rad) {
+                        uint8_t* q = &px[4 * ((size_t)y * w + x)];
+                        q[0] = (uint8_t)(255 * B); q[1] = (uint8_t)(255 * G); q[2] = (uint8_t)(255 * R); q[3] = 255;
+                    }
+        };
+        for (auto& st : strokes)
+            for (size_t i = 0; i < st.size(); i++) {
+                const float x1 = st[i].first * k, y1 = st[i].second * k;
+                const float x0 = i ? st[i - 1].first * k : x1, y0 = i ? st[i - 1].second * k : y1;
+                const int n = std::max(1, (int)std::hypot(x1 - x0, y1 - y0));
+                for (int j = 0; j <= n; j++) disc(x0 + (x1 - x0) * j / n, y0 + (y1 - y0) * j / n);
+            }
+    }
+};
+
 // What the bar shows beside the time line.
 struct BarState {
     std::string tc;                         // the time code, MM:SS:FF
@@ -470,7 +714,8 @@ struct BarState {
     bool card = false;                      // the test card is shown instead of the show
     bool panel = false;                     // the OUTPUT panel is open
     bool snapped = false;                   // a snapshot has just been taken
-    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT, 4 OUTPUT, 5 SNAPSHOT
+    int claude = 0;                         // the prompt box: 1 a prompt is being typed, 2 Claude is working
+    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT, 4 OUTPUT, 5 SNAPSHOT, 6 CLAUDE
     const std::vector<gui::Comments::Mark>* marks = nullptr;
 };
 
@@ -521,7 +766,7 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
     // the buttons at the right: OUTPUT (white while a display takes the raster, yellow when that display is
     // gone, red while the test card is on), SOUND (white while the engine plays sound), SNAPSHOT (lit for a
     // moment when one is taken), COMMENT (yellow while one is typed)
-    const float xo = (float)w - RIGHT_W, xs = xo + OUT_W, xc = (float)w - CMT_W, xn = xc - SNP_W;
+    const float xo = (float)w - RIGHT_W, xs = xo + OUT_W, xa = (float)w - ASK_W, xc = xa - CMT_W, xn = xc - SNP_W;
     o.push_back({ xo, y0 + 6.0f, xo + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
     if (st.hot == 4) o.push_back({ xo + 4.0f, y0 + 4.0f, xs - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
     {
@@ -535,7 +780,12 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
     o.push_back({ xn, y0 + 6.0f, xn + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
     if (st.hot == 2) o.push_back({ xs + 4.0f, y0 + 4.0f, xn - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
     if (st.hot == 5 || st.snapped) o.push_back({ xn + 4.0f, y0 + 4.0f, xc - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, st.snapped ? 0.32f : 0.14f });
-    if (st.hot == 3) o.push_back({ xc + 4.0f, y0 + 4.0f, (float)w - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    if (st.hot == 3) o.push_back({ xc + 4.0f, y0 + 4.0f, xa - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    o.push_back({ xa, y0 + 6.0f, xa + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+    if (st.hot == 6) o.push_back({ xa + 4.0f, y0 + 4.0f, (float)w - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    gui::text(o, xa + 0.5f * (ASK_W - gui::textWidth(6, 2.0f)), y0 + 11.0f, "CLAUDE", 2.0f, st.claude ? 0.35f : 0.8f, 0.8f, st.claude ? 1.0f : 0.8f);
+    if (st.claude == 2 && (int)(now() * 2.0) % 2)           // working: its name is underlined, on and off
+        o.push_back({ xa + 0.5f * (ASK_W - gui::textWidth(6, 2.0f)), y1 - 8.0f, xa + 0.5f * (ASK_W + gui::textWidth(6, 2.0f)), y1 - 6.0f, 0.35f, 0.8f, 1.0f, 1.0f });
     const float gs = st.sound ? 1.0f : 0.55f, gn = st.snapped ? 1.0f : 0.8f;
     gui::text(o, xs + 0.5f * (SND_W - gui::textWidth(5, 2.0f)), y0 + 11.0f, "SOUND", 2.0f, gs, gs, gs);
     gui::text(o, xn + 0.5f * (SNP_W - gui::textWidth(8, 2.0f)), y0 + 11.0f, "SNAPSHOT", 2.0f, gn, gn, gn);
@@ -544,13 +794,15 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
 }
 
 // The line a comment is typed in, above the bar: its time code, then the text (its end when it is too long).
-void commentBox(std::vector<Renderer::Over>& o, int w, int h, int bar, const std::string& tc, const std::wstring& typed)
+// ask: the line is a prompt for Claude (blue) instead of a comment (yellow).
+void commentBox(std::vector<Renderer::Over>& o, int w, int h, int bar, const std::string& tc, const std::wstring& typed, bool ask = false)
 {
     const float y1 = (float)(h - bar), y0 = y1 - BOX_H, px = 2.0f;
+    const float cr = ask ? 0.35f : 1.0f, cg = ask ? 0.8f : 0.85f, cb = ask ? 1.0f : 0.0f;
     o.push_back({ 0.0f, y0, (float)w, y1, 0.0f, 0.0f, 0.0f, 0.92f });
-    o.push_back({ 0.0f, y0, (float)w, y0 + 1.0f, 1.0f, 0.85f, 0.0f, 1.0f });
-    const std::string head = "COMMENT " + tc + " > ";
-    gui::text(o, 14.0f, y0 + 13.0f, head, px, 1.0f, 0.85f, 0.0f);
+    o.push_back({ 0.0f, y0, (float)w, y0 + 1.0f, cr, cg, cb, 1.0f });
+    const std::string head = (ask ? "CLAUDE " : "COMMENT ") + tc + " > ";
+    gui::text(o, 14.0f, y0 + 13.0f, head, px, cr, cg, cb);
     const float x = 14.0f + gui::textWidth(head.size(), px) + 6.0f * px;
     const size_t room = (size_t)std::max(1.0f, ((float)w - 30.0f - x) / (6.0f * px));
     std::string shown;
@@ -559,7 +811,7 @@ void commentBox(std::vector<Renderer::Over>& o, int w, int h, int bar, const std
     gui::text(o, x, y0 + 13.0f, shown, px, 1.0f, 1.0f, 1.0f);
     const float xe = x + (shown.empty() ? 0.0f : gui::textWidth(shown.size(), px) + px);
     o.push_back({ xe, y0 + 11.0f, xe + 5.0f * px, y0 + 29.0f, 1.0f, 1.0f, 1.0f, 0.9f });          // the cursor
-    const char* help = "ENTER SAVE   ESC CANCEL";
+    const char* help = ask ? "ENTER SEND   ESC CANCEL   DRAG ON THE PICTURE TO DRAW   BACKSPACE: LAST STROKE AWAY" : "ENTER SAVE   ESC CANCEL";
     if (typed.empty()) gui::text(o, xe + 24.0f, y0 + 13.0f, help, px, 0.5f, 0.5f, 0.5f);
 }
 
@@ -680,10 +932,12 @@ struct OutWindow {
         hwnd = nullptr;
     }
 
+    int moveX = 0, moveY = 0;               // the MOVE of the OUTPUT panel: what is sent, shifted by that many pixels
+
     void present(Renderer& r, const LiveOptions& lo)
     {
         if (!hwnd || lost) return;
-        exact = r.output(back.Get(), rtv.Get(), on.w(), on.h(), lo.rasterW, lo.rasterH, lo.rasterX, lo.rasterY, lo.picX, lo.picY);
+        exact = r.output(back.Get(), rtv.Get(), on.w(), on.h(), lo.rasterW, lo.rasterH, lo.rasterX, lo.rasterY, lo.picX, lo.picY, moveX, moveY);
         HRESULT hr = swap->Present(0, 0);
         if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) lost = true;
     }
@@ -692,12 +946,18 @@ struct OutWindow {
 // The OUTPUT panel, above the bar (in the preview window only): what is sent out, and how.
 //     LIFT       the mid levels of the picture raised (Renderer::lift): a slider, 0 at its left; a click on the name: 0
 //     TEST CARD  the test card instead of the show
+//     GLOW       how much of the glow of the scenes is kept (1: all of it, 0: none)
+//     RED        gain of the red, before the tonemap (1: as the scenes give it): thin red lines come up, full red stays
+//     WEIGHT     pixels added to the width of every line (0: none; a hairline starts to gain from 0.3)
+//                a click on a name: back to what the scenes give
+//     MOVE       what is sent to the display, shifted a pixel at a time (Shift: ten), to sit the picture on the wall;
+//                0 puts it back. Only the output moves: not the preview, not Spout
 //     OUTPUT     OFF, or the display that takes the raster (the one this window is on cannot be chosen)
 struct OutputPanel {
     struct Hit { float x0, y0, x1, y1; int id; };
     bool open = false;
-    int drag = 0;                           // 2: the slider is being dragged
-    std::vector<Hit> hits;                  // 1 the name LIFT, 2 its slider, 3 TEST CARD, 10 OFF, 11 .. the displays
+    int drag = 0;                           // the slider being dragged: 2 LIFT, 31 GLOW, 33 RED, 35 WEIGHT
+    std::vector<Hit> hits;                  // 1 the name LIFT, 2 its slider, 3 TEST CARD, 4 .. 8 MOVE left right up down 0, 10 OFF, 11 .. the displays
     std::vector<Display> list;              // the displays, as shown
 
     int at(int mx, int my) const
@@ -707,7 +967,7 @@ struct OutputPanel {
     }
 
     void rects(std::vector<Renderer::Over>& o, int w, int h, int bar, float lift, bool card, const std::string& cardNote, const std::wstring& active,
-               bool gone, bool exact, const std::wstring& own, const LiveOptions& lo, int mx, int my)
+               bool gone, bool exact, const std::wstring& own, const LiveOptions& lo, int mx, int my, int moveX, int moveY, float glow, float red, float weight)
     {
         const float y1 = (float)(h - bar), y0 = y1 - PANEL_H, px = 2.0f;
         hits.clear();
@@ -735,7 +995,29 @@ struct OutputPanel {
         o.push_back({ xk - 3.0f, y + 4.0f, xk + 3.0f, y + 24.0f, 1.0f, 1.0f, 1.0f, 1.0f });
         hits.push_back({ SLIDER_X0 - 10.0f, y, SLIDER_X0 + SLIDER_W + 10.0f, y + 28.0f, 2 });
         float x = button(SLIDER_X0 + SLIDER_W + 40.0f, y, "TEST CARD", 3, card);
+        snprintf(b, sizeof b, "MOVE %d, %d", moveX, moveY);
+        gui::text(o, x + 30.0f, y + 7.0f, b, px, 1.0f, 1.0f, 1.0f);
+        x = button(x + 30.0f + gui::textWidth(16, px), y, "<", 4, false);
+        x = button(x, y, ">", 5, false);
+        x = button(x, y, "UP", 6, false);
+        x = button(x, y, "DOWN", 7, false);
+        x = button(x, y, "0", 8, false, !moveX && !moveY);
+        const float xm = x;                 // (where the first row ends)
         if (!cardNote.empty()) gui::text(o, x + 6.0f, y + 7.0f, cardNote, px, 1.0f, 0.85f, 0.0f);
+        // glow, red, line weight: three sliders
+        y = y0 + 94.0f;
+        const struct { const char* name; float v, vmax; int id; } tune[3] = { { "GLOW", glow, GLOW_MAX, 30 }, { "RED", red, RED_MAX, 32 },
+                                                                             { "WEIGHT", weight, WEIGHT_MAX, 34 } };
+        for (int k = 0; k < 3; k++) {
+            const float xl = 14.0f + k * TUNE_PITCH, xs = TUNE_X0 + k * TUNE_PITCH, xk = xs + TUNE_W * std::clamp(tune[k].v / tune[k].vmax, 0.0f, 1.0f);
+            snprintf(b, sizeof b, "%s %.2f", tune[k].name, tune[k].v);
+            gui::text(o, xl, y + 7.0f, b, px, 1.0f, 1.0f, 1.0f);
+            hits.push_back({ xl - 6.0f, y, xs - 16.0f, y + 28.0f, tune[k].id });
+            o.push_back({ xs, y + 13.0f, xs + TUNE_W, y + 15.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+            o.push_back({ xs, y + 13.0f, xk, y + 15.0f, 1.0f, 1.0f, 1.0f, 1.0f });
+            o.push_back({ xk - 3.0f, y + 4.0f, xk + 3.0f, y + 24.0f, 1.0f, 1.0f, 1.0f, 1.0f });
+            hits.push_back({ xs - 10.0f, y, xs + TUNE_W + 10.0f, y + 28.0f, tune[k].id + 1 });
+        }
         // the display of the output
         y = y0 + 52.0f;
         gui::text(o, 14.0f, y + 7.0f, "OUTPUT", px, 1.0f, 1.0f, 1.0f);
@@ -753,13 +1035,13 @@ struct OutputPanel {
         else if (!active.empty()) gui::text(o, x + 6.0f, y + 7.0f, "PIXEL FOR PIXEL", px, 0.8f, 0.8f, 0.8f);
         snprintf(b, sizeof b, "RASTER %d x %d, PICTURE AT %d, %d", lo.rasterW, lo.rasterH, lo.picX, lo.picY);
         const float tw = gui::textWidth(strlen(b), px);
-        if ((float)w - 14.0f - tw > SLIDER_X0 + SLIDER_W + 400.0f) gui::text(o, (float)w - 14.0f - tw, y0 + 17.0f, b, px, 0.5f, 0.5f, 0.5f);
+        if ((float)w - 14.0f - tw > xm + 40.0f) gui::text(o, (float)w - 14.0f - tw, y0 + 17.0f, b, px, 0.5f, 0.5f, 0.5f);
     }
 };
 
 // What was set in the OUTPUT panel, kept from one run to the next: engine/output.json
-//     { "lift": 0.60, "display": "\\\\.\\DISPLAY2" }
-bool loadOutput(const fs::path& path, float& lift, std::wstring& display)
+//     { "lift": 0.60, "display": "\\\\.\\DISPLAY2", "move": [0, 0], "glow": 1.00, "red": 1.00, "weight": 0.00 }
+bool loadOutput(const fs::path& path, float& lift, std::wstring& display, int& moveX, int& moveY, float& glow, float& red, float& weight)
 {
     std::ifstream f(path);
     if (!f) return false;
@@ -770,6 +1052,24 @@ bool loadOutput(const fs::path& path, float& lift, std::wstring& display)
     if (c != std::string::npos) {
         const double v = atof(s.c_str() + c + 1);
         if (v >= 0.0 && v <= LIFT_MAX) lift = (float)v;
+    }
+    const struct { const char* key; float* v; float vmax; } num[3] = { { "\"glow\"", &glow, GLOW_MAX }, { "\"red\"", &red, RED_MAX },
+                                                                       { "\"weight\"", &weight, WEIGHT_MAX } };
+    for (auto& n : num) {
+        a = s.find(n.key);
+        c = a == std::string::npos ? a : s.find(':', a);
+        if (c == std::string::npos) continue;
+        const double v = atof(s.c_str() + c + 1);
+        if (v >= 0.0 && v <= n.vmax) *n.v = (float)v;
+    }
+    a = s.find("\"move\"");
+    c = a == std::string::npos ? a : s.find('[', a);
+    if (c != std::string::npos) {
+        int mx = 0, my = 0;
+        if (sscanf(s.c_str() + c, "[ %d , %d", &mx, &my) == 2) {
+            moveX = std::clamp(mx, -MOVE_MAX, MOVE_MAX);
+            moveY = std::clamp(my, -MOVE_MAX, MOVE_MAX);
+        }
     }
     a = s.find("\"display\"");
     c = a == std::string::npos ? a : s.find(':', a);
@@ -784,7 +1084,7 @@ bool loadOutput(const fs::path& path, float& lift, std::wstring& display)
     return true;
 }
 
-bool saveOutput(const fs::path& path, float lift, const std::wstring& display)
+bool saveOutput(const fs::path& path, float lift, const std::wstring& display, int moveX, int moveY, float glow, float red, float weight)
 {
     fs::path tmp = path;
     tmp += L".tmp";
@@ -798,7 +1098,9 @@ bool saveOutput(const fs::path& path, float lift, const std::wstring& display)
         }
         char b[64];
         snprintf(b, sizeof b, "{\n  \"lift\": %.2f,\n  \"display\": \"", lift);
-        f << b << d << "\"\n}\n";
+        f << b << d << "\",\n  \"move\": [" << moveX << ", " << moveY << "]";
+        snprintf(b, sizeof b, ",\n  \"glow\": %.2f,\n  \"red\": %.2f,\n  \"weight\": %.2f\n}\n", glow, red, weight);
+        f << b;
         if (!f) return false;
     }
     std::error_code ec;
@@ -1020,10 +1322,12 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     const fs::path outputFile = fs::path(o.root) / L"engine" / L"output.json";
     float lift = 0.0f;
     std::wstring outDevice;                         // the display of the output ("" = none)
-    loadOutput(outputFile, lift, outDevice);
+    OutWindow out;
+    float glow = 1.0f, red = 1.0f, weight = 0.0f;   // GLOW, RED and WEIGHT of the panel
+    loadOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, red, weight);
+    p.renderer.tune(glow, red, weight);
     if (lo.lift >= 0.0f) lift = std::min(lo.lift, LIFT_MAX);
     p.renderer.lift(lift);
-    OutWindow out;
     OutputPanel outPanel;
     bool outGone = false;                           // that display is not there at the moment
     bool outDirty = false;                          // what is sent out has to be composed again
@@ -1200,6 +1504,13 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     bool commenting = false, commentResume = false;
     double commentT = 0;
     std::wstring commentText;
+    // the prompt box (key A, or the CLAUDE button): the same line, sent to Claude Code instead of written to the
+    // file; the answer comes in a panel above the bar (Shift+A hides and shows it)
+    bool asking = false;                            // the line being typed is a prompt
+    Claude claude;
+    claude.init(o.root);
+    double claudeTick = 0;
+    Sketch sketch;                                  // what is drawn on the frame while the prompt is typed
     bool askSound = false;                          // the SOUND button: the dialog is opened by the main loop
 
     // snapshots (key S, or the SNAPSHOT button): the picture that is on screen, written to
@@ -1264,6 +1575,27 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         snapState = 0;
         barDirty = true;
     };
+    // The frame with what was drawn on it, for a prompt: snapshots/MM-SS-FF_scene_drawn.png, and the same frame
+    // without the drawing in snapshots/untouched. Written at once (the prompt names the file). Returns its
+    // path from the repository folder, or nothing when it cannot be made.
+    auto drawnSnapshot = [&](double tAt, const std::string& scene) -> std::string {
+        Target& pic = p.renderer.shown();
+        std::vector<uint8_t> px;
+        if (!pic.tex || !p.gpu.readback(pic.tex.Get(), 4, px)) return {};
+        std::string name = gui::timecode(tAt, o.fps) + "_" + (scene.empty() ? "show" : scene) + "_drawn";
+        for (char& c : name) if (!isalnum((unsigned char)c) && c != '_') c = '-';
+        std::error_code ec;
+        fs::create_directories(snapDir / L"untouched", ec);
+        fs::path file;
+        for (int n = 1;; n++) {
+            file = snapDir / (name + (n > 1 ? "_" + std::to_string(n) : "") + ".png");
+            if (!fs::exists(file, ec)) break;
+        }
+        if (!gui::savePng((snapDir / L"untouched" / file.filename()).wstring(), px.data(), (unsigned)pic.w, (unsigned)pic.h)) return {};
+        sketch.paint(px, pic.w, pic.h);
+        if (!gui::savePng(file.wstring(), px.data(), (unsigned)pic.w, (unsigned)pic.h)) return {};
+        return "snapshots/" + file.filename().string();
+    };
     auto openSnapshots = [&] {                      // the folder the snapshots are in, in the Explorer
         std::error_code ec;
         fs::create_directories(snapDir, ec);
@@ -1304,8 +1636,11 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         }
 
         // ---- keys ----
-        auto startComment = [&] {
+        auto startComment = [&](bool ask = false) {
             if (commenting || !warmed) return;
+            if (ask && claude.running) { note = "CLAUDE IS STILL WORKING"; claude.show = true; barDirty = true; return; }
+            asking = ask;
+            sketch.clear();
             commenting = true;
             commentT = clock.now();
             commentText.clear();
@@ -1314,7 +1649,26 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             barDirty = true;
         };
         auto endComment = [&](bool save) {
-            if (save && !commentText.empty()) {
+            if (save && asking && (!commentText.empty() || !sketch.empty())) {      // a prompt: to Claude, with where the show is
+                std::string scene, why, drawn;
+                for (auto& l : p.pool->looks) if (commentT >= l.t0 && commentT < l.t1) scene = l.name;
+                const std::string text = gui::utf8(commentText), tc = gui::timecode(commentT, o.fps);
+                if (!sketch.empty()) {              // ... and with the frame, and what was drawn on it
+                    const std::string file = drawnSnapshot(commentT, scene);
+                    if (file.empty()) warn("the drawing could not be written: the prompt goes without it");
+                    else drawn = " [The user drew on the frame, in light blue: read the picture " + file + " (2978 x 1400, the frame that was "
+                                 "on screen; the same frame without the drawing is snapshots/untouched/" + file.substr(10) + "). What is drawn "
+                                 "points at what the message is about.]";
+                }
+                if (claude.ask("[engine window: show time " + tc + " (MM:SS:FF), scene " + scene + "] " + text + drawn,
+                               tc + "  " + text + (drawn.empty() ? "" : "  [+ drawing]"), why)) {
+                    note = "sent to Claude";
+                    say("to Claude at %s: %s", tc.c_str(), text.c_str());
+                } else {
+                    note = why;
+                    warn("the prompt was not sent: %s", why.c_str());
+                }
+            } else if (save && !commentText.empty()) {
                 std::string scene;
                 for (auto& l : p.pool->looks) if (commentT >= l.t0 && commentT < l.t1) scene = l.name;
                 if (comments.add(commentT, o.fps, scene, commentText)) {
@@ -1326,6 +1680,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 }
             }
             commenting = false;
+            sketch.clear();
             if (commentResume && !playing) play();
             barDirty = true;
         };
@@ -1336,6 +1691,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 if (k == VK_RETURN) endComment(true);
                 else if (k == VK_ESCAPE) endComment(false);
                 else if (k == VK_BACK && !commentText.empty()) commentText.pop_back();
+                else if (k == VK_BACK && asking && !sketch.empty()) sketch.strokes.pop_back();      // an empty line: the last stroke goes
                 barDirty = true;
                 continue;
             }
@@ -1380,6 +1736,10 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             case VK_DOWN: setLevels(levelSel, shift ? -0.05f : -0.01f, true); panel = true; break;
             case 'R': p.reload(); note = "reloading"; break;
             case 'C': startComment(); break;
+            case 'A':                               // the prompt box; Shift: its panel away / back
+                if (shift) { claude.show = !claude.show; barDirty = true; }
+                else startComment(true);
+                break;
             case 'P':                               // the OUTPUT panel
                 outPanel.open = !outPanel.open;
                 outPanel.list = displays();
@@ -1415,7 +1775,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         // ---- mouse: the time bar first, then the tower tool ----
         double hover = -1.0;
         const int hotButton = !win.bar || scrubbing ? 0 : win.overButton() ? 1 : win.overSound() ? 2 : win.overComment() ? 3 : win.overOutput() ? 4
-                              : win.overSnapshot() ? 5 : 0;
+                              : win.overSnapshot() ? 5 : win.overAsk() ? 6 : 0;
         if (win.bar && win.pressed && win.overOutput()) {       // the OUTPUT button: its panel
             outPanel.open = !outPanel.open;
             outPanel.list = displays();
@@ -1433,6 +1793,20 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 if (id == 1) setLift(0.0f);
                 else if (id == 2) outPanel.drag = 2;
                 else if (id == 3) showCard(!cardWanted);
+                else if (id == 31 || id == 33 || id == 35) outPanel.drag = id;
+                else if (id == 30 || id == 32 || id == 34) {            // a click on a name: as the scenes give it
+                    (id == 30 ? glow : id == 32 ? red : weight) = id == 34 ? 0.0f : 1.0f;
+                    p.renderer.tune(glow, red, weight);
+                    if (id == 34) p.invalidate();           // (the lines are drawn again)
+                    outDirty = settingsDirty = true;
+                }
+                else if (id >= 4 && id <= 8) {              // MOVE: a pixel, ten with Shift; 0 puts it back
+                    const int step = GetKeyState(VK_SHIFT) < 0 ? 10 : 1;
+                    if (id == 8) out.moveX = out.moveY = 0;
+                    else if (id <= 5) out.moveX = std::clamp(out.moveX + (id == 4 ? -step : step), -MOVE_MAX, MOVE_MAX);
+                    else out.moveY = std::clamp(out.moveY + (id == 6 ? -step : step), -MOVE_MAX, MOVE_MAX);
+                    outDirty = settingsDirty = true;
+                }
                 else if (id == 10) { setOutput(L""); settingsDirty = true; }
                 else if (id >= 11 && id - 11 < (int)outPanel.list.size()) { setOutput(outPanel.list[id - 11].device); settingsDirty = true; }
                 win.pressed = false;                // (the click is taken: not for the tower tool under the panel)
@@ -1441,6 +1815,21 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (outPanel.drag == 2) {
                 if (win.down) setLift(((float)win.mx - SLIDER_X0) / SLIDER_W * LIFT_MAX);
                 else outPanel.drag = 0;
+                barDirty = true;
+            }
+            if (outPanel.drag >= 31) {              // GLOW, RED, WEIGHT
+                const int k = (outPanel.drag - 31) / 2;
+                float& v = k == 0 ? glow : k == 1 ? red : weight;
+                const float vmax = k == 0 ? GLOW_MAX : k == 1 ? RED_MAX : WEIGHT_MAX;
+                if (win.down) {
+                    const float nv = std::round(std::clamp(((float)win.mx - TUNE_X0 - k * TUNE_PITCH) / TUNE_W, 0.0f, 1.0f) * vmax * 20.0f) / 20.0f;
+                    if (nv != v) {
+                        v = nv;
+                        p.renderer.tune(glow, red, weight);
+                        if (k == 2) p.invalidate();
+                        outDirty = settingsDirty = true;
+                    }
+                } else outPanel.drag = 0;
                 barDirty = true;
             }
         } else {
@@ -1457,6 +1846,24 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         if (win.bar && win.pressed && win.overComment()) {
             if (commenting) endComment(true); else startComment();
             win.pressed = false;
+        }
+        if (win.bar && win.pressed && win.overAsk()) {          // the CLAUDE button; with Shift: its panel away / back
+            if (commenting) endComment(true);
+            else if (GetKeyState(VK_SHIFT) < 0) { claude.show = !claude.show; barDirty = true; }
+            else startComment(true);
+            win.pressed = false;
+        }
+        {
+            DWORD code = 0;
+            if (claude.poll(code)) {                            // the answer is there
+                note = code ? "CLAUDE ENDED WITH AN ERROR" : "Claude has answered";
+                say("Claude answered (exit code %lu)", code);
+                claude.show = true;
+                barDirty = true;
+            } else if (claude.running && now() - claudeTick > 0.5) {    // its seconds, its blinking name
+                claudeTick = now();
+                barDirty = true;
+            }
         }
         if (win.bar && win.pressed && win.overSnapshot()) {     // the SNAPSHOT button; with Shift: the folder they are in
             if (GetKeyState(VK_SHIFT) < 0) openSnapshots(); else snapshot();
@@ -1476,7 +1883,21 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             }
             if (win.released || !win.down) scrubbing = false;
         }
-        if (tool.on && !scrubbing) {
+        if (commenting && asking && !scrubbing) {               // a prompt is typed: the mouse draws on the picture
+            float x, y;
+            win.toPicture(x, y);
+            const bool onPic = win.my < win.h - win.bar - (int)BOX_H && x >= 0.0f && x < (float)PIC_W && y >= 0.0f && y < (float)PIC_H;
+            if (win.pressed && onPic) {
+                sketch.strokes.push_back({ { x, y } });
+                sketch.drawing = barDirty = true;
+            } else if (sketch.drawing && win.down) {
+                auto& st = sketch.strokes.back();
+                x = std::clamp(x, 0.0f, (float)PIC_W - 1.0f);
+                y = std::clamp(y, 0.0f, (float)PIC_H - 1.0f);
+                if (std::hypot(x - st.back().first, y - st.back().second) > 3.0f) { st.push_back({ x, y }); barDirty = true; }
+            }
+            if (win.released || !win.down) sketch.drawing = false;
+        } else if (tool.on && !scrubbing) {
             float x, y;
             win.toPicture(x, y);
             if (win.pressed && !win.overBar()) tool.press(x, y);
@@ -1710,11 +2131,13 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 out.present(p.renderer, lo);        // before the preview: this is the picture on the wall
             }
             barRects.clear();
+            if (commenting && asking) sketch.rects(barRects, win.w, win.h, win.bar);
             if (win.bar) {
                 BarState st;
                 st.tc = gui::timecode(t, o.fps);
                 st.sound = wantAudio;
-                st.commenting = commenting;
+                st.commenting = commenting && !asking;
+                st.claude = commenting && asking ? 1 : claude.running ? 2 : 0;
                 st.hot = hotButton;
                 st.output = outDevice.empty() ? 0 : outGone ? 2 : 1;
                 st.card = p.renderer.cardOn();
@@ -1723,10 +2146,12 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 st.marks = &comments.marks;
                 timeBar(barRects, win.w, win.h, p.pool->looks, std::max(showEnd, 1e-9), t, hover, playing, st);
             }
-            if (commenting) commentBox(barRects, win.w, win.h, win.bar, gui::timecode(commentT, o.fps), commentText);
+            if (claude.show && !claude.lines.empty() && !(outPanel.open && !commenting) && !(commenting && asking))
+                claude.rects(barRects, win.w, win.h, win.bar, commenting);     // (not while a prompt is typed: one draws on the picture)
+            if (commenting) commentBox(barRects, win.w, win.h, win.bar, gui::timecode(commentT, o.fps), commentText, asking);
             else if (outPanel.open)
                 outPanel.rects(barRects, win.w, win.h, win.bar, lift, cardWanted, cardNote, outDevice, outGone, out.exact, displayOf(win.hwnd), lo, win.mx,
-                               win.my);
+                               win.my, out.moveX, out.moveY, glow, red, weight);
             if (panel && liveDet) meter.rects(barRects, level, levelSel, now());
             barDrawnT = t;
             barDrawnHover = hover;
@@ -1779,7 +2204,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (p.renderer.cardOn() && !cardMaker && !cardBroken && cardStale() && makeCard()) cardNote = "MAKING IT AGAIN ...";   // the towers moved
             if (settingsDirty && !outPanel.drag) {
                 settingsDirty = false;
-                if (!saveOutput(outputFile, lift, outDevice)) warn("cannot write %s", narrow(outputFile.wstring()).c_str());
+                if (!saveOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, red, weight)) warn("cannot write %s", narrow(outputFile.wstring()).c_str());
             }
             double dt = w - statAt;
             std::wstring look, hov;
@@ -1893,12 +2318,13 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         std::error_code ec;
         fs::remove(lo.position, ec);
     }
+    claude.close();                                 // (a prompt still at work is stopped with the engine)
     if (snapThread.joinable()) snapThread.join();   // (a snapshot that is being written is finished, and gets its line)
     snapDone();
     audio.close();
     out.close();
     if (cardMaker) CloseHandle(cardMaker);
-    if (settingsDirty) saveOutput(outputFile, lift, outDevice);
+    if (settingsDirty) saveOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, red, weight);
     if (spoutOn) spout.ReleaseSender();
     SetThreadExecutionState(ES_CONTINUOUS);
     if (gLog) fclose(gLog);

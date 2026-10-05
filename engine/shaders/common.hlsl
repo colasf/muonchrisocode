@@ -13,7 +13,8 @@ cbuffer FrameCB : register(b0)
     float gDither;       // 1: dither and round to 8 bits, 0: leave the picture in floats (for comparisons)
     uint gDitherSeed;
     float gLift;         // lift of the output (0: none): the mid levels raised, black and white kept
-    uint2 gPad;
+    float gRed;          // gain of the red layer before the tonemap (1: as the scenes give it)
+    float gWeight;       // added to the width of every line, in pixels of the 2978 wide picture (0: none)
 };
 
 cbuffer DrawCB : register(b1)

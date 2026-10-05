@@ -201,14 +201,13 @@ class Messenger(Scene):
         self._galaxy_tags(f, gal)
         self._limb_labels(f, t, T)
         self._marks(f, t, T, V)
-        # 4 - bottom band
-        self._panels(f, t, ctx)
+        # 4 - bottom band: only the counters (the four panels were taken out)
         y = years(t)
         now = t >= 66.85
         cell_right(f, lay, "YEAR // BEFORE NOW", "NOW" if now else "-" + _fmt_int(y), red=True,
                    sub=f"{y:.1E} LY TO GO".replace("E+0", "E").replace("E+", "E") if not now else "ARRIVAL",
                    value_short="NOW" if now else f"-{y:.2E}".replace("E+0", "E"))
-        return {}
+        return {"cell_age": t - T0 - 0.1}          # the counter of the show is built here, at the cut
 
     def _notes(self, f, t):
         """What the voice says about it, in the notes column (one block at a time; it leaves for the galaxies)."""

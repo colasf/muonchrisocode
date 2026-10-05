@@ -59,6 +59,9 @@ public:
     // The lift of the output (0 = none): the mid levels of the picture are raised, black and white stay
     // where they are. Changing it draws the last picture again (colour, inverted rects, dither).
     void lift(float v);
+    // The other settings of the OUTPUT panel: glow = how much of the glow the scenes ask for is kept (1: all),
+    // red = gain of the red layer, weight = pixels added to the width of every line (drawn from the next frame on).
+    void tune(float glow, float red, float weight);
     float lift() const { return mLift; }
 
     // The test card: a raw BGRA picture of the whole raster (w x h, rows from the top, as tools/test_card.py
@@ -72,7 +75,7 @@ public:
     // The raster on an output (the back buffer of a window that fills a display): a rw x rh raster with its
     // top left corner at (ox, oy), black but for shown() at (px, py) of it - or the whole test card. Pixel
     // for pixel when the raster fits in the target (true); else scaled to fit, filtered (false).
-    bool output(ID3D11Texture2D* back, ID3D11RenderTargetView* rtv, int w, int h, int rw, int rh, int ox, int oy, int px, int py);
+    bool output(ID3D11Texture2D* back, ID3D11RenderTargetView* rtv, int w, int h, int rw, int rh, int ox, int oy, int px, int py, int sx = 0, int sy = 0);
     // Rects drawn straight into a window (pixels of the window): the time bar. They are not in the picture.
     void windowRects(ID3D11RenderTargetView* rtv, int w, int h, const std::vector<Over>& rects);
 
@@ -87,7 +90,7 @@ private:
     };
     struct Glyph { int ax, ay, w, h, ox, oy, adv; };
     struct TextInst { int32_t x0, y0, x1, y1, u, v; uint32_t mode, pad; float cw, cr, fw, fr; };
-    struct FrameCB { float size[2], s, s035, exposure, textGain, bloomGain, dither; uint32_t seed; float lift; uint32_t pad[2]; };
+    struct FrameCB { float size[2], s, s035, exposure, textGain, bloomGain, dither; uint32_t seed; float lift, red, weight; };
     struct DrawCB { uint32_t base, a, b, c; float p0[4], p1[4]; };
 
     bool compile(const wchar_t* file, const char* vsEntry, const char* psEntry, Shader& sh, std::string& err);
@@ -122,7 +125,8 @@ private:
     int mW = 0, mH = 0;
     Target mLight, mTextT, mBaseT, mOut, mOutF, mShow;
     bool mHasOver = false;
-    float mLift = 0.0f;
+    float mLift = 0.0f, mGlow = 1.0f, mRed = 1.0f, mWeight = 0.0f;
+    float mBloom0 = 0.0f;                      // the glow the last frame asked for
     Target mCard;                              // the test card (texture and view only: nothing is drawn into it)
     bool mCardOn = false;
     int mCardX = 0, mCardY = 0;                // where the picture of the show sits in it

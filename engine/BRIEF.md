@@ -299,6 +299,26 @@ Added 2026-10-03, in the bar under the picture (`engine/src/gui.h`, drawn with a
   repository folder as `[ ] MM:SS:FF | scene | date | text`, Esc cancels. The show is paused while it is
   typed (not when it follows `/muonbloom/time`). The comments show as yellow marks on the time line,
   grey once their line starts with `[x]`.
+- `MOVE` in the OUTPUT panel (`<` `>` `UP` `DOWN`, a pixel a click, ten with Shift, `0` puts it back; up to 400):
+  what is sent to the display of the output is shifted by that many pixels, to sit the picture on the wall. Whole
+  pixels, nothing filtered; what leaves the display is cut. Only the output: not the preview, not Spout. Kept in
+  `engine/output.json` (`"move": [x, y]`); `Renderer::output(..., sx, sy)`.
+- `GLOW`, `RED`, `WEIGHT` in the OUTPUT panel (three sliders; a click on a name: back to what the scenes give):
+  GLOW 0 .. 1 = how much of the glow of the scenes is kept (`bloom_gain` times it); RED 0 .. 3 = gain of the red
+  layer before the tonemap (thin red lines come up, full red stays); WEIGHT 0 .. 1.5 = pixels added to the width of
+  every line (a 1 px hairline starts to gain above 0.25: a line is drawn in several passes from 1.25 px on).
+  `Renderer::tune`, `gRed` / `gWeight` in the frame constants; kept in `engine/output.json`. At 1, 1, 0 the
+  picture is the reference (compare.py). They change the picture itself: preview, Spout and output alike.
+- `CLAUDE` button, or key A: the same line, but Enter sends it to Claude Code (`claude -p`, started in the
+  repository folder, with the time code and the scene on screen in front of the text). The answer comes in a
+  panel above the bar; Shift+A (or Shift and the button) hides and shows it. Every prompt of one run of the
+  engine goes on in one conversation. Nobody can approve a permission there: what it may do is on its command
+  line (`Claude::ARGS` in `live.cpp`: edit files, run python), or the one line of `engine/claude_args.txt`
+  when that file exists. Never in the Spout or HDMI output.
+  While the prompt is typed, dragging on the picture draws on the frame (light blue; Backspace on an empty
+  line takes the last stroke away). A prompt sent with a drawing writes the frame with the drawing to
+  `snapshots/MM-SS-FF_scene_drawn.png` (and the frame alone to `snapshots/untouched/`) and names that file in
+  the prompt, so that Claude reads it (`Sketch`, `drawnSnapshot` in `live.cpp`).
 
 Added 2026-10-03 (evening), for the site: the picture goes to the media server of the production (a
 Disguise) over HDMI, and three things are set from the window (`engine/src/live.cpp`: `OutWindow`,

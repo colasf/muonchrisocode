@@ -529,7 +529,9 @@ void Renderer::blit(ID3D11RenderTargetView* rtv, int w, int h, int below)
     place(rtv, w, h, shown(), 0.5f * (w - pw), 0.5f * (hp - ph), 0.5f * (w + pw), 0.5f * (hp + ph), dark);
 }
 
-bool Renderer::output(ID3D11Texture2D* back, ID3D11RenderTargetView* rtv, int w, int h, int rw, int rh, int ox, int oy, int px, int py)
+// sx, sy: everything is moved by that many pixels of the display (the MOVE of the OUTPUT panel, to sit the picture on
+// the wall); what leaves the display is cut, nothing is scaled or filtered for it.
+bool Renderer::output(ID3D11Texture2D* back, ID3D11RenderTargetView* rtv, int w, int h, int rw, int rh, int ox, int oy, int px, int py, int sx, int sy)
 {
     const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     const bool exact = ox >= 0 && oy >= 0 && ox + rw <= w && oy + rh <= h;
@@ -537,12 +539,18 @@ bool Renderer::output(ID3D11Texture2D* back, ID3D11RenderTargetView* rtv, int w,
     mCtx->ClearRenderTargetView(rtv, black);
     if (!mW) return exact;
     if (exact) {                                    // copies: not one pixel is filtered on the way
-        if (mCardOn) mCtx->CopySubresourceRegion(back, 0, (UINT)ox, (UINT)oy, 0, mCard.tex.Get(), 0, nullptr);
-        mCtx->CopySubresourceRegion(back, 0, (UINT)(ox + px), (UINT)(oy + py), 0, shown().tex.Get(), 0, nullptr);
+        auto put = [&](Target& t, int tw, int th, int x, int y) {      // the part of it that is on the display
+            const int x0 = std::max(x, 0), y0 = std::max(y, 0), x1 = std::min(x + tw, w), y1 = std::min(y + th, h);
+            if (x1 <= x0 || y1 <= y0) return;
+            const D3D11_BOX box = { (UINT)(x0 - x), (UINT)(y0 - y), 0, (UINT)(x1 - x), (UINT)(y1 - y), 1 };
+            mCtx->CopySubresourceRegion(back, 0, (UINT)x0, (UINT)y0, 0, t.tex.Get(), 0, &box);
+        };
+        if (mCardOn) put(mCard, rw, rh, ox + sx, oy + sy);
+        put(shown(), mW, mH, ox + px + sx, oy + py + sy);
         return true;
     }
     const float k = std::min((float)w / rw, (float)h / rh);     // a display smaller than the raster: all of it, as large as it fits
-    const float x0 = 0.5f * (w - rw * k), y0 = 0.5f * (h - rh * k);
+    const float x0 = 0.5f * (w - rw * k) + sx * k, y0 = 0.5f * (h - rh * k) + sy * k;
     if (mCardOn) place(rtv, w, h, mCard, x0, y0, x0 + rw * k, y0 + rh * k, nullptr);
     place(rtv, w, h, shown(), x0 + px * k, y0 + py * k, x0 + (px + mW) * k, y0 + (py + mH) * k, nullptr);
     return false;
@@ -552,6 +560,14 @@ void Renderer::lift(float v)
 {
     mLift = std::max(0.0f, v);
     if (mW) finish(false);
+}
+
+void Renderer::tune(float glow, float red, float weight)
+{
+    mGlow = std::max(0.0f, glow);
+    mRed = std::max(0.0f, red);
+    mWeight = std::max(0.0f, weight);
+    if (mW) finish(false);                          // (glow and red: at once; the weight: when a frame is drawn)
 }
 
 bool Renderer::loadCard(const std::wstring& file, int w, int h)
@@ -588,6 +604,8 @@ bool Renderer::card(bool on, int x, int y)
 void Renderer::finish(bool floatOut)
 {
     mFrame.lift = mLift;
+    mFrame.red = mRed;
+    mFrame.bloomGain = mBloom0 * mGlow;
     mCtx->UpdateSubresource(mFrameCB.Get(), 0, nullptr, &mFrame, 0, 0);
     ID3D11Buffer* cbs[2] = { mFrameCB.Get(), mDrawCB.Get() };
     mCtx->VSSetConstantBuffers(0, 2, cbs);
@@ -651,7 +669,8 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
                 const dl::Seg& g = segs[i];
                 if (!(g.i0 > 1e-4f || g.i1 > 1e-4f)) continue;
                 uint32_t reps = 1;
-                if (g.width > 1.25f) reps = (uint32_t)std::clamp(std::ceil(g.width * h.s / 0.6f), 2.0f, 255.0f);
+                const float width = g.width + mWeight;     // (as segments.hlsl has it)
+                if (width > 1.25f) reps = (uint32_t)std::clamp(std::ceil(width * h.s / 0.6f), 2.0f, 255.0f);
                 for (uint32_t k = 0; k < reps; k++) mExpandCpu.push_back(i | (k << 24));
             }
             cut[e] = (uint32_t)mExpandCpu.size();
@@ -734,8 +753,9 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
     mInfo.textinst = (uint32_t)mInstCpu.size();
     mInfo.postops = v.count(dl::POSTOPS);
 
-    FrameCB fc = { { (float)h.W, (float)h.H }, h.s, std::pow(h.s, 0.35f), h.exposure, h.text_gain, h.bloom_gain,
-                   floatOut ? 0.0f : 1.0f, h.dither_seed, mLift, { 0, 0 } };
+    FrameCB fc = { { (float)h.W, (float)h.H }, h.s, std::pow(h.s, 0.35f), h.exposure, h.text_gain, h.bloom_gain * mGlow,
+                   floatOut ? 0.0f : 1.0f, h.dither_seed, mLift, mRed, mWeight };
+    mBloom0 = h.bloom_gain;
     mFrame = fc;
     mCtx->UpdateSubresource(mFrameCB.Get(), 0, nullptr, &fc, 0, 0);
     ID3D11Buffer* cbs[2] = { mFrameCB.Get(), mDrawCB.Get() };

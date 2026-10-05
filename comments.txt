@@ -4,3 +4,13 @@
 [x] 07:26:52 | glitch | 2026-10-03 19:29 | at the end it fine to deconstruct them like it's already 
 [x] 00:10:39 | origin | 2026-10-04 16:02 | snapshot snapshots/00-10-39_origin.png
 [x] 00:15:58 | origin | 2026-10-04 18:15 | snapshot snapshots/00-15-58_origin.png
+[ ] 00:25:53 | origin | 2026-10-04 19:30 | snapshot snapshots/00-25-53_origin.png
+[ ] 00:25:53 | origin | 2026-10-04 19:30 | snapshot snapshots/00-25-53_origin_2.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_2.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_3.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_4.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_5.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_6.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_7.png
+[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_8.png
