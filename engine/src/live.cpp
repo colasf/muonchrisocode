@@ -744,8 +744,10 @@ struct Claude {
     }
 };
 
-// What is drawn on the frame while a prompt is typed (drag on the picture): strokes, in pixels of the picture.
-// They are shown over the preview, and painted into the snapshot that goes with the prompt.
+// What is drawn on the frame (drag on the picture, at any time while the tower tool is away): strokes, in pixels
+// of the picture. They are shown over the preview only - never in the output - and painted into the next
+// snapshot, or into the picture that goes with the next comment or prompt; then they are gone. Backspace takes
+// the last stroke away, Delete all of them.
 struct Sketch {
     static constexpr float R = 0.2f, G = 0.9f, B = 1.0f;       // their colour: the blue of the prompt box (not a colour of the show)
     std::vector<std::vector<std::pair<float, float>>> strokes;
@@ -907,7 +909,8 @@ void commentBox(std::vector<Renderer::Over>& o, int w, int h, int bar, const std
     gui::text(o, x, y0 + 13.0f, shown, px, 1.0f, 1.0f, 1.0f);
     const float xe = x + (shown.empty() ? 0.0f : gui::textWidth(shown.size(), px) + px);
     o.push_back({ xe, y0 + 11.0f, xe + 5.0f * px, y0 + 29.0f, 1.0f, 1.0f, 1.0f, 0.9f });          // the cursor
-    const char* help = ask ? "ENTER SEND   ESC CANCEL   DRAG ON THE PICTURE TO DRAW   BACKSPACE: LAST STROKE AWAY" : "ENTER SAVE   ESC CANCEL";
+    const char* help = ask ? "ENTER SEND   ESC CANCEL   DRAG ON THE PICTURE TO DRAW   BACKSPACE: LAST STROKE AWAY"
+                           : "ENTER SAVE   ESC CANCEL   DRAG ON THE PICTURE TO DRAW";
     if (typed.empty()) gui::text(o, xe + 24.0f, y0 + 13.0f, help, px, 0.5f, 0.5f, 0.5f);
 }
 
@@ -1358,7 +1361,7 @@ struct DetMeter {
     {
         if (w - heardAt[k] > 0.25) armed[k] = true;            // (detectors.py: REARM)
         if (armed[k] && v >= level) { hitAt[k] = w; hits[k]++; armed[k] = false; }
-        else if (!armed[k] && v < 0.6f * level) armed[k] = true;       // (detectors.py: RELEASE)
+        else if (!armed[k] && v < level) armed[k] = true;              // (detectors.py: RELEASE)
         if (v >= peak[k] || w - peakAt[k] > 1.0) { peak[k] = v; peakAt[k] = w; }
         last[k] = v;
         heardAt[k] = w;
@@ -1739,12 +1742,14 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     Claude claude;
     claude.init(o.root);
     double claudeTick = 0;
-    Sketch sketch;                                  // what is drawn on the frame while the prompt is typed
+    Sketch sketch;                                  // what is drawn on the frame, until a snapshot, a comment or a prompt takes it
     bool askSound = false;                          // the SOUND button: the dialog is opened by the main loop
 
     // snapshots (key S, or the SNAPSHOT button): the picture that is on screen, written to
     // <root>/snapshots/MM-SS-FF_scene.png to be drawn and written on, with a copy nobody touches in
-    // snapshots/untouched (what was drawn on a snapshot is what differs from that copy). A line of comments.txt
+    // snapshots/untouched (what was drawn on a snapshot is what differs from that copy). When something is
+    // drawn on the frame, the snapshot is MM-SS-FF_scene_drawn.png with the drawing in it (the copy without),
+    // and the drawing is gone from the window. A line of comments.txt
     // names the picture, so that it has its mark on the time line and is read with the comments. The PNG is
     // packed by a thread of its own: the show does not wait for it.
     const fs::path snapDir = fs::path(o.root) / L"snapshots";
@@ -1767,7 +1772,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         snapScene.clear();
         if (p.renderer.cardOn()) snapScene = "testcard";
         else for (auto& l : p.pool->looks) if (snapT >= l.t0 && snapT < l.t1) snapScene = l.name;
-        std::string name = gui::timecode(snapT, o.fps) + "_" + (snapScene.empty() ? "show" : snapScene);
+        std::string name = gui::timecode(snapT, o.fps) + "_" + (snapScene.empty() ? "show" : snapScene) + (sketch.empty() ? "" : "_drawn");
         for (char& c : name) if (!isalnum((unsigned char)c) && c != '_') c = '-';      // (MM:SS:FF: no colon in a file name)
         std::error_code ec;
         fs::create_directories(snapDir / L"untouched", ec);
@@ -1778,12 +1783,21 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         snapState = 1;
         snapAt = now();
         snapLit = barDirty = true;
-        snapThread = std::jthread([&snapState, file = snapFile, px = std::move(px), w = pic.w, h = pic.h] {
-            const bool ok = gui::savePng(file.wstring(), px.data(), (unsigned)w, (unsigned)h);
-            std::error_code e;
-            if (ok) fs::copy_file(file, file.parent_path() / L"untouched" / file.filename(), fs::copy_options::overwrite_existing, e);
+        snapThread = std::jthread([&snapState, file = snapFile, px = std::move(px), w = pic.w, h = pic.h, drawn = sketch]() mutable {
+            const fs::path clean = file.parent_path() / L"untouched" / file.filename();
+            bool ok;
+            if (drawn.empty()) {
+                ok = gui::savePng(file.wstring(), px.data(), (unsigned)w, (unsigned)h);
+                std::error_code e;
+                if (ok) fs::copy_file(file, clean, fs::copy_options::overwrite_existing, e);
+            } else {                                // the frame as it was, then the frame with what was drawn on it
+                ok = gui::savePng(clean.wstring(), px.data(), (unsigned)w, (unsigned)h);
+                drawn.paint(px, w, h);
+                ok = gui::savePng(file.wstring(), px.data(), (unsigned)w, (unsigned)h) && ok;
+            }
             snapState = ok ? 2 : 3;
         });
+        sketch.clear();                             // (it is in the picture now)
     };
     auto snapDone = [&] {                           // the picture is written, or could not be
         if (snapState < 2) return;
@@ -1804,7 +1818,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         snapState = 0;
         barDirty = true;
     };
-    // The frame with what was drawn on it, for a prompt: snapshots/MM-SS-FF_scene_drawn.png, and the same frame
+    // The frame with what was drawn on it, for a prompt or a comment: snapshots/MM-SS-FF_scene_drawn.png, and the same frame
     // without the drawing in snapshots/untouched. Written at once (the prompt names the file). Returns its
     // path from the repository folder, or nothing when it cannot be made.
     auto drawnSnapshot = [&](double tAt, const std::string& scene) -> std::string {
@@ -1869,7 +1883,6 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (commenting || !warmed) return;
             if (ask && claude.running) { note = "CLAUDE IS STILL WORKING"; claude.show = true; barDirty = true; return; }
             asking = ask;
-            sketch.clear();
             commenting = true;
             commentT = clock.now();
             commentText.clear();
@@ -1897,9 +1910,14 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                     note = why;
                     warn("the prompt was not sent: %s", why.c_str());
                 }
-            } else if (save && !commentText.empty()) {
+            } else if (save && (!commentText.empty() || !sketch.empty())) {
                 std::string scene;
                 for (auto& l : p.pool->looks) if (commentT >= l.t0 && commentT < l.t1) scene = l.name;
+                if (!sketch.empty()) {              // a comment with a drawing: the frame with the drawing goes with it
+                    const std::string file = drawnSnapshot(commentT, scene);
+                    if (file.empty()) warn("the drawing could not be written: the comment goes without it");
+                    else commentText += (commentText.empty() ? L"drawing " : L" [drawing: ") + std::wstring(file.begin(), file.end()) + (commentText.empty() ? L"" : L"]");
+                }
                 if (comments.add(commentT, o.fps, scene, commentText)) {
                     note = "comment saved in comments.txt";
                     say("comment at %s: %s", gui::timecode(commentT, o.fps).c_str(), gui::utf8(commentText).c_str());
@@ -1909,7 +1927,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 }
             }
             commenting = false;
-            sketch.clear();
+            if (save) sketch.clear();               // (cancelled: what was drawn stays, for a snapshot or another line)
             if (commentResume && !playing) play();
             barDirty = true;
         };
@@ -1920,7 +1938,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 if (k == VK_RETURN) endComment(true);
                 else if (k == VK_ESCAPE) endComment(false);
                 else if (k == VK_BACK && !commentText.empty()) commentText.pop_back();
-                else if (k == VK_BACK && asking && !sketch.empty()) sketch.strokes.pop_back();      // an empty line: the last stroke goes
+                else if (k == VK_BACK && !sketch.empty()) sketch.strokes.pop_back();                // an empty line: the last stroke goes
                 barDirty = true;
                 continue;
             }
@@ -1953,6 +1971,8 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 break;
             }
             case 'F': case VK_F11: win.toggleFullscreen(); break;
+            case VK_BACK: if (!sketch.empty()) { sketch.strokes.pop_back(); barDirty = true; } break;      // the drawing: the last stroke away
+            case VK_DELETE: if (!sketch.empty()) { sketch.clear(); note.clear(); barDirty = true; } break;  // ... all of it
             case 'B': win.bar = win.bar ? 0 : BAR_H; win.resized = true; break;
             case 'D': panel = !panel; barDirty = true; break;       // the detector meters
             case '1': case '2': case '3': levelSel = (int)(k - '1'); panel = true; break;
@@ -2151,20 +2171,28 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             }
             if (win.released || !win.down) scrubbing = false;
         }
-        if (commenting && asking && !scrubbing) {               // a prompt is typed: the mouse draws on the picture
+        if (!tool.on && !scrubbing) {                           // the mouse draws on the picture (the tower tool has it otherwise)
             float x, y;
             win.toPicture(x, y);
-            const bool onPic = win.my < win.h - win.bar - (int)BOX_H && x >= 0.0f && x < (float)PIC_W && y >= 0.0f && y < (float)PIC_H;
+            const int above = win.bar + (commenting ? (int)BOX_H : outPanel.open ? (int)PANEL_H : 0);       // what lies over the picture
+            const bool onPic = win.my < win.h - above && x >= 0.0f && x < (float)PIC_W && y >= 0.0f && y < (float)PIC_H;
             if (win.pressed && onPic) {
                 sketch.strokes.push_back({ { x, y } });
                 sketch.drawing = barDirty = true;
+                if (!commenting) note = "drawing: S snapshot with it, C comment with it, Backspace last stroke away, Delete all";
             } else if (sketch.drawing && win.down) {
                 auto& st = sketch.strokes.back();
                 x = std::clamp(x, 0.0f, (float)PIC_W - 1.0f);
                 y = std::clamp(y, 0.0f, (float)PIC_H - 1.0f);
                 if (std::hypot(x - st.back().first, y - st.back().second) > 3.0f) { st.push_back({ x, y }); barDirty = true; }
             }
-            if (win.released || !win.down) sketch.drawing = false;
+            if (sketch.drawing && (win.released || !win.down)) {
+                sketch.drawing = false;
+                if (sketch.strokes.back().size() < 2) {         // a click is not a stroke (the window was only given the focus)
+                    sketch.strokes.pop_back();
+                    barDirty = true;
+                }
+            }
         } else if (tool.on && !scrubbing) {
             float x, y;
             win.toPicture(x, y);
@@ -2399,7 +2427,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 out.present(p.renderer, lo);        // before the preview: this is the picture on the wall
             }
             barRects.clear();
-            if (commenting && asking) sketch.rects(barRects, win.w, win.h, win.bar);
+            if (!sketch.empty()) sketch.rects(barRects, win.w, win.h, win.bar);
             if (win.bar) {
                 BarState st;
                 st.tc = gui::timecode(t, o.fps);

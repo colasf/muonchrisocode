@@ -27,6 +27,9 @@
 //       S (or the SNAPSHOT button): the picture on screen is written to snapshots/MM-SS-FF_scene.png in the
 //       repository folder, to be drawn and written on, and a line of comments.txt names it. Shift+S (or
 //       Shift and the button) opens that folder.
+//       Drawing: a drag on the picture draws on it, at any time (light blue, in this window only; not while
+//       the towers are placed). The next snapshot (..._drawn.png), comment or prompt takes the drawing with
+//       the frame, and it is gone. Backspace: the last stroke away; Delete: all of it.
 //       P (or the OUTPUT button): the output panel. LIFT raises the mid levels of the picture (0 = as
 //       rendered; drag the slider, click its name for 0). TEST CARD (or K) shows the test card instead of
 //       the show (tools/test_card.py makes it). OUTPUT chooses the display the raster is sent to: a window

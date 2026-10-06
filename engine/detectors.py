@@ -11,9 +11,9 @@ showdata.Detectors without the scenes knowing:
 
 Two kinds of detectors are understood (the real format is not known yet):
 
-    a stream     the value is sent all the time (tens of times a second): a hit is a rise above the trigger
-                 level, and the detector is ready for the next one once the value has fallen under RELEASE
-                 times that level
+    a stream     the value is sent all the time (tens of times a second): every time the value passes the
+                 trigger level on its way up is a hit (the detector is ready for the next one as soon as
+                 the value is under that level again)
     events       a message only when a muon is caught: after REARM seconds without a message the detector
                  is ready again, so every message above the trigger level is a hit; its value decays by itself
 
@@ -42,8 +42,9 @@ KEEP = 20000                     # values kept per detector for value(): a few m
 
 class LiveDetectors(sd.Detectors):
     ON = 0.10                    # trigger level until the engine says another: a hit starts when the value rises above it ...
-    RELEASE = 0.6                # ... and the detector is ready for the next one when it has fallen under this part of it
-    GAP = 0.05                   # seconds: no second hit sooner than this
+    RELEASE = 1.0                # ... and the detector is ready for the next one when it is under this part of it: every
+                                 # time the value passes the level is a hit (user, 2026-10-06; it was 0.6 before)
+    GAP = 0.0                    # seconds: no second hit sooner than this (0: none is held back; it was 0.05)
     PEAK = 0.08                  # seconds after its start during which a hit can still gain energy
     REARM = 0.25                 # seconds without a message after which a detector is ready again (events)
     DECAY = 0.9                  # seconds the value of a detector that went silent takes to come down

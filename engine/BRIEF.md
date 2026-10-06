@@ -407,8 +407,8 @@ Added 2026-10-04, to annotate pictures of the show (`engine/src/live.cpp`: `snap
   from OSC instead, from any address (`/muon/L`, `/muon/C`, `/muon/R` with one float 0..1, or
   `/muon` with three floats; `--det-prefix` changes `/muon`); `--detectors both` adds them
   to the scripted ones. This is what TouchDesigner will send (user, 2026-10-02). Two kinds
-  of signal are understood: one that streams its value (a hit is a rise above the trigger
-  level; the detector is ready again once the value is back under 0.6 times that level) and
+  of signal are understood: one that streams its value (every time the value passes the
+  trigger level on its way up is a hit: the detector is ready again as soon as the value is under that level) and
   one that only sends a message when it is hit (every message above the trigger level is a
   hit once the detector has been silent for 0.25 s).
   `python engine/tools/fake_detectors.py` sends pretend detectors to try it.
@@ -421,8 +421,8 @@ Added 2026-10-04, to annotate pictures of the show (`engine/src/live.cpp`: `snap
   - by OSC: `/muonbloom/level <v>`, `/muonbloom/level <L> <C> <R>`, `/muonbloom/level/L <v>`.
   What is set while it runs is written to `engine/detectors.json` and used at the next
   start (the command line wins over the file). A new level applies to the values that
-  arrive after it: the hits already found stay. The other constants (release at 0.6 of the
-  level, no second hit within 50 ms) are in `engine/detectors.py`.
+  arrive after it: the hits already found stay. The other constants (`RELEASE`, `GAP`: since 2026-10-06 every
+  passing of the level is a hit, nothing is held back) are in `engine/detectors.py`.
 - **Sound**: none by default (Ableton plays it). For work at the desk, `--sound` plays the
   two stems of the previews (looked for in the `audio` folder beside the repository; the
   engine refuses to start if they are asked for and not there) and `--audio file.wav` plays

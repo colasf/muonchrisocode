@@ -1,0 +1,67 @@
+MUON : BLOOM engine - the OSC messages it listens to
+====================================================
+
+Transport      OSC over UDP, port 9000 (another port: --osc PORT; no OSC: --osc 0)
+               The engine only receives. It sends nothing back.
+Numbers        float32 (f) is expected. int32 (i), double (d), int64 (h) and true / false (T / F)
+               are taken too. Bundles are understood. A NaN or an infinite value is thrown away.
+
+
+1. Time and transport   (from Ableton, directly or through TouchDesigner)
+-----------------------------------------------------------------------
+
+/muonbloom/time    <seconds>     Position in the show, in seconds from the start of the audio file
+                                 (03:00 = 180.0). Send it all the time, about 60 times a second, also
+                                 while the sound is stopped. The show plays when the time moves, pauses
+                                 when it stands still, and jumps when it jumps by more than 80 ms.
+                                 Ignored when the engine plays its own sound (--sound, --audio).
+
+/muonbloom/play                  Play. Not needed when /muonbloom/time is sent.
+/muonbloom/pause                 Pause.
+/muonbloom/seek    <seconds>     Go to that time.
+/muonbloom/reload                Build the scenes again (after a file of the show was changed).
+
+Who may send these: by default this machine only (127.0.0.1). From another computer, start the
+engine with   --osc-allow <IP of the sender>   (several: IP,IP - or: any).
+
+
+2. Detectors   (from TouchDesigner; used only with --detectors live or --detectors both)
+-----------------------------------------------------------------------------------------
+
+/muon/L    <value 0..1>          Left detector
+/muon/C    <value 0..1>          Centre detector
+/muon/R    <value 0..1>          Right detector
+
+or the three in one message:
+
+/muon      <L> <C> <R>
+
+Every time the value passes the trigger level on its way up is a hit (the level is 0.10 until it is
+changed). The detector is ready for the next hit as soon as the value is under the level again. The
+value can be a stream (sent all the time) or one message per muon: both work.
+
+Other names taken for the last part of the address:
+    left:    L  l  left    1  DET_L
+    centre:  C  c  centre  center  2  DET_C
+    right:   R  r  right   3  DET_R
+Another address than /muon: --det-prefix /something
+These values are accepted from any address (no --osc-allow needed).
+
+
+3. Trigger level of the detectors
+---------------------------------
+
+/muonbloom/level      <value>              The same level for the three detectors (above 0, at most 1)
+/muonbloom/level      <L> <C> <R>          One level each
+/muonbloom/level/L    <value>              One detector (also /C and /R, and the names above)
+
+What is set is kept in engine/detectors.json. Same rule as the transport: this machine only, unless
+--osc-allow is given.
+
+
+Tools to test without Ableton or TouchDesigner (Python, in engine/tools)
+------------------------------------------------------------------------
+
+python engine/tools/fake_clock.py --from 180       sends /muonbloom/time, 60 times a second
+python engine/tools/fake_detectors.py              sends /muon/L /C /R
+python engine/tools/osc_send.py /muon/C 0.8        sends one message

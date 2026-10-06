@@ -100,7 +100,7 @@ def main():
     (dst / "engine" / "build").mkdir(parents=True)
     (dst / MARK).write_text("made by engine/package.py\n")
     shutil.copy2(exe, dst / "engine" / "build")
-    for name in ("worker.py", "detectors.py", "run.bat", "output.json", "detectors.json", "claude_args.txt"):
+    for name in ("worker.py", "detectors.py", "run.bat", "OSC.txt", "output.json", "detectors.json", "claude_args.txt"):
         if (ROOT / "engine" / name).exists():
             shutil.copy2(ROOT / "engine" / name, dst / "engine")
     shutil.copytree(ROOT / "engine" / "shaders", dst / "engine" / "shaders", ignore=SKIP)
