@@ -33,8 +33,12 @@
 //       that fills it, no border, no pointer - the HDMI output to the media server. The raster (--raster
 //       3000x1688) sits at the top left of that display (--raster-at X,Y) with the picture of the show at
 //       --picture-at 11,272 of it, pixel for pixel; a display smaller than the raster gets it scaled to fit.
-//       At start: --output 2 (a display as the panel numbers them, or its device name; off = none; default:
-//       as in the last run), --lift 0.6, --card. What is set in the panel is kept in engine/output.json.
+//       AUTO: the display this window is not on, whichever it is, taken as soon as it is plugged in.
+//       At start: --output 2 (a display as the panel numbers them, or its device name; auto; off = none;
+//       default: as in the last run), --lift 0.6, --card. What is set in the panel is kept in engine/output.json.
+//       T (or the TOWERS button): the three towers over the picture and their panel - choose one, set its
+//       centre, width, height and detector height with the buttons (a pixel, ten with Shift) or drag it on
+//       the picture; SAVE writes data/towers.json and the scenes are built again around it.
 //       The clock: the sound is played by Ableton, and the time of the show comes by OSC:
 //       /muonbloom/time <seconds>, sent all the time. The show follows it (plays when it moves, pauses when
 //       it stands still, goes on by the machine's timer if nothing arrives any more). Without it the engine
@@ -142,8 +146,10 @@ static PlayerOptions playerOptions(const Args& a)
     o.workers = (int)a.num(L"--workers", o.workers);
     o.lead = (int)a.num(L"--lead", o.lead);
     o.fps = a.num(L"--fps", o.fps);
-    o.python = a.str(L"--python", o.python);
     o.root = a.str(L"--root", rootDir());
+    // a "python" folder beside muonbloom/ (engine/package.py makes one): that interpreter, nothing to install
+    fs::path own = fs::path(o.root) / L"python" / L"python.exe";
+    o.python = a.str(L"--python", fs::exists(own) ? own.wstring() : o.python);
     o.shaders = shaderDir();
     o.debug = a.flag(L"--debug");
     return o;
@@ -416,7 +422,7 @@ int wmain(int argc, wchar_t** argv)
         lo.log = a.str(L"--log", (fs::path(o.root) / L"engine" / L"out" / L"engine.log").wstring());
         if (a.flag(L"--no-log")) lo.log.clear();
         lo.position = a.str(L"--position-file", L"");
-        // the output: --output 2 | \\.\DISPLAY2 | off, --raster 3000x1688, --picture-at 11,272, --raster-at 0,0
+        // the output: --output 2 | \\.\DISPLAY2 | auto | off, --raster 3000x1688, --picture-at 11,272, --raster-at 0,0
         for (wchar_t c : a.str(L"--output", L"")) lo.output += (char)(c < 128 ? c : '_');
         if (!pairArg(a, L"--raster", L'x', lo.rasterW, lo.rasterH) || !pairArg(a, L"--picture-at", L',', lo.picX, lo.picY)
             || !pairArg(a, L"--raster-at", L',', lo.rasterX, lo.rasterY) || lo.rasterW <= 0 || lo.rasterH <= 0) {

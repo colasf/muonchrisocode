@@ -3,6 +3,8 @@ project(muonengine CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# the C++ runtime inside the exe: no Visual C++ redistributable to install on the machine that plays the show
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # Spout2 SDK (DirectX 11 part), unchanged: third_party/spout/README.md
 add_library(spout STATIC

@@ -39,10 +39,10 @@ const float BAR_PAD = 12.0f;                // its margin left and right
 const float BTN_W = 44.0f;                  // the play / pause button, at its left
 const float TC_W = 114.0f;                  // the time code MM:SS:FF, after the button
 const float BAR_X0 = BTN_W + TC_W + BAR_PAD; // where the time line starts
-const float OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W = 102.0f, ASK_W = 90.0f;      // the OUTPUT, SOUND, SNAPSHOT, COMMENT
-const float RIGHT_W = OUT_W + SND_W + SNP_W + CMT_W + ASK_W;                                  // and CLAUDE buttons, at its right
+const float TWR_W = 90.0f, OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W = 102.0f, ASK_W = 90.0f;      // the TOWERS, OUTPUT, SOUND,
+const float RIGHT_W = TWR_W + OUT_W + SND_W + SNP_W + CMT_W + ASK_W;                          // SNAPSHOT, COMMENT and CLAUDE buttons, at its right
 const float BOX_H = 40.0f;                  // the line a comment is typed in, above the bar
-const float PANEL_H = 134.0f;               // the OUTPUT panel, above the bar
+const float PANEL_H = 134.0f;               // the OUTPUT panel and the TOWERS panel, above the bar
 const float GLOW_MAX = 1.0f, RED_MAX = 3.0f, WEIGHT_MAX = 1.5f;      // the ends of its GLOW, RED and WEIGHT sliders
 const float TUNE_X0 = 176.0f, TUNE_W = 180.0f, TUNE_PITCH = 420.0f;  // where those sliders are
 const float LIFT_MAX = 3.0f;                // the end of the LIFT slider
@@ -105,6 +105,7 @@ struct Window {
     int bar = 0;                            // pixels kept free under the picture (the time bar)
     bool resized = false, closed = false, fullscreen = false;
     bool lost = false;                      // the graphics device is gone: nothing can be shown any more
+    bool displays = false;                  // Windows says its displays changed (one plugged in, taken away, another size)
     WINDOWPLACEMENT placement = { sizeof(WINDOWPLACEMENT) };
     std::vector<WPARAM> keys;               // keys pressed since the last pump
     std::wstring chars;                     // ... and what they typed (the comment line)
@@ -121,6 +122,7 @@ struct Window {
         Window* s = (Window*)GetWindowLongPtrW(h, GWLP_USERDATA);
         if (s) switch (m) {
             case WM_CLOSE: s->closed = true; return 0;
+            case WM_DISPLAYCHANGE: s->displays = true; return 0;
             case WM_SIZE:
                 if (wp != SIZE_MINIMIZED) { s->w = LOWORD(lp); s->h = HIWORD(lp); s->resized = true; }
                 return 0;
@@ -241,8 +243,9 @@ struct Window {
     }
     bool overBar() const { return bar > 0 && my >= h - bar && my < h && mx >= 0 && mx < w; }
     bool overButton() const { return overBar() && mx < BTN_W; }         // the play / pause button
-    bool overOutput() const { return overBar() && mx >= w - RIGHT_W && mx < w - RIGHT_W + OUT_W; }
-    bool overSound() const { return overBar() && mx >= w - RIGHT_W + OUT_W && mx < w - SNP_W - CMT_W - ASK_W; }
+    bool overTowers() const { return overBar() && mx >= w - RIGHT_W && mx < w - RIGHT_W + TWR_W; }
+    bool overOutput() const { return overBar() && mx >= w - RIGHT_W + TWR_W && mx < w - RIGHT_W + TWR_W + OUT_W; }
+    bool overSound() const { return overBar() && mx >= w - RIGHT_W + TWR_W + OUT_W && mx < w - SNP_W - CMT_W - ASK_W; }
     bool overSnapshot() const { return overBar() && mx >= w - SNP_W - CMT_W - ASK_W && mx < w - CMT_W - ASK_W; }
     bool overComment() const { return overBar() && mx >= w - CMT_W - ASK_W && mx < w - ASK_W; }
     bool overAsk() const { return overBar() && mx >= w - ASK_W; }
@@ -323,11 +326,14 @@ struct Towers {
 };
 
 // The placement tool: the three towers drawn over the picture (so they are seen on the wall, through
-// MadMapper), moved with the mouse or the arrow keys, written to data/towers.json on Enter.
+// the output), moved with the mouse, the arrow keys or the numbers of the TOWERS panel, written to
+// data/towers.json on Enter (or SAVE in the panel).
 struct TowerTool {
     static constexpr float MIN_BAY = 300.0f;        // the scenes need one free stretch of wall at least this wide
     Towers tw;
     bool on = false, dirty = false;
+    bool edited = false;                    // moved since it was read or saved
+    bool calib = false;                     // the calibration picture instead of the show (CALIBRATION in the TOWERS panel)
     int sel = 1;                            // tower being edited
     int handle = 0;                         // 0 whole, 1 left edge, 2 right edge, 3 top, 4 detector height
     bool dragging = false;
@@ -362,7 +368,30 @@ struct TowerTool {
             if (c.x1 - c.x0 < w) { if (dx > 0) c.x0 = c.x1 - w; else c.x1 = c.x0 + w; }
         }
         clamp();
-        dirty = true;
+        dirty = edited = true;
+    }
+
+    // The placement as it is saved, shown.
+    bool start()
+    {
+        if (!tw.load()) return false;
+        on = dirty = true;
+        edited = false;
+        return true;
+    }
+
+    // The numbers of the TOWERS panel: 0 the centre, 1 the width (about the centre), 2 the height (the foot
+    // stays on the ground), 3 the height of the detector.
+    void nudge(int what, float d)
+    {
+        Tower& a = tw.t[sel];
+        if (what == 0) { handle = 0; move(d, 0); return; }
+        handle = what == 1 ? 0 : what == 2 ? 3 : 4;
+        if (what == 1) { a.x0 -= 0.5f * d; a.x1 += 0.5f * d; }
+        else if (what == 2) a.top -= d;
+        else a.det_h += d;
+        clamp();
+        dirty = edited = true;
     }
 
     void press(float x, float y)
@@ -383,8 +412,67 @@ struct TowerTool {
         gy = y;
     }
 
+    // The calibration picture, sent out instead of the show: black, the grid of the canvas with its numbers
+    // (a line every 100 pixels, a stronger one every 500), and the three towers as blocks of light with
+    // full-level edges, to be moved until each block sits on its tower and no light falls on the wall
+    // beside it. Above a tower: its name, centre, width and height. Yellow: what the next move changes.
+    void pattern(std::vector<Renderer::Over>& o) const
+    {
+        const float W = (float)PIC_W, H = (float)PIC_H;
+        char b[48];
+        o.push_back({ 0.0f, 0.0f, W, H, 0.0f, 0.0f, 0.0f, 1.0f });
+        for (int x = 100; x < PIC_W; x += 100) {
+            const bool big = x % 500 == 0;
+            const float g = big ? 0.6f : 0.25f, t = big ? 1.0f : 0.5f;
+            o.push_back({ x - t, 0.0f, x + t, H, g, g, g, 1.0f });
+            snprintf(b, sizeof b, "%d", x);
+            if (big) gui::text(o, x + 9.0f, 16.0f, b, 3.0f, 1.0f, 1.0f, 1.0f);
+        }
+        for (int y = 100; y < PIC_H; y += 100) {
+            const bool big = y % 500 == 0;
+            const float g = big ? 0.6f : 0.25f, t = big ? 1.0f : 0.5f;
+            o.push_back({ 0.0f, y - t, W, y + t, g, g, g, 1.0f });
+            snprintf(b, sizeof b, "%d", y);
+            if (big) gui::text(o, 16.0f, y + 9.0f, b, 3.0f, 1.0f, 1.0f, 1.0f);
+        }
+        const float e = 3.0f;                       // the edge of the canvas
+        o.push_back({ 0.0f, 0.0f, W, e, 1.0f, 1.0f, 1.0f, 1.0f });
+        o.push_back({ 0.0f, H - e, W, H, 1.0f, 1.0f, 1.0f, 1.0f });
+        o.push_back({ 0.0f, 0.0f, e, H, 1.0f, 1.0f, 1.0f, 1.0f });
+        o.push_back({ W - e, 0.0f, W, H, 1.0f, 1.0f, 1.0f, 1.0f });
+        const char* names[3] = { "LEFT", "CENTRE", "RIGHT" };
+        for (int k = 0; k < 3; k++) {
+            const Tower& a = tw.t[k];
+            const bool s = k == sel;
+            const float cx = 0.5f * (a.x0 + a.x1);
+            auto line = [&](float x0, float y0, float x1, float y1, bool hot) {
+                o.push_back({ x0, y0, x1, y1, 1.0f, hot ? 0.85f : 1.0f, hot ? 0.0f : 1.0f, 1.0f });
+            };
+            o.push_back({ a.x0 - 12.0f, a.top - 12.0f, a.x1 + 12.0f, a.bot + 12.0f, 0.0f, 0.0f, 0.0f, 1.0f });     // no grid against it
+            o.push_back({ a.x0, a.top, a.x1, a.bot, 0.4f, 0.4f, 0.4f, 1.0f });
+            line(a.x0, a.top, a.x0 + e, a.bot, s && (handle == 1 || handle == 0));
+            line(a.x1 - e, a.top, a.x1, a.bot, s && (handle == 2 || handle == 0));
+            line(a.x0, a.top, a.x1, a.top + e, s && (handle == 3 || handle == 0));
+            line(a.x0, a.bot - e, a.x1, a.bot, false);
+            line(a.x0, a.top + a.det_h - 1.5f, a.x1, a.top + a.det_h + 1.5f, s && handle == 4);
+            line(a.x0 - 150.0f, a.bot, a.x0 - 20.0f, a.bot + 2.0f, false);          // the ground, either side
+            line(a.x1 + 20.0f, a.bot, a.x1 + 150.0f, a.bot + 2.0f, false);
+            line(cx - 1.0f, a.top - 150.0f, cx + 1.0f, a.top - 20.0f, false);        // its axis, above the head
+            const float tx = std::clamp(cx + 16.0f, 12.0f, W - 190.0f), ty = a.top - 150.0f, g = s ? 0.85f : 1.0f, bl = s ? 0.0f : 1.0f;
+            o.push_back({ tx - 8.0f, ty - 8.0f, tx + 180.0f, ty + 120.0f, 0.0f, 0.0f, 0.0f, 1.0f });
+            gui::text(o, tx, ty, names[k], 3.0f, 1.0f, g, bl);
+            snprintf(b, sizeof b, "X %.1f", cx);
+            gui::text(o, tx, ty + 30.0f, b, 3.0f, 1.0f, g, bl);
+            snprintf(b, sizeof b, "W %.1f", a.x1 - a.x0);
+            gui::text(o, tx, ty + 60.0f, b, 3.0f, 1.0f, g, bl);
+            snprintf(b, sizeof b, "H %.1f", a.bot - a.top);
+            gui::text(o, tx, ty + 90.0f, b, 3.0f, 1.0f, g, bl);
+        }
+    }
+
     void rects(std::vector<Renderer::Over>& o) const
     {
+        if (calib) { pattern(o); return; }
         for (int k = 0; k < 3; k++) {
             const Tower& a = tw.t[k];
             bool s = k == sel;
@@ -713,15 +801,16 @@ struct BarState {
     int output = 0;                         // 0 no output window, 1 it is on a display, 2 its display is gone
     bool card = false;                      // the test card is shown instead of the show
     bool panel = false;                     // the OUTPUT panel is open
+    bool towers = false;                    // the TOWERS panel is open
     bool snapped = false;                   // a snapshot has just been taken
     int claude = 0;                         // the prompt box: 1 a prompt is being typed, 2 Claude is working
-    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT, 4 OUTPUT, 5 SNAPSHOT, 6 CLAUDE
+    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT, 4 OUTPUT, 5 SNAPSHOT, 6 CLAUDE, 7 TOWERS
     const std::vector<gui::Comments::Mark>* marks = nullptr;
 };
 
 // The time bar of the preview window: a play / pause button, the time code, then the scenes of the show as
 // blocks, what has been played, where the clock is, where the mouse points, where the comments are; at the
-// right the OUTPUT, SOUND, SNAPSHOT and COMMENT buttons. Window pixels.
+// right the TOWERS, OUTPUT, SOUND, SNAPSHOT, COMMENT and CLAUDE buttons. Window pixels.
 void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Pool::Look>& looks, double end, double t, double hover,
              bool playing, const BarState& st)
 {
@@ -766,7 +855,14 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
     // the buttons at the right: OUTPUT (white while a display takes the raster, yellow when that display is
     // gone, red while the test card is on), SOUND (white while the engine plays sound), SNAPSHOT (lit for a
     // moment when one is taken), COMMENT (yellow while one is typed)
-    const float xo = (float)w - RIGHT_W, xs = xo + OUT_W, xa = (float)w - ASK_W, xc = xa - CMT_W, xn = xc - SNP_W;
+    const float xt = (float)w - RIGHT_W, xo = xt + TWR_W, xs = xo + OUT_W, xa = (float)w - ASK_W, xc = xa - CMT_W, xn = xc - SNP_W;
+    o.push_back({ xt, y0 + 6.0f, xt + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
+    if (st.hot == 7) o.push_back({ xt + 4.0f, y0 + 4.0f, xo - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
+    {                                               // TOWERS: white and underlined while its panel is open
+        const float g = st.towers ? 1.0f : 0.8f, tx = xt + 0.5f * (TWR_W - gui::textWidth(6, 2.0f));
+        gui::text(o, tx, y0 + 11.0f, "TOWERS", 2.0f, g, g, g);
+        if (st.towers) o.push_back({ tx, y1 - 8.0f, tx + gui::textWidth(6, 2.0f), y1 - 6.0f, g, g, g, 1.0f });
+    }
     o.push_back({ xo, y0 + 6.0f, xo + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
     if (st.hot == 4) o.push_back({ xo + 4.0f, y0 + 4.0f, xs - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
     {
@@ -952,12 +1048,14 @@ struct OutWindow {
 //                a click on a name: back to what the scenes give
 //     MOVE       what is sent to the display, shifted a pixel at a time (Shift: ten), to sit the picture on the wall;
 //                0 puts it back. Only the output moves: not the preview, not Spout
-//     OUTPUT     OFF, or the display that takes the raster (the one this window is on cannot be chosen)
+//     OUTPUT     OFF, AUTO, or the display that takes the raster (the one this window is on cannot be chosen).
+//                AUTO: the other display of the machine, whichever it is - taken as soon as it is plugged in,
+//                let go when it is taken away, on any machine (nothing of this one is kept in output.json)
 struct OutputPanel {
     struct Hit { float x0, y0, x1, y1; int id; };
     bool open = false;
     int drag = 0;                           // the slider being dragged: 2 LIFT, 31 GLOW, 33 RED, 35 WEIGHT
-    std::vector<Hit> hits;                  // 1 the name LIFT, 2 its slider, 3 TEST CARD, 4 .. 8 MOVE left right up down 0, 10 OFF, 11 .. the displays
+    std::vector<Hit> hits;                  // 1 the name LIFT, 2 its slider, 3 TEST CARD, 4 .. 8 MOVE left right up down 0, 9 AUTO, 10 OFF, 11 .. the displays
     std::vector<Display> list;              // the displays, as shown
 
     int at(int mx, int my) const
@@ -967,7 +1065,8 @@ struct OutputPanel {
     }
 
     void rects(std::vector<Renderer::Over>& o, int w, int h, int bar, float lift, bool card, const std::string& cardNote, const std::wstring& active,
-               bool gone, bool exact, const std::wstring& own, const LiveOptions& lo, int mx, int my, int moveX, int moveY, float glow, float red, float weight)
+               bool gone, bool exact, const std::wstring& own, const LiveOptions& lo, int mx, int my, int moveX, int moveY, float glow, float red, float weight,
+               bool autoOn)
     {
         const float y1 = (float)(h - bar), y0 = y1 - PANEL_H, px = 2.0f;
         hits.clear();
@@ -1021,7 +1120,8 @@ struct OutputPanel {
         // the display of the output
         y = y0 + 52.0f;
         gui::text(o, 14.0f, y + 7.0f, "OUTPUT", px, 1.0f, 1.0f, 1.0f);
-        x = button(110.0f, y, "OFF", 10, active.empty());
+        x = button(110.0f, y, "OFF", 10, active.empty() && !autoOn);
+        x = button(x, y, "AUTO", 9, autoOn);
         for (size_t k = 0; k < list.size(); k++) {
             const bool self = list[k].device == own;
             snprintf(b, sizeof b, "%d: %d x %d %d HZ%s", (int)k + 1, list[k].w(), list[k].h(), list[k].hz, self ? " (THIS SCREEN)" : "");
@@ -1029,7 +1129,8 @@ struct OutputPanel {
         }
         int hz = 60;
         for (auto& d : list) if (d.device == active && d.hz) hz = d.hz;
-        if (gone) gui::text(o, x + 6.0f, y + 7.0f, "THE DISPLAY OF THE OUTPUT IS GONE", px, 1.0f, 0.85f, 0.0f);
+        if (autoOn && active.empty()) gui::text(o, x + 6.0f, y + 7.0f, "AUTO: WAITING FOR ANOTHER DISPLAY", px, 1.0f, 0.85f, 0.0f);
+        else if (gone) gui::text(o, x + 6.0f, y + 7.0f, "THE DISPLAY OF THE OUTPUT IS GONE", px, 1.0f, 0.85f, 0.0f);
         else if (!active.empty() && !exact) gui::text(o, x + 6.0f, y + 7.0f, "SMALLER THAN THE RASTER: SCALED TO FIT", px, 1.0f, 0.85f, 0.0f);
         else if (!active.empty() && hz < 59) gui::text(o, x + 6.0f, y + 7.0f, "UNDER 60 HZ: FRAMES OF THE SHOW ARE LOST", px, 1.0f, 0.85f, 0.0f);
         else if (!active.empty()) gui::text(o, x + 6.0f, y + 7.0f, "PIXEL FOR PIXEL", px, 0.8f, 0.8f, 0.8f);
@@ -1039,8 +1140,84 @@ struct OutputPanel {
     }
 };
 
+// The TOWERS panel, above the bar (in the preview window only): the placement tool (key T) with its numbers.
+// The three towers are drawn over the picture - on the wall too - and can be dragged there. Here, for the
+// tower that is chosen, in pixels of the 2978 x 1400 canvas:
+//     X          where its centre is
+//     WIDTH      its width, about its centre
+//     HEIGHT     its height: the foot stays on the ground
+//     DETECTOR   the height of the detector at its head
+//                a click: one pixel, ten with Shift; a button kept down goes on
+//     SAVE       writes data/towers.json: the scenes are built again around that placement
+//     CANCEL     back to the placement as it is saved, and the tool away
+//     CALIBRATION  the calibration picture instead of the show (TowerTool::pattern), in the output too: the
+//                towers as blocks of light on black, to be moved until they sit on the real ones
+struct TowerPanel {
+    struct Hit { float x0, y0, x1, y1; int id; };
+    std::vector<Hit> hits;                  // 1 .. 3 the towers, 10 11 X, 12 13 WIDTH, 14 15 HEIGHT, 16 17 DETECTOR, 20 SAVE, 21 CANCEL, 22 CALIBRATION
+    int held = 0;                           // the button kept down
+    double heldAt = 0, stepAt = 0;
+
+    int at(int mx, int my) const
+    {
+        for (auto& h : hits) if (mx >= h.x0 && mx < h.x1 && my >= h.y0 && my < h.y1) return h.id;
+        return 0;
+    }
+
+    void rects(std::vector<Renderer::Over>& o, int w, int h, int bar, const TowerTool& tool, int mx, int my, bool outputOn)
+    {
+        const float y1 = (float)(h - bar), y0 = y1 - PANEL_H, px = 2.0f;
+        hits.clear();
+        o.push_back({ 0.0f, y0, (float)w, y1, 0.0f, 0.0f, 0.0f, 0.92f });
+        o.push_back({ 0.0f, y0, (float)w, y0 + 1.0f, 1.0f, 1.0f, 1.0f, 1.0f });
+        auto button = [&](float x, float y, const std::string& s, int id, bool lit, bool dead = false) {
+            const float bw = gui::textWidth(s.size(), px) + 20.0f, bh = 28.0f;
+            const bool hot = !dead && mx >= x && mx < x + bw && my >= y && my < y + bh;
+            const float g = lit ? 1.0f : hot ? 0.75f : 0.3f, in = lit ? 1.0f : hot ? 0.14f : 0.0f, t = lit ? 0.0f : dead ? 0.4f : 0.85f;
+            o.push_back({ x, y, x + bw, y + bh, g, g, g, 1.0f });
+            o.push_back({ x + 1.0f, y + 1.0f, x + bw - 1.0f, y + bh - 1.0f, in, in, in, 1.0f });
+            gui::text(o, x + 10.0f, y + 7.0f, s, px, t, t, t);
+            if (!dead) hits.push_back({ x, y, x + bw, y + bh, id });
+            return x + bw + 10.0f;
+        };
+        // which tower, and what becomes of the changes
+        float y = y0 + 10.0f;
+        gui::text(o, 14.0f, y + 7.0f, "TOWER", px, 1.0f, 1.0f, 1.0f);
+        const char* names[3] = { "LEFT", "CENTRE", "RIGHT" };
+        float x = 110.0f;
+        for (int k = 0; k < 3; k++) x = button(x, y, names[k], 1 + k, k == tool.sel);
+        x = button(x + 30.0f, y, "SAVE", 20, false, !tool.edited);
+        x = button(x, y, "CANCEL", 21, false);
+        x = button(x + 30.0f, y, "CALIBRATION", 22, tool.calib);
+        if (tool.calib && !outputOn)
+            gui::text(o, x + 6.0f, y + 7.0f, "NO OUTPUT: CHOOSE ITS DISPLAY IN THE OUTPUT PANEL", px, 1.0f, 0.85f, 0.0f);
+        else if (tool.tw.widestBay() < TowerTool::MIN_BAY)
+            gui::text(o, x + 6.0f, y + 7.0f, "NO 3 M OF FREE WALL LEFT: CANNOT BE SAVED", px, 1.0f, 0.85f, 0.0f);
+        else if (tool.edited)
+            gui::text(o, x + 6.0f, y + 7.0f, "CHANGED: SAVE BUILDS THE SCENES AROUND IT", px, 1.0f, 0.85f, 0.0f);
+        // its numbers, each with its two buttons
+        const Tower& a = tool.tw.t[tool.sel];
+        auto value = [&](float x, float y, const char* name, float v, int id) {
+            char b[64];
+            snprintf(b, sizeof b, "%s %.1f", name, v);
+            gui::text(o, x, y + 7.0f, b, px, 1.0f, 1.0f, 1.0f);
+            x = button(x + gui::textWidth(16, px), y, id == 10 ? "<" : "-", id, false);
+            button(x, y, id == 10 ? ">" : "+", id + 1, false);
+        };
+        value(14.0f, y0 + 52.0f, "X", 0.5f * (a.x0 + a.x1), 10);
+        value(14.0f + COL, y0 + 52.0f, "WIDTH", a.x1 - a.x0, 12);
+        value(14.0f, y0 + 94.0f, "HEIGHT", a.bot - a.top, 14);
+        value(14.0f + COL, y0 + 94.0f, "DETECTOR", a.det_h, 16);
+        const char* help = "PIXELS OF THE 2978 x 1400 CANVAS   SHIFT: TEN   OR DRAG A TOWER ON THE PICTURE";
+        const float tw = gui::textWidth(strlen(help), px), xh = 14.0f + 2.0f * COL;
+        if (xh + tw < (float)w - 14.0f) gui::text(o, xh, y0 + 59.0f, help, px, 0.5f, 0.5f, 0.5f);
+    }
+    static constexpr float COL = 340.0f;    // from one number to the next
+};
+
 // What was set in the OUTPUT panel, kept from one run to the next: engine/output.json
 //     { "lift": 0.60, "display": "\\\\.\\DISPLAY2", "move": [0, 0], "glow": 1.00, "red": 1.00, "weight": 0.00 }
+// "display": the device name of the display that takes the raster, "" for none, or "auto" (the OUTPUT panel).
 bool loadOutput(const fs::path& path, float& lift, std::wstring& display, int& moveX, int& moveY, float& glow, float& red, float& weight)
 {
     std::ifstream f(path);
@@ -1316,7 +1493,8 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
 
     TowerTool tool;
     tool.tw.path = fs::path(o.root) / L"data" / L"towers.json";
-    if (lo.towers && tool.tw.load()) tool.on = tool.dirty = true;
+    if (lo.towers) tool.start();
+    TowerPanel towerPanel;
 
     // ---- the output: the lift, the test card, the display that takes the raster (the OUTPUT panel) ----
     const fs::path outputFile = fs::path(o.root) / L"engine" / L"output.json";
@@ -1325,6 +1503,9 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     OutWindow out;
     float glow = 1.0f, red = 1.0f, weight = 0.0f;   // GLOW, RED and WEIGHT of the panel
     loadOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, red, weight);
+    bool outAuto = outDevice == L"auto";            // AUTO: the display is whichever other one the machine has
+    if (outAuto) outDevice.clear();
+    std::wstring autoFailed;                        // (a display AUTO could not open: not tried again until the displays change)
     p.renderer.tune(glow, red, weight);
     if (lo.lift >= 0.0f) lift = std::min(lo.lift, LIFT_MAX);
     p.renderer.lift(lift);
@@ -1395,9 +1576,10 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         p.renderer.lift(lift);
         outDirty = settingsDirty = true;
     };
-    auto setOutput = [&](const std::wstring& device) {
+    auto setOutput = [&](const std::wstring& device, bool byAuto = false) {
         out.close();
         outDevice = device;
+        outAuto = byAuto;
         outGone = false;
         outDirty = true;
         if (device.empty()) { say("output: off"); return; }
@@ -1412,6 +1594,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             note = "THE OUTPUT CANNOT BE THE SCREEN THIS WINDOW IS ON";
             warn("output: %s is the screen of the preview window: not taken", narrow(device).c_str());
         } else if (!out.open(p.gpu, *it, e)) {
+            if (byAuto) autoFailed = device;
             outDevice.clear();
             note = e;
             warn("output: %s", e.c_str());
@@ -1423,8 +1606,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (it->hz && it->hz < 59) warn("OUTPUT: that display runs at %d Hz: the show is 60 frames a second, frames are lost on the way", it->hz);
         }
     };
-    {
-        const std::vector<Display> list = displays();
+    auto describe = [&](const std::vector<Display>& list) {
         const std::wstring own = displayOf(win.hwnd);
         std::string all;
         for (size_t k = 0; k < list.size(); k++) {
@@ -1433,18 +1615,65 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                      list[k].device == own ? " (this window)" : "");
             all += b;
         }
-        say("displays: %s", all.c_str());
-        if (lo.output == "off") outDevice.clear();
+        return all;
+    };
+    // AUTO: the display this window is not on; of several, one the raster fits in, then the largest
+    auto autoDisplay = [&](const std::vector<Display>& list) {
+        const std::wstring own = displayOf(win.hwnd);
+        auto fits = [&](const Display& d) { return lo.rasterX >= 0 && lo.rasterY >= 0 && lo.rasterX + lo.rasterW <= d.w() && lo.rasterY + lo.rasterH <= d.h(); };
+        const Display* best = nullptr;
+        for (auto& d : list) {
+            if (d.device == own || d.device == autoFailed) continue;
+            if (!best || fits(d) > fits(*best) || (fits(d) == fits(*best) && (long long)d.w() * d.h() > (long long)best->w() * best->h())) best = &d;
+        }
+        return best ? best->device : std::wstring();
+    };
+    std::vector<Display> known = displays();        // the displays of the machine, as last seen
+    {
+        const std::vector<Display>& list = known;
+        say("displays: %s", describe(list).c_str());
+        if (lo.output == "off") { outDevice.clear(); outAuto = false; }
+        else if (lo.output == "auto") { outDevice.clear(); outAuto = true; }
         else if (!lo.output.empty()) {              // a number of that list, or a device name
             const int n = atoi(lo.output.c_str());
             if (lo.output.find_first_not_of("0123456789") == std::string::npos && n >= 1 && n <= (int)list.size()) outDevice = list[n - 1].device;
             else outDevice.assign(lo.output.begin(), lo.output.end());
+            outAuto = false;
         }
         if (!outDevice.empty()) setOutput(outDevice);
+        else if (outAuto) {
+            const std::wstring d = autoDisplay(list);
+            if (!d.empty()) setOutput(d, true);
+            else say("output: AUTO, and no other display yet: it is taken as soon as there is one");
+        }
         if (lift > 0.0f) say("lift of the output: %.2f", lift);
     }
     Watcher watch;
     watch.root = o.root;
+
+    // ---- the towers: SAVE (or Enter), and the buttons of the TOWERS panel ----
+    auto saveTowers = [&](bool close) {
+        // a placement with no room left for the picture would stop the scenes from starting at all
+        if (tool.tw.widestBay() < TowerTool::MIN_BAY) note = "NOT SAVED: the towers must leave 3 m of wall free somewhere";
+        else if (tool.tw.save()) {                  // the watcher restarts the workers
+            tool.edited = false;
+            if (close) tool.on = false;
+            note = "towers saved";
+            say("towers saved: data/towers.json");
+        } else note = "cannot write data/towers.json";
+    };
+    auto towerButton = [&](int id) {
+        const float step = GetKeyState(VK_SHIFT) < 0 ? 10.0f : 1.0f;
+        if (id >= 1 && id <= 3) tool.sel = id - 1;
+        else if (id >= 10 && id <= 17) tool.nudge((id - 10) / 2, (id & 1) ? step : -step);
+        else if (id == 20) saveTowers(false);
+        else if (id == 21) tool.on = false;
+        else if (id == 22) {                        // the calibration picture, in the output too
+            tool.calib = !tool.calib;
+            say(tool.calib ? "towers: the calibration picture is sent out instead of the show" : "towers: the show is sent out again");
+        }
+        tool.dirty = true;
+    };
 
     Clock clock;
     clock.set(lo.from);
@@ -1703,13 +1932,9 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 else if (k == VK_RIGHT) tool.move(stepPx, 0);
                 else if (k == VK_UP) tool.move(0, -stepPx);
                 else if (k == VK_DOWN) tool.move(0, stepPx);
-                else if (k == VK_RETURN) {
-                    // a placement with no room left for the picture would stop the scenes from starting at all
-                    if (tool.tw.widestBay() < TowerTool::MIN_BAY) note = "NOT SAVED: the towers must leave 3 m of wall free somewhere";
-                    else if (tool.tw.save()) { tool.on = false; note = "towers saved"; }   // the watcher restarts the workers
-                    else note = "cannot write data/towers.json";
-                } else if (k == VK_ESCAPE || k == 'T') tool.on = false;
-                tool.dirty = true;
+                else if (k == VK_RETURN) saveTowers(true);
+                else if (k == VK_ESCAPE || k == 'T') tool.on = false;
+                tool.dirty = barDirty = true;
                 if (k != VK_SPACE && k != 'S') continue;
             }
             switch (k) {
@@ -1757,9 +1982,10 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                     barDirty = true;
                 }
                 break;
-            case 'T':
-                if (tool.tw.load()) { tool.on = true; tool.dirty = true; note.clear(); }
+            case 'T':                               // the towers: the placement tool and its panel
+                if (tool.start()) { outPanel.open = false; note.clear(); }
                 else note = "cannot read data/towers.json";
+                barDirty = true;
                 break;
             case VK_OEM_4: offset -= 0.005; break;          // [
             case VK_OEM_6: offset += 0.005; break;          // ]
@@ -1775,7 +2001,15 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         // ---- mouse: the time bar first, then the tower tool ----
         double hover = -1.0;
         const int hotButton = !win.bar || scrubbing ? 0 : win.overButton() ? 1 : win.overSound() ? 2 : win.overComment() ? 3 : win.overOutput() ? 4
-                              : win.overSnapshot() ? 5 : win.overAsk() ? 6 : 0;
+                              : win.overSnapshot() ? 5 : win.overAsk() ? 6 : win.overTowers() ? 7 : 0;
+        if (win.bar && win.pressed && win.overTowers()) {       // the TOWERS button: the placement tool and its panel
+            if (tool.on && !outPanel.open) tool.on = false;
+            else if (tool.on || tool.start()) outPanel.open = false;
+            else note = "cannot read data/towers.json";
+            tool.dirty = true;
+            win.pressed = false;
+            barDirty = true;
+        }
         if (win.bar && win.pressed && win.overOutput()) {       // the OUTPUT button: its panel
             outPanel.open = !outPanel.open;
             outPanel.list = displays();
@@ -1807,6 +2041,15 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                     else out.moveY = std::clamp(out.moveY + (id == 6 ? -step : step), -MOVE_MAX, MOVE_MAX);
                     outDirty = settingsDirty = true;
                 }
+                else if (id == 9) {                         // AUTO: the display it has, else the other one, else the next to come
+                    if (outDevice.empty() || outGone) {
+                        autoFailed.clear();
+                        const std::wstring d = autoDisplay(displays());
+                        setOutput(d, true);
+                    }
+                    outAuto = true;
+                    settingsDirty = true;
+                }
                 else if (id == 10) { setOutput(L""); settingsDirty = true; }
                 else if (id >= 11 && id - 11 < (int)outPanel.list.size()) { setOutput(outPanel.list[id - 11].device); settingsDirty = true; }
                 win.pressed = false;                // (the click is taken: not for the tower tool under the panel)
@@ -1834,6 +2077,31 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             }
         } else {
             outPanel.drag = 0;
+        }
+        if (tool.on && !outPanel.open && !commenting) {         // the TOWERS panel
+            const float py1 = (float)(win.h - win.bar), py0 = py1 - PANEL_H;
+            const bool inside = win.my >= py0 && win.my < py1;
+            if (inside && (win.mx != panelMx || win.my != panelMy)) barDirty = true;
+            panelMx = win.mx;
+            panelMy = win.my;
+            if (win.pressed && inside) {
+                const int id = towerPanel.at(win.mx, win.my);
+                towerButton(id);
+                towerPanel.held = id >= 10 && id <= 17 ? id : 0;
+                towerPanel.heldAt = towerPanel.stepAt = now();
+                win.pressed = false;                // (the click is taken: not for the tower under the panel)
+                barDirty = true;
+            }
+            if (towerPanel.held) {                  // a button kept down goes on
+                if (!win.down || towerPanel.at(win.mx, win.my) != towerPanel.held) towerPanel.held = 0;
+                else if (now() - towerPanel.heldAt > 0.35 && now() - towerPanel.stepAt > 0.03) {
+                    towerButton(towerPanel.held);
+                    towerPanel.stepAt = now();
+                    barDirty = true;
+                }
+            }
+        } else {
+            towerPanel.held = 0;
         }
         if (win.bar && win.pressed && win.overButton()) {       // the play / pause button
             if (warmed && !commenting) { if (playing) pause(); else play(); }
@@ -2139,19 +2407,22 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 st.commenting = commenting && !asking;
                 st.claude = commenting && asking ? 1 : claude.running ? 2 : 0;
                 st.hot = hotButton;
-                st.output = outDevice.empty() ? 0 : outGone ? 2 : 1;
+                st.output = outDevice.empty() ? (outAuto ? 2 : 0) : outGone ? 2 : 1;
+                st.towers = tool.on && !outPanel.open;
                 st.card = p.renderer.cardOn();
                 st.panel = outPanel.open;
                 st.snapped = snapLit;
                 st.marks = &comments.marks;
                 timeBar(barRects, win.w, win.h, p.pool->looks, std::max(showEnd, 1e-9), t, hover, playing, st);
             }
-            if (claude.show && !claude.lines.empty() && !(outPanel.open && !commenting) && !(commenting && asking))
+            if (claude.show && !claude.lines.empty() && !((outPanel.open || tool.on) && !commenting) && !(commenting && asking))
                 claude.rects(barRects, win.w, win.h, win.bar, commenting);     // (not while a prompt is typed: one draws on the picture)
             if (commenting) commentBox(barRects, win.w, win.h, win.bar, gui::timecode(commentT, o.fps), commentText, asking);
             else if (outPanel.open)
                 outPanel.rects(barRects, win.w, win.h, win.bar, lift, cardWanted, cardNote, outDevice, outGone, out.exact, displayOf(win.hwnd), lo, win.mx,
-                               win.my, out.moveX, out.moveY, glow, red, weight);
+                               win.my, out.moveX, out.moveY, glow, red, weight, outAuto);
+            else if (tool.on)
+                towerPanel.rects(barRects, win.w, win.h, win.bar, tool, win.mx, win.my, !outDevice.empty() && !outGone);
             if (panel && liveDet) meter.rects(barRects, level, levelSel, now());
             barDrawnT = t;
             barDrawnHover = hover;
@@ -2172,17 +2443,36 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
 
         // ---- once a second or so: the title, what went wrong, where we are ----
         double w = now();
+        if (win.displays) {                         // (looked at now, and again half a second later: Windows may not be done)
+            win.displays = false;
+            titleAt = 0;
+        }
         if (w - titleAt > 0.5) {
             if (win.lost || p.gpu.removed()) {
                 warn("THE GRAPHICS DEVICE IS GONE (driver reset, card removed): the engine has to be started again");
                 rc = 3;
                 win.closed = true;
             }
-            if (!outDevice.empty()) {               // the display of the output: gone, back, or of another size
-                const std::vector<Display> list = displays();
+            // the displays: one plugged in or taken away; the one of the output gone, back, or of another size
+            const std::vector<Display> list = displays();
+            if (list.size() != known.size() || !std::equal(list.begin(), list.end(), known.begin(), [](const Display& a, const Display& b) {
+                    return a.device == b.device && EqualRect(&a.rc, &b.rc) && a.hz == b.hz; })) {
+                known = list;
+                autoFailed.clear();
+                say("displays: %s", describe(list).c_str());
+                barDirty = true;
+            }
+            outPanel.list = list;
+            if (!outDevice.empty()) {
                 const auto it = std::find_if(list.begin(), list.end(), [&](const Display& d) { return d.device == outDevice; });
                 if (it == list.end()) {
-                    if (!outGone) {
+                    if (outAuto) {                  // AUTO lets it go, and takes the next one
+                        out.close();
+                        warn("OUTPUT LOST: the display %s is gone (AUTO: the next one is taken)", narrow(outDevice).c_str());
+                        outDevice.clear();
+                        outGone = false;
+                        outDirty = barDirty = true;
+                    } else if (!outGone) {
                         out.close();
                         outGone = true;
                         warn("OUTPUT LOST: the display %s is gone; it is taken again as soon as it is back", narrow(outDevice).c_str());
@@ -2197,14 +2487,18 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                     }
                 }
             }
-            if (outPanel.open) {
-                outPanel.list = displays();
-                barDirty = true;
+            if (outAuto && outDevice.empty()) {
+                const std::wstring d = autoDisplay(list);
+                if (!d.empty()) {
+                    setOutput(d, true);
+                    outAuto = true;                 // (also when it could not be opened: the next one is tried)
+                    barDirty = true;
+                }
             }
             if (p.renderer.cardOn() && !cardMaker && !cardBroken && cardStale() && makeCard()) cardNote = "MAKING IT AGAIN ...";   // the towers moved
             if (settingsDirty && !outPanel.drag) {
                 settingsDirty = false;
-                if (!saveOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, red, weight)) warn("cannot write %s", narrow(outputFile.wstring()).c_str());
+                if (!saveOutput(outputFile, lift, outAuto ? std::wstring(L"auto") : outDevice, out.moveX, out.moveY, glow, red, weight)) warn("cannot write %s", narrow(outputFile.wstring()).c_str());
             }
             double dt = w - statAt;
             std::wstring look, hov;
@@ -2236,7 +2530,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                      ext.following ? L" (time by OSC)" : ext.heard ? L" (TIME BY OSC LOST: own timer)" : wantAudio ? L" (own sound)" : L" (own timer)",
                      (drawnCount - lastDrawn) / dt, (unsigned long long)p.stats.stale, percentile(ms, 0.5), percentile(ms, 1.0), hov.c_str(), off,
                      outs, trig, wantAudio && !audio.ok() ? L"   NO SOUND" : L"",
-                     tool.on ? L"   TOWERS: 1 2 3 select, Tab handle, arrows / mouse move, Enter save, Esc cancel" : L"",
+                     tool.on ? L"   TOWERS: 1 2 3 select, Tab handle, arrows / mouse / panel move, Enter save, Esc cancel" : L"",
                      p.pool->lastError.empty() ? L"" : L"   SCENE ERROR (see the console)", wnote.empty() ? L"" : L"   ", wnote.c_str());
             SetWindowTextW(win.hwnd, title);
             if (!p.pool->lastError.empty()) {

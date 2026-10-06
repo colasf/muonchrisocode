@@ -30,8 +30,9 @@ struct LiveOptions {
     bool loop = false;
     // The output: a window that fills one display (the HDMI output that feeds the media server) and shows the
     // delivery raster pixel for pixel, the picture of the show in it. "" = the display of the last run
-    // (engine/output.json; none if there was none), "off" = none, else a display as the OUTPUT panel numbers
-    // them (1, 2 ...) or its device name. While the show runs it is chosen in the OUTPUT panel (key P).
+    // (engine/output.json; none if there was none), "off" = none, "auto" = the display this window is not on,
+    // whichever it is and whenever it comes, else a display as the OUTPUT panel numbers them (1, 2 ...) or its
+    // device name. While the show runs it is chosen in the OUTPUT panel (key P).
     std::string output;
     int rasterW = 3000, rasterH = 1688; // the delivery raster (4Wall projector study, Site 3.1)
     int picX = 11, picY = 272;          // where the picture of the show sits in it
