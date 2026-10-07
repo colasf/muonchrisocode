@@ -14,3 +14,4 @@
 [ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_6.png
 [ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_7.png
 [ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_8.png
+[ ] 01:17:46 | you | 2026-10-06 20:54 | snapshot snapshots/01-17-46_you.png
