@@ -190,6 +190,7 @@ private:
 struct Clock {
     bool running = false;
     double t = 0, wall = 0;
+    double rate = 1.0;                          // show seconds a second of the machine (see speed)
     double eMax = -1e9;
     int n = 0;
 
@@ -200,13 +201,24 @@ struct Clock {
         QueryPerformanceFrequency(&f);
         return (double)c.QuadPart / (double)f.QuadPart;
     }
-    double now() const { return running ? t + (wallNow() - wall) : t; }
+    double now() const { return running ? t + (wallNow() - wall) * rate : t; }
     void set(double v)
     {
         t = v;
         wall = wallNow();
+        rate = 1.0;
         eMax = -1e9;
         n = 0;
+    }
+    // Run a little faster or slower from now on: how the clock is brought onto a time given from outside
+    // without a step in the picture.
+    void speed(double r)
+    {
+        if (r == rate) return;
+        double w = wallNow();
+        if (running) t += (w - wall) * rate;
+        wall = w;
+        rate = r;
     }
     void start()
     {

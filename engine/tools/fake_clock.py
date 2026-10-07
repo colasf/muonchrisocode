@@ -5,6 +5,9 @@
   python engine/tools/fake_clock.py --from 180 --stop-at 186 --stop-for 3     a pause of the sender
   python engine/tools/fake_clock.py --from 180 --jump-at 186 --jump-to 420    a locate
   python engine/tools/fake_clock.py --from 180 --quit-at 186         the sender disappears
+  python engine/tools/fake_clock.py --from 180 --step 35 --wobble 40 --odd 3     a rough time, as Ableton gives it:
+                                                                     in steps of 35 ms, wandering 40 ms either way,
+                                                                     and a value 3 s off now and then
 
 OSC over UDP:  /muonbloom/time <seconds>  (one float; a double is taken too), sent all the time, also while
 stopped: a time that stands still is how the engine knows that the sound has stopped.
@@ -13,6 +16,7 @@ The engine takes it from this machine only, unless it is started with --osc-allo
 from __future__ import annotations
 
 import argparse
+import math
 import random
 import socket
 import struct
@@ -37,6 +41,9 @@ def main():
     ap.add_argument("--jump-at", type=float, default=None)
     ap.add_argument("--jump-to", type=float, default=0.0)
     ap.add_argument("--quit-at", type=float, default=None)
+    ap.add_argument("--step", type=float, default=0.0, help="the time sent moves in steps of this many ms")
+    ap.add_argument("--wobble", type=float, default=0.0, help="the time sent wanders this many ms either way (a slow wave of 7 s)")
+    ap.add_argument("--odd", type=float, default=0.0, help="about every 5 s, a few values are this many seconds off")
     ap.add_argument("--duration", type=float, default=1e9, help="seconds this script runs")
     a = ap.parse_args()
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -63,6 +70,15 @@ def main():
             if a.quit_at is not None and t >= a.quit_at:
                 print(f"{w - t0:7.2f}  gone at {t:.2f}", flush=True)
                 return
+        if stopped_until is None:                       # a rough sender (the true time stays t)
+            sent = t
+            if a.wobble > 0:
+                sent += a.wobble / 1000.0 * math.sin(2.0 * math.pi * (w - t0) / 7.0)
+            if a.odd and (w - t0) % 5.0 > 4.9:
+                sent += a.odd
+            if a.step > 0:
+                sent = math.floor(sent / (a.step / 1000.0)) * (a.step / 1000.0)
+            t = sent
         if a.late > 0:
             time.sleep(random.uniform(0.0, a.late) / 1000.0)
         s.sendto(osc("/muonbloom/time", t), (a.host, a.port))

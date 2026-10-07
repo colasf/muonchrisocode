@@ -388,12 +388,16 @@ Added 2026-10-04, to annotate pictures of the show (`engine/src/live.cpp`: `snap
   again.
 - **Clock**: the sound is played by Ableton, so the time of the show comes from outside:
   `/muonbloom/time <seconds>` by OSC (a float or a double), sent all the time, many times a
-  second, also while Ableton is stopped. The engine runs on the machine's timer and is pulled
-  onto that time: it takes the freshest of the times received over half a second (the others
-  arrived late), so the jitter of the messages does not reach the picture.
-  - the time moves: the show plays there (it starts by itself, also from `--paused`);
+  second, also while Ableton is stopped. That time is not steady (Ableton counts in beats:
+  the seconds come in uneven steps, and wobble when the tempo changes), so the picture is not
+  put on it message by message. The engine runs on the machine's timer, which is smooth; once
+  a second it looks how far it is from the times received and runs a little faster or slower
+  (5 % at most) until it is back on them. While it plays the picture is never stepped, except
+  for a locate. The log says when it is catching up from more than a frame and a half.
+  - the time moves: the show plays from there (it starts by itself, also from `--paused`);
   - the time stands still for 0.4 s: the show pauses there (`/muonbloom/pause` does it at once);
-  - the time jumps by more than 80 ms: the show is moved there;
+  - the time is more than 0.5 s away and stays there for 0.3 s: a locate, the show is moved
+    there. A few odd values are not followed; a difference under 0.5 s is caught up by speed;
   - nothing arrives for 1.5 s: the show goes on by the machine's timer, and the title and the
     log say so. A sender that only speaks when the time changes would look like this when
     Ableton stops: it has to send all the time.
@@ -401,7 +405,7 @@ Added 2026-10-04, to annotate pictures of the show (`engine/src/live.cpp`: `snap
   `python engine/tools/fake_clock.py --from 180` is a pretend Ableton to try it.
   The picture has to leave ahead of the sound by the delay of the chain (TouchDesigner or
   the device that reads Ableton's time, Spout, MadMapper, the projectors): `--offset MS`.
-- **OSC** (UDP port 9000, `--osc PORT`): `/muonbloom/time <seconds>`, `/muonbloom/play`,
+- **OSC** (UDP port 9000, `--osc PORT`): `/muonbloom/time <seconds>`, `/muonbloom/start <0 or 1>` (from the beginning, when the value goes from 0 to 1), `/muonbloom/play`,
   `/muonbloom/pause`, `/muonbloom/seek <seconds>`, `/muonbloom/reload`. Only from this
   machine by default: `--osc-allow 10.0.0.5,10.0.0.6` adds addresses (needed if
   TouchDesigner or Ableton run on another machine), `--osc-allow any` takes them from anybody.

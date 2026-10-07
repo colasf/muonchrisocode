@@ -47,7 +47,8 @@
 //       it stands still, goes on by the machine's timer if nothing arrives any more). Without it the engine
 //       runs on its own timer. --sound / --audio: the engine plays sound itself and follows that instead
 //       (work at the desk). --offset: milliseconds the picture is drawn ahead of the clock.
-//       OSC (UDP, port 9000): /muonbloom/time <seconds>, /muonbloom/play, /muonbloom/pause, /muonbloom/seek
+//       OSC (UDP, port 9000): /muonbloom/time <seconds>, /muonbloom/start <0 or 1> (from the beginning, on 0 to 1), /muonbloom/play,
+//       /muonbloom/pause, /muonbloom/seek
 //       <seconds>; with --detectors live or both, the detector values: /muon/L, /muon/C, /muon/R <float 0..1>
 //       (or /muon <L> <C> <R>).
 //       Trigger level of the detectors (a value that rises above it is a hit): --det-level 0.25 or

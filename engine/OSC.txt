@@ -12,10 +12,19 @@ Numbers        float32 (f) is expected. int32 (i), double (d), int64 (h) and tru
 
 /muonbloom/time    <seconds>     Position in the show, in seconds from the start of the audio file
                                  (03:00 = 180.0). Send it all the time, about 60 times a second, also
-                                 while the sound is stopped. The show plays when the time moves, pauses
-                                 when it stands still, and jumps when it jumps by more than 80 ms.
+                                 while the sound is stopped. The show plays when the time moves and
+                                 pauses when it stands still. It does not have to be steady: the engine
+                                 runs on its own timer and comes back onto this time by speed (5 % at
+                                 most), never by a step. It is moved only for a locate: a time more
+                                 than 0.5 s away that stays there for 0.3 s.
                                  Ignored when the engine plays its own sound (--sound, --audio).
 
+/muonbloom/start   <0 or 1>      Play the show from its beginning (00:00), wherever it is, playing or
+                                 paused. It happens when the value goes from 0 to 1 (a button): a 1
+                                 that is sent again and again does nothing more, and neither does the
+                                 0. Without a value, the message itself is the order.
+                                 For a show that runs on the engine's own timer: when /muonbloom/time
+                                 is sent too, the show goes back to that time.
 /muonbloom/play                  Play. Not needed when /muonbloom/time is sent.
 /muonbloom/pause                 Pause.
 /muonbloom/seek    <seconds>     Go to that time.
@@ -63,5 +72,6 @@ Tools to test without Ableton or TouchDesigner (Python, in engine/tools)
 ------------------------------------------------------------------------
 
 python engine/tools/fake_clock.py --from 180       sends /muonbloom/time, 60 times a second
+                                                   (--step 35 --wobble 40 --odd 3: a rough time)
 python engine/tools/fake_detectors.py              sends /muon/L /C /R
 python engine/tools/osc_send.py /muon/C 0.8        sends one message

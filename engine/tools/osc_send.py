@@ -1,5 +1,6 @@
 """Send one OSC message to the engine (transport orders, a detector value).
 
+  python engine/tools/osc_send.py /muonbloom/start 1         play from the beginning (on the passage from 0 to 1)
   python engine/tools/osc_send.py /muonbloom/play
   python engine/tools/osc_send.py /muonbloom/pause
   python engine/tools/osc_send.py /muonbloom/seek 180        show time in seconds

@@ -1295,16 +1295,27 @@ bool saveOutput(const fs::path& path, float lift, const std::wstring& display, i
 
 // The time of the show, given by whoever plays the sound (Ableton, through TouchDesigner):
 //     /muonbloom/time <seconds>      sent all the time, many times a second
-// The engine keeps running on the machine's own timer and is pulled onto that time (Clock::follow: the
-// freshest of the times received over half a second is the true one, the others arrived late).
-//     the time moves          the show plays, at that time
+// That time is not steady: Ableton counts in beats, and what it gives in seconds comes in uneven steps and
+// wobbles when the tempo changes. So the show does not take it message by message. It runs on the machine's
+// own timer, which is smooth; once a second it looks how far it is from the times received, and runs a
+// little faster or slower (never more than SLEW) until it is there again. The picture is never stepped
+// while it plays, except for a locate.
+//     the time moves          the show plays, from that time
 //     the time stands still   the sender has stopped: the show pauses there
+//     the time is far away    and stays there: a locate, the show is moved (one odd value is not followed)
 //     nothing arrives         the sender is gone: the show goes on by the machine's timer (a picture that
 //                             freezes because a cable fell out is worse than one that drifts)
 struct ExtClock {
-    static constexpr double JUMP = 0.08;        // further than this from the time received: the show is moved there
+    static constexpr double JUMP = 0.08;        // paused, and further than this from the time received: moved there
     static constexpr double STALL = 0.4;        // the time has not moved for this long, and still arrives: paused
     static constexpr double SILENT = 1.5;       // nothing has arrived for this long: the sender is gone
+    static constexpr double SYNC = 1.0;         // the clock is compared with the times received this often
+    static constexpr double CATCH = 2.0;        // ... and set to be back on them after this long
+    static constexpr double SLEW = 0.05;        // ... but never more than this faster or slower than the machine
+    static constexpr double CLOSE = 0.003;      // nearer than this: left alone
+    static constexpr double LOCATE = 0.5;       // further than this from the time received ...
+    static constexpr double SAME = 0.25;        // ... by the same amount ...
+    static constexpr double HOLD = 0.3;         // ... for this long: the sender is elsewhere in the show
     bool heard = false;                         // a time has arrived at least once
     bool following = false;                     // the show is running on the times received
     bool stalled = false;                       // ... and they stand still: paused there
@@ -1312,6 +1323,29 @@ struct ExtClock {
     uint64_t n = 0, jumps = 0;                  // times followed, and times the show was moved
     double errSum = 0, errWorst = 0;            // received - clock at arrival, once locked
     double lockedAt = 0;
+    std::vector<double> errs;                   // received - clock, since the last comparison
+    double syncAt = 0;
+    double farSince = 0, farErr = 0;            // far away since then, by that much (0: not far)
+    bool catching = false;                      // the clock is being brought back from more than a frame away
+
+    void fresh(double w)                        // the clock was just put on a time received
+    {
+        errs.clear();
+        syncAt = lockedAt = w;
+        farSince = 0;
+        catching = false;
+    }
+    // How far the clock is from the times received since the last comparison. The messages arrive late,
+    // never early: the upper quarter is taken, and a few odd values on either side do not count.
+    bool error(double& e)
+    {
+        if (errs.empty()) return false;
+        size_t k = (errs.size() * 3) / 4;
+        std::nth_element(errs.begin(), errs.begin() + k, errs.end());
+        e = errs[k];
+        errs.clear();
+        return true;
+    }
 };
 
 // The trigger levels of the detectors, kept from one run to the next: engine/detectors.json
@@ -1685,6 +1719,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     clock.set(lo.from);
     ExtClock ext;
     bool extRefused = false;
+    bool startHeld = false;                     // the last value of /muonbloom/start was 1
     SoundWatch sound;
     bool playing = false, warmed = false, warmSent = false, wantPlay = !lo.paused;
     double showEnd = 0;
@@ -2246,18 +2281,27 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                         if (std::abs(T - clock.now()) > ExtClock::JUMP) seek(T);    // elsewhere in the show
                         else clock.set(T);                                          // going on from where it stopped
                         play();
-                        ext.lockedAt = w;
+                        ext.fresh(w);
                         if (!ext.following || ext.stalled) say("clock: running on the time received, from %s", narrow(timecode(T)).c_str());
                         ext.stalled = false;
+                    } else if (!ext.following) {            // the show was on its own timer: taken up from where it is
+                        ext.fresh(w);
+                        say("clock: following the time received (%s, the show is at %s)", narrow(timecode(T)).c_str(), narrow(timecode(clock.now())).c_str());
                     } else {
-                        double e = T - clock.now();
-                        if (std::abs(e) > ExtClock::JUMP) {
-                            if (ext.following) say("clock: the time received jumped by %+.3f s, to %s", e, narrow(timecode(T)).c_str());
-                            seek(T);
-                            ext.jumps++;
-                            ext.lockedAt = w;
+                        const double e = T - clock.now();
+                        if (std::abs(e) > ExtClock::LOCATE) {       // far away: a locate if it stays there, else an odd value
+                            if (ext.farSince == 0 || std::abs(e - ext.farErr) > ExtClock::SAME) {
+                                ext.farSince = w;
+                                ext.farErr = e;
+                            } else if (w - ext.farSince > ExtClock::HOLD) {
+                                say("clock: the time received is elsewhere in the show (%+.3f s): moved to %s", e, narrow(timecode(T)).c_str());
+                                seek(T);
+                                ext.jumps++;
+                                ext.fresh(w);
+                            }
                         } else {
-                            clock.follow(T);
+                            ext.farSince = 0;
+                            ext.errs.push_back(e);
                             if (w - ext.lockedAt > 2.0) {           // (the first seconds are the clock settling)
                                 ext.n++;
                                 ext.errSum += e;
@@ -2275,6 +2319,23 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                     } else if (!m.args.empty() && (m.addr.size() == 16 || k >= 0)) setLevels(k, (float)m.args[0], false);
                 }
                 else if (m.addr == "/muonbloom/play") { if (warmed && !playing) play(); }
+                else if (m.addr == "/muonbloom/start") {                   // the show from its beginning
+                    // a button: 0, then 1 when it is pressed. The order is the passage from 0 to 1, not the
+                    // value: a 1 that is sent again and again, and the 0 of the release, do nothing.
+                    // (TouchDesigner puts two values in one message when it has a frame to make up: all are read)
+                    bool pressed = m.args.empty();
+                    for (double v : m.args) {
+                        const bool on = v >= 0.5;
+                        if (on && !startHeld) pressed = true;
+                        startHeld = on;
+                    }
+                    if (pressed && warmed) {
+                        seek(0.0);
+                        if (!playing) play();
+                        ext.fresh(now());
+                        say("playing from the beginning (OSC)");
+                    }
+                }
                 else if (m.addr == "/muonbloom/pause") { if (playing) pause(); }
                 else if (m.addr == "/muonbloom/seek") { if (!m.args.empty()) seek(m.args[0]); }
                 else if (m.addr == "/muonbloom/reload") { if (warmed) { p.reload(); note = "reloading"; say("reloading the scenes (OSC)"); } }
@@ -2362,13 +2423,26 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             double w = now();
             if (w - ext.heardAt > ExtClock::SILENT) {
                 ext.following = false;
+                clock.speed(1.0);
                 warn("CLOCK: no time has arrived for %.1f s (at %s): the show goes on, on the machine's timer", ExtClock::SILENT,
                      narrow(timecode(clock.now())).c_str());
-            } else if (playing && w - ext.movedAt > ExtClock::STALL && w - ext.heardAt < ExtClock::STALL) {
-                pause();
+            } else if (playing && ext.heardAt - ext.movedAt > ExtClock::STALL && w - ext.heardAt < ExtClock::STALL) {
+                pause();                            // (the same time, still received that long after it last moved)
                 clock.set(std::clamp(ext.last, 0.0, std::max(0.0, showEnd - 1.0 / o.fps)));
                 ext.stalled = true;
                 say("clock: the time received stands still at %s: paused", narrow(timecode(clock.now())).c_str());
+            } else if (playing && w - ext.syncAt >= ExtClock::SYNC) {   // how far from the times received? no step: a speed
+                ext.syncAt = w;
+                double e = 0;
+                if (!ext.error(e) || std::abs(e) < ExtClock::CLOSE) {
+                    clock.speed(1.0);
+                    ext.catching = false;
+                } else {
+                    clock.speed(1.0 + std::clamp(e / ExtClock::CATCH, -ExtClock::SLEW, ExtClock::SLEW));
+                    if (std::abs(e) > 1.5 / o.fps && !ext.catching && w - ext.lockedAt > 2.0)
+                        say("clock: %+.0f ms from the time received at %s: catching up without a step", 1e3 * e, narrow(timecode(clock.now())).c_str());
+                    ext.catching = std::abs(e) > 1.0 / o.fps;
+                }
             }
         }
         if (playing) {
@@ -2612,6 +2686,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         }
         wantAudio = true;
         ext.following = false;                      // the sound of the engine is the clock from here on
+        clock.speed(1.0);
         for (auto& f : files) say("sound: %s", narrow(f).c_str());
         note = "sound: " + narrow(fs::path(files[0]).filename().wstring()) + (files.size() > 1 ? " + " + std::to_string(files.size() - 1) + " more" : "");
         if (!audio.ok() && !audio.openDevice()) warn("NO SOUND OUTPUT: playing without sound, trying again every few seconds");
