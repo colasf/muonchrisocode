@@ -415,6 +415,15 @@ class DrawList(_E.Frame):
         a = int(255 * min(alpha, 1.0)) / 255.0
         # the solid box on its layer; the other layer's text is cleared under it
         cw, cr = (a, 0.0) if layer == "w" else (0.0, a)
+        if _E.WALL and size < _E.WALL_TAG:      # the wall rule: text over a rule (see engine.Frame.tag)
+            self._textops.append((T_RECT, int(box[0]), int(box[1]), int(box[2]) + 1, int(box[3]) + 1, 0.0, 0.0, 1.0, 1.0, 0, 0, 0))
+            if s:
+                xi, yi = self._origin(fnt, X, Y, s, anchor)
+                self._run(T_RUN, layer, fnt, xi, yi, s, a, 1.0)
+            h = max(2, int(round(_E.WALL_RULE * self.s)))
+            self._textops.append((T_RECT, int(box[0]), int(box[3]) + 1, int(box[2]) + 1, int(box[3]) + h + 1, cw, cr, 1.0, 1.0, 0, 0, 0))
+            self._occl.append((int(box[0]), int(box[1]), int(math.ceil(box[2])), int(math.ceil(box[3]))))
+            return tuple(v / self.s for v in box)
         self._textops.append((T_RECT, int(box[0]), int(box[1]), int(box[2]) + 1, int(box[3]) + 1, cw, cr, 1.0, 1.0, 0, 0, 0))
         if s:
             xi, yi = self._origin(fnt, X, Y, s, anchor)
@@ -430,6 +439,8 @@ class DrawList(_E.Frame):
             s = b.text(s, x, y, False)
         if alpha <= 0.004 or not s.strip():
             return
+        if _E.WALL:
+            alpha = float(_E.wall_level(alpha))
         fnt = get_font(max(6, int(round(size * self.s))), False)
         l, t = fnt.bbox(s)[:2]
         # the text is set in a box of its own, 1 px in from its edges, turned, and pasted with its bottom left on (x, y)

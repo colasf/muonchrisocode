@@ -65,6 +65,7 @@ import zlib
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -228,6 +229,34 @@ def _plate(f, box, x, age, t0=0.1, dur=0.25):
         f.occlude(box[0], box[1], box[0] + w, box[3])
     else:
         f.occlude(box[2] - w, box[1], box[2], box[3])
+
+
+def _ground(w, f, cam, kind, view, gain, world=1.0, kick=0.0):
+    """The ground of a view (World.draw_ground). With the wall rule the dot lattice of the perspective and plan
+    views is made of dots that land on the brick instead of single pixels: one point per km (one in two each
+    way), full level, radius 1.6 and more (the 4 km points larger); where the perspective brings the rows
+    closer than a few px the dots shrink to nothing, so the far ground never fills. `gain` is what draw_ground
+    gets; `world` the gain of the world alone (the level of the dots), `kick` swells them."""
+    if not E.WALL or kind in ("side", "front"):
+        return w.draw_ground(f, cam, kind, view, gain=gain)
+    P = w.lattice
+    one = (np.abs(P[:, 0]) % 1.0 < 1e-3) & (np.abs(P[:, 2]) % 1.0 < 1e-3)
+    sx, sy, z, ok = cam.project(P[one])
+    mj = w.lat_major[one]
+    ok = ok & (sx > view[0] - 6) & (sx < view[2] + 6) & (sy > view[1] - 6) & (sy < view[3] + 6)
+    px = np.full(len(sx), float(cam.scale), np.float32) if getattr(cam, "ortho", False) else cam.focal / np.maximum(z, 1e-3)
+    u = np.clip((px - 7.0) / 9.0, 0.0, 1.0)                 # px per km on screen: gone under 7, whole from 16
+    r = np.where(mj, 3.6, 2.4) * u * u * (3.0 - 2.0 * u) * (1.0 + 0.12 * kick)
+    ok = ok & (r > 0.3)
+    f.dots("w", sx[ok], sy[ok], r[ok], min(1.0, world))
+    if kind == "top":
+        m = mj & ok
+        f.crosses("w", sx[m], sy[m], 6.0, 0.6 * gain)
+    xs = np.linspace(-30, 30, 61, dtype=np.float32)
+    Q = np.stack([xs, np.zeros_like(xs), np.zeros_like(xs)], 1)
+    lx, ly, lz, lok = cam.project(Q)
+    m = lok[:-1] & lok[1:]
+    f.segments("r", lx[:-1][m], ly[:-1][m], lx[1:][m], ly[1:][m], 0.5 * w.fog(lz[:-1][m]) * gain)
 
 
 def _ring(cx, cy, r, n=48):
@@ -543,7 +572,7 @@ class Dance(Scene):
             for j, (cam, clip) in enumerate(cams):
                 if j == 0:
                     f.set_clip(*view)
-                    w.draw_ground(f, cam, kind, view, gain=gain * (1.0 + 0.45 * kick) * (2.6 if kind == "persp" else 1.0))
+                    _ground(w, f, cam, kind, view, gain * (1.0 + 0.45 * kick) * (2.6 if kind == "persp" else 1.0), gain, kick)
                     if kind in ("side", "front"):
                         altitude_rules(f, ctx, st, cam, float(e["G"][0]), float(e["G"][2]), lay, gain=ov,
                                        front=w.front(p, a) if kind == "side" else 0.0, age=age_bar, wave=0.22)
@@ -615,7 +644,7 @@ class Dance(Scene):
                 f.set_clip(*clip)
             ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
             with f.build(age, clip, flow="bt", wave=0.15, marks=False, key=55 + j):
-                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], 0.5 * gain)
+                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1] - 60], E.wl(0.5 * gain), width=E.ww(1.0))
                 if self.elev(st)[1] is not None:
                     put_text(f, ctx, "w", float(ax[0]) + 14, min(float(ay[0]) - 12, view[3] - 30),
                              "ELEVATION X" if j == 0 else "ELEVATION Z", size=L.T_SMALL, alpha=0.7 * al)
@@ -624,9 +653,9 @@ class Dance(Scene):
             X, Y = float(gx[0]), float(gy[0])
             with f.build(age, view, flow="out", origin=(X, Y), wave=0.25, marks=False, key=57):
                 f.segments("r", [X, X, X, X], [Y, Y, Y, Y], [view[0], view[2], X, X], [Y, Y, view[1], view[3]],
-                           0.45 * gain)
+                           E.wl(0.45 * gain), width=E.ww(1.0))
                 sc = cam.scale
-                f.rings("w", [X] * 4, [Y] * 4, [sc * r for r in (1, 2, 4, 8)], 0.25 * gain)
+                f.rings("w", [X] * 4, [Y] * 4, [sc * r for r in (1, 2, 4, 8)], E.wl(0.25 * gain), width=E.ww(1.0))
                 for r in (1, 2, 4, 8):
                     if view[0] + 30 < X + sc * r + 7 < st.tx1 - 60:
                         put_text(f, ctx, "w", X + sc * r + 7, Y - 8, f"{r} KM", size=L.T_SMALL, alpha=0.6 * al)
@@ -647,7 +676,7 @@ class Dance(Scene):
         elif kind == "front":
             ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
             with f.build(age, view, flow="bt", wave=0.15, marks=False, key=58):
-                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1]], 0.4 * gain)
+                f.segments("r", [ax[0]], [ay[0]], [ax[1]], [ay[1]], E.wl(0.4 * gain), width=E.ww(1.0))
                 put_right(f, ctx, st, lay, "w", Y_GROUND - 9, "GROUND 00 KM", size=L.T_SMALL, pad=4, alpha=al)
 
     def _arrivals(self, k):
@@ -699,8 +728,16 @@ class Dance(Scene):
         h = (330.0 * np.sqrt(c_all / norm) * (1.0 + 0.36 * hop) + 15.0 * hop * (c_all > 0.5)) * grow
         hm = (330.0 * np.sqrt(c_mu / norm) * (1.0 + 0.36 * hop) + 15.0 * hop * (c_mu > 0.5)) * grow
         k = (c_all > 0) & (h > 0.5)
-        f.rects("w", xs[k] + 2, Y_GROUND - h[k], xs[k] + w_ - 3, Y_GROUND - hm[k] - 1,
-                ((0.13 + 0.49 * read + 0.9 * hot) * gain)[k])
+        if E.WALL:          # no dim teeth: not read yet = its outline, read = full (the scan line fills it as it passes)
+            g1 = min(1.0, gain)
+            kr = k & read
+            f.rects("w", xs[kr] + 2, Y_GROUND - h[kr], xs[kr] + w_ - 3, Y_GROUND - hm[kr] - 1, ((1.0 + 0.5 * hot) * g1)[kr])
+            ko = k & ~read
+            xa, xb, yt, yb = xs[ko] + 2.8, xs[ko] + w_ - 3.8, Y_GROUND - h[ko] + 0.8, Y_GROUND - hm[ko] - 1
+            f.segments("w", np.r_[xa, xa, xb], np.r_[yb, yt, yt], np.r_[xa, xb, xb], np.r_[yt, yt, yb], g1, width=E.WALL_LINE)
+        else:
+            f.rects("w", xs[k] + 2, Y_GROUND - h[k], xs[k] + w_ - 3, Y_GROUND - hm[k] - 1,
+                    ((0.13 + 0.49 * read + 0.9 * hot) * gain)[k])
         k = (c_mu > 0) & (hm > 0.5)
         f.rects("r", xs[k] + 2, Y_GROUND - hm[k], xs[k] + w_ - 3, Y_GROUND - 1, ((0.2 + 0.75 * read + 1.3 * hot) * gain)[k])
         k = read & (hot > 0.05) & (h > 0.5)                   # the teeth under the line: a white cap
@@ -849,11 +886,11 @@ class Dance(Scene):
                 bw = (x1 - x0 - 3 * 6) / 4
                 for k in range(4):                    # the four bars of the phrase
                     bx = x0 + k * (bw + 6)
-                    f.rect("w", bx, y0 + 92, bx + bw, y0 + 114, 0.7 * alpha)
+                    f.rect("w", bx, y0 + 92, bx + bw, y0 + 114, E.wl(0.7 * alpha), width=E.ww(1.0))
                     if k == bar:
                         f.rects("r", bx + 3, y0 + 95, bx + bw - 3, y0 + 111, 0.95 * alpha)
                     elif k < bar:
-                        f.rects("w", bx + 3, y0 + 95, bx + bw - 3, y0 + 111, 0.55 * alpha)
+                        f.rects("w", bx + 3, y0 + 95, bx + bw - 3, y0 + 111, E.wl(0.55 * alpha))
 
     def _readout(self, f, ctx, st, lay, txt, age, key, taken=None, alpha=1.0):
         """A red read-out of the view (a tag): under the block of the view tag when there is room, else at the
@@ -885,16 +922,20 @@ class Dance(Scene):
         angs = (10, 20, 30, 45, 60)
         rr = [fo * math.tan(math.radians(v)) for v in angs]
         with f.build(age_bar, view, flow="out", origin=(cx, cy), wave=0.25, line=0.2, marks=False, key=64):
-            f.rings("w", [cx] * len(rr), [cy] * len(rr), rr, 0.24 * ov)
+            f.rings("w", [cx] * len(rr), [cy] * len(rr), rr, E.wl(0.24 * ov), width=E.ww(1.0))
             az = np.radians(np.arange(0.0, 360.0, 30.0))
             card = (np.arange(12) % 3) == 0
             r1 = 1.2 * (view[2] - view[0])
-            f.segments("w", cx + rr[0] * np.sin(az), cy - rr[0] * np.cos(az), cx + r1 * np.sin(az), cy - r1 * np.cos(az),
-                       np.where(card, 0.2, 0.09) * ov)
+            if E.WALL:                                        # the cardinal directions only, as full lines
+                f.segments("w", cx + rr[0] * np.sin(az[card]), cy - rr[0] * np.cos(az[card]), cx + r1 * np.sin(az[card]),
+                           cy - r1 * np.cos(az[card]), E.wl(0.2 * ov), width=E.WALL_LINE)
+            else:
+                f.segments("w", cx + rr[0] * np.sin(az), cy - rr[0] * np.cos(az), cx + r1 * np.sin(az),
+                           cy - r1 * np.cos(az), np.where(card, 0.2, 0.09) * ov)
             tk = np.radians(np.arange(0.0, 360.0, 5.0))       # degrees of azimuth on the 30 degree circle
             ln = np.where(np.arange(72) % 6 == 0, 14.0, 6.0)
             f.segments("w", cx + rr[2] * np.sin(tk), cy - rr[2] * np.cos(tk), cx + (rr[2] + ln) * np.sin(tk),
-                       cy - (rr[2] + ln) * np.cos(tk), 0.5 * ov)
+                       cy - (rr[2] + ln) * np.cos(tk), E.wl(0.5 * ov), width=E.ww(1.0))
             for v, r in zip(angs, rr):
                 put_text(f, ctx, "w", cx + 0.7071 * r + 6, cy - 0.7071 * r - 5, f"{v:02d} DEG", size=L.T_MICRO,
                          alpha=0.6 * al)
@@ -969,7 +1010,7 @@ class Dance(Scene):
                 _plate(f, box, x, a_n, 0.06, 0.16)            # under the name: the map does not run through it
                 with f.build(a_n, (min(x, box[0]) - 2, min(y, box[1]) - 2, max(x, box[2]) + 2, max(y, box[3]) + 2),
                              flow="out", origin=(x, y), wave=0.1, line=0.1, marks=False, key=key + n):
-                    f.segments("w", [x], [y], [x + dx - (4 if dx > 0 else -4)], [y + dy - 4], 0.55)
+                    f.segments("w", [x], [y], [x + dx - (4 if dx > 0 else -4)], [y + dy - 4], E.wl(0.55), width=E.ww(1.0))
                     f.dots("w", [x], [y], 2.0, 1.0)
                     if land and tags:
                         f.tag("w", x + dx, y + dy, txt, size=size, pad=3, anchor=anchor)
@@ -1118,16 +1159,17 @@ class Dance(Scene):
         view = st.view
         e = w.events[p]
         al = min(1.0, ov)
-        w.draw_ground(f, cam, "persp", view, gain=gain * (1.0 + 0.45 * kick) * 1.6)
+        _ground(w, f, cam, "persp", view, gain * (1.0 + 0.45 * kick) * 1.6, gain, kick)
         # from high up the city is its streets, drawn out of the corner on the cut; the blocks and the buildings
         # are made when the camera comes under LOW km (the lines would only fill before)
         g_c = 0.9 * gain * float(np.clip(cam.focal / cam.alt / 300.0, 0.3, 1.0))
+        g_w = min(gain, 1.0) if E.WALL else g_c               # (the wall rule: nothing is dimmed, see city.py)
         c_z = math.cos(math.radians(e["zen"]))
         f_low = (DIVE_LOW - DIVE_BACK[0] * c_z) / (1.0 + DIVE_BACK[1] * c_z)      # the front when the camera gets there
         a_low = a - (e["t1"] + max(0.0, e["h1"] - f_low) / (e["speed"] * c_z))
-        kw = dict(xf=self._xf(p), lod="basin", wave=0.9, gain=g_c, t=t, view=view)
+        kw = dict(xf=self._xf(p), lod="basin", wave=0.9, gain=g_w, t=t, view=view)
         town.draw(f, cam, layers=("river", "parks", "streets", "site"), age=age_bar,
-                  site=dict(rings=(0.25, 0.5, 1.0), pole=0.0, cross=0.12, pulse=0.0), **kw)
+                  site=dict(rings=(0.25, 0.5, 1.0), pole=0.0, cross=0.12, pulse=0.0, gain=g_c, white=g_w), **kw)
         town.draw(f, cam, layers=("blocks", "buildings"), age=a_low if age_bar is None else min(a_low, age_bar), **kw)
         w.draw_cascades(f, cam, age, alive, env, gain=gain * (1.0 + 0.16 * kick))
         w.draw_hits(f, cam, age, alive, gain=gain)
@@ -1148,12 +1190,14 @@ class Dance(Scene):
             x0, ym = box[0] + 6.0, 0.5 * (box[1] + box[3])
             f.occlude(box[0], box[1] - 4.0, box[2], box[3] + 4.0)
             with f.build(age_bar, box, flow="tb", wave=0.2, marks=False, key=67):
-                f.segments("w", [x0], [box[1]], [x0], [box[3]], 0.7 * ov)
+                f.segments("w", [x0], [box[1]], [x0], [box[3]], E.wl(0.7 * ov), width=E.ww(1.0))
                 hs = np.arange(math.ceil((hc - (box[3] - ym) / kpx) * 10), math.floor((hc + (ym - box[1]) / kpx) * 10) + 1)
                 hs = hs[hs >= 0]
                 ys = ym - (hs / 10.0 - hc) * kpx
                 ln = np.where(hs % 10 == 0, 22.0, np.where(hs % 5 == 0, 12.0, 6.0))
-                f.segments("w", np.full(len(ys), x0), ys, x0 + ln, ys, 0.75 * ov)
+                if E.WALL:                                    # heavier ticks: the 500 m and the km ones only
+                    ys, ln = ys[hs % 5 == 0], ln[hs % 5 == 0]
+                f.segments("w", np.full(len(ys), x0), ys, x0 + ln, ys, E.wl(0.75 * ov), width=E.ww(1.0))
                 for hk, yk in zip(hs, ys):
                     if hk % 10 == 0 and box[1] + 14 < yk < box[3] - 6:
                         f.text("w", x0 + 28, float(yk) + 5, f"{hk // 10:02d}", size=L.T_MICRO, alpha=0.7 * al)
@@ -1186,9 +1230,10 @@ class Dance(Scene):
         X, Y = float(gx[0]), float(gy[0])
         taken = list(lay["boxes"])
         with f.build(age_bar, view, flow="out", origin=(X, Y), wave=0.25, marks=False, key=57):
-            f.segments("r", [X, X, X, X], [Y, Y, Y, Y], [view[0], view[2], X, X], [Y, Y, view[1], view[3]], 0.4 * ov)
+            f.segments("r", [X, X, X, X], [Y, Y, Y, Y], [view[0], view[2], X, X], [Y, Y, view[1], view[3]], E.wl(0.4 * ov),
+                       width=E.ww(1.0))
             sc = cam.scale
-            f.rings("w", [X] * 3, [Y] * 3, [sc * r for r in (0.5, 1.0, 2.0)], 0.22 * ov)
+            f.rings("w", [X] * 3, [Y] * 3, [sc * r for r in (0.5, 1.0, 2.0)], E.wl(0.22 * ov), width=E.ww(1.0))
             for r, name in ((0.5, "0.5 KM"), (1.0, "1 KM"), (2.0, "2 KM")):
                 bx = tbox(X + sc * r + 7, Y - 8, name, L.T_MICRO)
                 if bx[2] < st.tx1 and not hidden(ctx, *bx) and not _hits(bx, taken):
@@ -1218,8 +1263,9 @@ class Dance(Scene):
         w, town = self.world, self.town
         view = st.view
         land = a - w.events[p]["t_ground"]
-        kw = dict(xf=self._xf(p), lod="district", gain=0.5 * gain, t=t, view=view, fog=(0.8, 3.2),
-                  site=dict(rings=(0.1, 0.25), pole=0.12, cross=0.1, pulse=0.4))
+        g_w = min(gain, 1.0) if E.WALL else 0.5 * gain
+        kw = dict(xf=self._xf(p), lod="district", gain=g_w, t=t, view=view, fog=(0.8, 3.2),
+                  site=dict(rings=(0.1, 0.25), pole=0.12, cross=0.1, pulse=0.4, gain=0.5 * gain, white=g_w))
         if grid(t)[1] == 2 and land >= 0.0:                   # the bar of the landing: the front draws the city
             town.draw(f, cam, age=age_bar, **kw, **self._front(p, land))
         else:
@@ -1245,8 +1291,10 @@ class Dance(Scene):
         e = w.events[p]
         al = min(1.0, ov)
         xf = self._xf(p)
-        town.draw(f, cam, xf=xf, lod="block", age=age_bar, wave=0.6, gain=0.7 * gain, t=t, view=view,
-                  fog=(0.06, 0.5), site=dict(rings=(0.05,), pole=0.0, cross=0.07, pulse=0.12))
+        g_w = min(gain, 1.0) if E.WALL else 0.7 * gain
+        town.draw(f, cam, xf=xf, lod="block", age=age_bar, wave=0.6, gain=g_w, t=t, view=view,
+                  fog=(0.06, 0.34) if E.WALL else (0.06, 0.5),      # (the far blocks would pile up on the horizon)
+                  site=dict(rings=(0.05,), pole=0.0, cross=0.07, pulse=0.12, gain=0.7 * gain, white=g_w))
         wl = town.wall
         sx, sz = self.site(p)
         if wl is not None:

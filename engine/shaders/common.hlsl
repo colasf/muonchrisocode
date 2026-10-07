@@ -15,6 +15,8 @@ cbuffer FrameCB : register(b0)
     float gLift;         // lift of the output (0: none): the mid levels raised, black and white kept
     float gRed;          // gain of the red layer before the tonemap (1: as the scenes give it)
     float gWeight;       // added to the width of every line, in pixels of the 2978 wide picture (0: none)
+    float gBloomGainR;   // gBloomGain is the glow of the white layer, this one the glow of the red layer
+    float3 gFramePad;
 };
 
 cbuffer DrawCB : register(b1)

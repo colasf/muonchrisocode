@@ -134,6 +134,7 @@ from collections import namedtuple
 import numpy as np
 
 from . import build as B
+from . import engine as E
 from . import layout as L
 from .engine import OrthoCamera
 
@@ -166,6 +167,34 @@ LAYERS = ("river", "parks", "streets", "blocks", "buildings", "site")
 ST_I = np.array([0.62, 0.26, 0.66, 0.54, 0.44, 0.33, 0.2, 0.17, 0.3], np.float32)
 ST_W = np.array([1.7, 1.0, 1.5, 1.3, 1.1, 1.0, 1.0, 1.0, 1.0], np.float32)
 FLOOR_MIN_H, FLOOR_MIN_AREA = 30.0, 150.0          # m, m2: what gets floor plates
+
+# The wall rule (engine.WALL): on the brick a grey line is lost and a pile of dim lines is a white block. So
+# nothing here is grey: a line is there at full level and at least engine.WALL_LINE wide, or it is not there.
+# What used to dim (lines that would fill, the distance, the edge of the model) now goes away over a narrow
+# band (never in one frame), and each level of detail holds fewer lines, so that black stays between them.
+W_PLATE_PX = (10.0, 18.0)       # floor plates: gone when they are this close on screen (px), all there from ...
+W_EDGE_PX = (7.0, 14.0)         # ... the corner edges of one facade
+W_SIZE_PX = (8.0, 18.0)         # ... the roof outline of a building this small on screen
+W_FAR = (0.3, 0.6)              # the band of the old dimming (fog, edge of the model) over which a line leaves
+# (part: a volume with a smaller footprint (m2) is left out - the small parts of a tower are what piles up;
+# edges: at most this many corner edges per volume, on the towers that have a label only when `plain` is 0: the
+# other towers are then stacks of floor plates under a roof, which stay apart where corner edges would merge)
+W_LOD = {"basin": dict(vol_h=60.0, floors=48.0, area=500.0, part=600.0, edges=4, plain=0),
+         "district": dict(vol_h=60.0, near=0.0, floors=32.0, area=300.0, part=600.0, edges=4, plain=0),
+         "block": dict(vol_h=9.0, near=0.0, floors=12.0, part=150.0, edges=4, plain=1)}
+W_PILE = 0.8                    # level of the lines of a volume without a label: where towers overlap, less glow
+W_ST_W = np.array([2.4, 1.6, 2.0, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6], np.float32)       # streets: rank is weight
+W_ST_MIN = 0.3                  # streets under this level are left out (ramps, lanes, footways, tunnels)
+# ... and from far away the small streets leave first: a street is there when this many km are W_SIZE_PX on screen
+# (0: always). Secondary from 50 - 110 px per km, tertiary 80 - 180, residential and railways 115 - 260.
+W_ST_SZ = np.array([0.0, 0.07, 0.0, 0.16, 0.1, 0.07, 0.07, 0.07, 0.07], np.float32)
+W_PARK_SZ, W_WATER_SZ = 0.05, 0.1
+
+
+def _band(v, lo_hi):
+    """0 under lo, 1 over hi, smooth between."""
+    u = np.clip((np.asarray(v, np.float32) - lo_hi[0]) / (lo_hi[1] - lo_hi[0]), 0.0, 1.0)
+    return u * u * (3.0 - 2.0 * u)
 
 Label = namedtuple("Label", "name short kind rank pos d tau brg h h_src levels info")
 
@@ -200,10 +229,12 @@ class _Tab:
     at a and at b; w = width; head = a pen that shows its head.
     A table of buildings has owners instead: oc = centre of the building a segment belongs to, own = its
     distance from the site, ot = when its footprint is closed (the building then rises as one piece);
-    sp > 0: km between a floor plate and the next; sp < 0: -sp = km between two corner edges on a facade."""
-    __slots__ = ("a", "b", "ta", "tb", "da", "db", "i0", "i1", "w", "sp", "own", "oc", "ot", "head", "key")
+    sp > 0: km between a floor plate and the next; sp < 0: -sp = km between two corner edges on a facade;
+    sz > 0 (wall rule): the size (km) of the building a roof line belongs to."""
+    __slots__ = ("a", "b", "ta", "tb", "da", "db", "i0", "i1", "w", "sp", "sz", "own", "oc", "ot", "head", "key")
 
-    def __init__(self, a, b, i0, i1=None, w=1.0, ta=None, tb=None, sp=None, oc=None, ot=None, head=None, box=None):
+    def __init__(self, a, b, i0, i1=None, w=1.0, ta=None, tb=None, sp=None, oc=None, ot=None, head=None, box=None,
+                 sz=None):
         a, b = np.array(a, np.float32).reshape(-1, 3), np.array(b, np.float32).reshape(-1, 3)
         n = len(a)
         full = lambda v, dt=np.float32: np.broadcast_to(np.asarray(v, dt), (n,)).copy()
@@ -211,8 +242,9 @@ class _Tab:
         i1 = i0.copy() if i1 is None else full(i1)
         if box is not None:                             # the model dims before the sides of the box
             for P, i in ((a, i0), (b, i1)):
-                i *= np.clip(np.minimum(np.minimum(P[:, 0] - box[0], box[2] - P[:, 0]),
-                                        np.minimum(P[:, 2] - box[1], box[3] - P[:, 2])) / BOX_EDGE, 0.0, 1.0)
+                side = np.clip(np.minimum(np.minimum(P[:, 0] - box[0], box[2] - P[:, 0]),
+                                          np.minimum(P[:, 2] - box[1], box[3] - P[:, 2])) / BOX_EDGE, 0.0, 1.0)
+                i *= _band(side, W_FAR) if E.WALL else side     # (the wall rule: it leaves over a short way, no grey)
         if oc is None:
             ta, tb = full(ta), full(tb)
             sw = tb < ta                                # a = where the pen comes from
@@ -227,6 +259,7 @@ class _Tab:
         o = np.argsort(key, kind="stable")
         self.a, self.b, self.i0, self.i1, self.w, self.key = a[o], b[o], i0[o], i1[o], full(w)[o], key[o]
         self.sp = None if sp is None else full(sp)[o]
+        self.sz = None if sz is None else full(sz)[o]
         self.head = None if head is None else full(head, bool)[o]
         self.ta = self.tb = self.da = self.db = self.own = self.oc = self.ot = None
         if oc is None:
@@ -426,7 +459,7 @@ class City:
         np.maximum.at(p_max, owner, per)
         self._vol = dict(pts=pts, nxt=nxt, vol=vol, y0=z["v_y0"] / 1000.0, y1=z["v_y1"] / 1000.0, cen=cen,
                          d=np.hypot(cen[:, 0], cen[:, 1]), area=v_area, corner=corner, tau=z["v_tau"],
-                         gap=(p_max / (math.pi * np.maximum(n_edge, 1.0)))[owner],
+                         gap=(p_max / (math.pi * np.maximum(n_edge, 1.0)))[owner], own=owner,
                          lm=np.where(z["v_bld"] >= 0, lm[np.maximum(z["v_bld"], 0)], False))
         # --- water, parks
         p0, p1, t0, t1, _ = seg_of(z["wb_pts"], z["wb_tau"], z["wb_off"])
@@ -439,26 +472,33 @@ class City:
         """The table of a layer at a level of detail (made the first time it is asked for)."""
         t = self._tabs.get((layer, lod))
         if t is None:
-            t = self._tabs[(layer, lod)] = getattr(self, "_make_" + layer)(LOD[lod])
+            q = dict(LOD[lod], **W_LOD.get(lod, {})) if E.WALL else LOD[lod]
+            t = self._tabs[(layer, lod)] = getattr(self, "_make_" + layer)(q)
         return t
 
     def _make_streets(self, q):
         s = self._st
         m = (s["cls"] <= q["cls"]) | (s["cls"] == 8)               # the railways at every level: the bridges
+        if E.WALL:                                                 # fewer streets, all of them at full level
+            m = m & (s["i"] >= W_ST_MIN)
         # which pens show their head: always the same ones (one main street segment out of `stride`), few enough
         # that about HEADS of them are at work at any moment of the build
         head, lo, hi = s["head"][m].copy(), np.minimum(s["t0"][m], s["t1"][m]), np.maximum(s["t0"][m], s["t1"][m])
         busy = max(int(((lo[head] < r) & (hi[head] > r)).sum()) for r in np.linspace(0.05, float(hi.max()), 80))
         idx = np.nonzero(head)[0]
         head[idx[np.arange(len(idx)) % max(1, int(math.ceil(busy / HEADS))) != 0]] = False
+        if E.WALL:
+            return _Tab(_g3(s["p0"][m], 0.0), _g3(s["p1"][m], 0.0), 1.0, w=W_ST_W[s["cls"][m]], ta=s["t0"][m],
+                        tb=s["t1"][m], head=head, box=self.extent, sz=W_ST_SZ[s["cls"][m]])
         return _Tab(_g3(s["p0"][m], 0.0), _g3(s["p1"][m], 0.0), s["i"][m], w=ST_W[s["cls"][m]], ta=s["t0"][m],
                     tb=s["t1"][m], head=head, box=self.extent)
 
     def _make_blocks(self, q):
         s = self._fp
         m = s["area"] >= q["area"]
-        return _Tab(_g3(s["p0"][m], 0.0), _g3(s["p1"][m], 0.0), 0.5, ta=s["t0"][m] + LAG["blocks"],
-                    tb=s["t1"][m] + LAG["blocks"], box=self.extent)
+        return _Tab(_g3(s["p0"][m], 0.0), _g3(s["p1"][m], 0.0), 1.0 if E.WALL else 0.5, ta=s["t0"][m] + LAG["blocks"],
+                    tb=s["t1"][m] + LAG["blocks"], box=self.extent, w=E.ww(1.0),
+                    sz=np.sqrt(s["area"][m]) / 1000.0 if E.WALL else None)
 
     def _make_hatch(self, q):
         h, tau, area = self._hatch[q["hatch"]]
@@ -471,6 +511,22 @@ class City:
         keep = ((v["y1"] * 1000.0 >= q["vol_h"]) | (v["d"] < q["near"])) if only is None else only
         if q["radius"] is not None:
             keep = keep & (v["d"] < q["radius"] + 0.05)
+        corner = v["corner"]
+        if E.WALL:          # fewer volumes (not the small parts), and a few corner edges each: black stays between
+            keep = keep & (v["area"] >= q.get("part", 0.0) * np.where(v["lm"], 0.5, 1.0))
+            first = np.searchsorted(v["vol"], np.arange(len(v["y1"])))
+            cs = np.cumsum(corner)
+            rank = cs - 1 - (cs[first] - corner[first])[v["vol"]]
+            n_c = np.bincount(v["vol"], weights=corner, minlength=len(v["y1"]))
+            corner = corner & (rank % np.maximum(np.ceil(n_c / q.get("edges", 6)), 1).astype(int)[v["vol"]] == 0)
+            if not q.get("plain", 1):
+                corner = corner & v["lm"][v["vol"]]
+                # ... and two volumes per building at most: its tallest one and its widest one
+                pick = np.zeros(len(keep), bool)
+                for key in (v["y1"], v["area"]):
+                    o = np.lexsort((key, v["own"]))
+                    pick[o[np.r_[v["own"][o][1:] != v["own"][o][:-1], True]]] = True
+                keep = keep & pick
         k = keep[v["vol"]]
         pts, nxt, vol = v["pts"][k], v["pts"][v["nxt"]][k], v["vol"][k]
         y0, y1, cen, tau = v["y0"][vol], v["y1"][vol], v["cen"][vol], v["tau"][vol] + LAG["buildings"]
@@ -478,13 +534,23 @@ class City:
         n = len(pts)
         # the corner edges (dim at the ground, bright at the top), the roof outline, the ledge of a part that
         # starts above the ground
-        co, up = v["corner"][k], y0 > 0.0005
+        co, up = corner[k], y0 > 0.0005
         a = [_g3(pts[co], y0[co]), _g3(pts, y1), _g3(pts[up], y0[up])]
         b = [_g3(pts[co], y1[co]), _g3(nxt, y1), _g3(nxt[up], y0[up])]
         i0 = [0.14 * strong[co], 0.85 * strong, 0.4 * strong[up]]
         i1 = [0.62 * strong[co], 0.85 * strong, 0.4 * strong[up]]
         w = [np.full(int(co.sum()), 1.0), np.where(v["lm"][vol], 1.5, 1.1), np.full(int(up.sum()), 1.0)]
         sp = [-v["gap"][vol][co], np.zeros(n), np.zeros(int(up.sum()))]
+        sz = None
+        if E.WALL:          # every line at full level; the towers with a label are heavier, not brighter; a roof
+            #                 goes with the size of its building on screen (the labelled towers always stay)
+            lv = np.where(v["lm"][vol], 1.0, W_PILE)
+            i0 = i1 = [lv[co], lv, lv[up]]
+            wl = np.where(v["lm"][vol], 2.4, E.WALL_LINE)
+            w = [wl[co], wl, np.full(int(up.sum()), E.WALL_LINE)]
+            size = np.where(v["lm"][vol], 0.0, np.maximum(np.sqrt(v["area"][vol]) / 1000.0, y1 - y0))
+            sz = [size[co], size, size[up]]
+            sp = [np.zeros(int(co.sum())), np.zeros(n), np.zeros(int(up.sum()))]
         oc, ot = [cen[co], cen, cen[up]], [tau[co], tau, tau[up]]
         # floor plates on what is tall
         step = q["floors"] / 1000.0
@@ -493,10 +559,15 @@ class City:
         rep = np.repeat(np.arange(n), nf)
         yf = y0[rep] + (np.arange(nf.sum()) - np.repeat(np.cumsum(nf) - nf, nf) + 1) * step
         a.append(_g3(pts[rep], yf)), b.append(_g3(nxt[rep], yf))
-        i0.append(0.3 * strong[rep]), i1.append(0.3 * strong[rep])
-        w.append(np.full(len(rep), 1.0)), sp.append(np.full(len(rep), step)), oc.append(cen[rep]), ot.append(tau[rep])
+        if E.WALL:
+            i0, i1 = i0 + [lv[rep]], i1 + [lv[rep]]
+            sz.append(np.zeros(len(rep)))
+        else:
+            i0.append(0.3 * strong[rep]), i1.append(0.3 * strong[rep])
+        w.append(np.full(len(rep), E.ww(1.0))), sp.append(np.full(len(rep), step)), oc.append(cen[rep]), ot.append(tau[rep])
         cat = np.concatenate
-        return _Tab(cat(a), cat(b), cat(i0), cat(i1), cat(w), sp=cat(sp), oc=cat(oc), ot=cat(ot), box=self.extent)
+        return _Tab(cat(a), cat(b), cat(i0), cat(i1), cat(w), sp=cat(sp), oc=cat(oc), ot=cat(ot), box=self.extent,
+                    sz=None if sz is None else cat(sz))
 
     def _make_landmarks(self, q):
         """Only the towers that have a label: for a view that wants the skyline alone."""
@@ -507,12 +578,15 @@ class City:
         nb, npr = len(p0), len(pr)
         # a pier goes down from its bridge to the water when the pen has passed above
         return _Tab(np.concatenate([_g3(p0, y), _g3(pr, 0.0)]), np.concatenate([_g3(p1, y), _g3(pr, y)]),
-                    np.r_[np.full(nb, 0.6), np.full(npr, 0.55)], np.r_[np.full(nb, 0.6), np.full(npr, 0.3)],
-                    w=np.r_[np.full(nb, 1.3), np.full(npr, 1.0)], ta=np.r_[t0, pt], tb=np.r_[t1, pt - y], box=self.extent)
+                    np.r_[np.full(nb, E.wl(0.6)), np.full(npr, E.wl(0.55))],
+                    np.r_[np.full(nb, E.wl(0.6)), np.full(npr, 1.0 if E.WALL else 0.3)],
+                    w=np.r_[np.full(nb, E.ww(1.3)), np.full(npr, E.ww(1.0))], ta=np.r_[t0, pt], tb=np.r_[t1, pt - y],
+                    box=self.extent)
 
     def _make_parks(self, q):
         p0, p1, t0, t1 = self._park
-        return _Tab(_g3(p0, 0.0), _g3(p1, 0.0), 0.24, ta=t0 + LAG["parks"], tb=t1 + LAG["parks"], box=self.extent)
+        return _Tab(_g3(p0, 0.0), _g3(p1, 0.0), 1.0 if E.WALL else 0.24, ta=t0 + LAG["parks"], tb=t1 + LAG["parks"],
+                    box=self.extent, w=E.ww(1.0), sz=W_PARK_SZ if E.WALL else None)
 
     def counts(self, lod="district"):
         """Segments per layer at a level of detail (built, before the camera cuts anything; `hatch` is only
@@ -689,21 +763,46 @@ class City:
                 if heads and tab.head is not None:
                     hx = Bp[np.nonzero(cut & tab.head[sel])[0][: 4 * HEADS]]
         w = tab.w[sel]
+        wall, far = E.WALL, None                        # far: what the wall rule turns into a short way out
         if radius is not None:                          # the model does not end on a hard edge
             edge = 1.0 - np.clip((np.hypot(A[:, 0], A[:, 2]) - (1.0 - EDGE) * radius) / (EDGE * radius), 0.0, 1.0)
-            i0, i1 = i0 * edge, i1 * edge
+            if wall:
+                far = edge
+            else:
+                i0, i1 = i0 * edge, i1 * edge
         x0, y0, x1, y1, depth, keep = _project(cam, xf(A), xf(Bp), view)
         fac = None
+        if tab.sp is not None or (wall and tab.sz is not None):
+            px = (cam.scale if depth is None else cam.focal / depth) * xf.scale
         if tab.sp is not None:                          # lines that would fill thin out: a tower never burns white
             sp = tab.sp[sel]
             px = (cam.scale if depth is None else cam.focal / depth) * xf.scale
             sv = math.sqrt(max(0.0, 1.0 - float(cam.R[2][1]) ** 2))        # seen from above, the plates close up
-            fac = np.where(sp > 0.0, np.clip((sp * xf.yscale * sv * px - 0.5) / (PLATE_PX - 0.5), 0.0, 1.0),
-                           np.where(sp < 0.0, np.clip((-sp * px - 0.5) / (WALL_PX - 0.5), 0.12, 1.0), 1.0))
+            if wall:        # lines that would fill are not there (they leave over a few px of spacing): no dimming
+                fac = np.where(sp > 0.0, _band(sp * xf.yscale * sv * px, W_PLATE_PX),
+                               np.where(sp < 0.0, _band(-sp * px, W_EDGE_PX), 1.0))
+            else:
+                fac = np.where(sp > 0.0, np.clip((sp * xf.yscale * sv * px - 0.5) / (PLATE_PX - 0.5), 0.0, 1.0),
+                               np.where(sp < 0.0, np.clip((-sp * px - 0.5) / (WALL_PX - 0.5), 0.12, 1.0), 1.0))
+        if wall and tab.sz is not None:                 # what is too small on screen is not there
+            sz = tab.sz[sel]
+            fs = np.where(sz > 0.0, _band(sz * px, W_SIZE_PX), 1.0)
+            fac = fs if fac is None else fac * fs
         if fog is not None and depth is not None:
             lo = fog[2] if len(fog) > 2 else 0.12
             fz = lo + (1.0 - lo) * np.clip((fog[1] - depth) / max(fog[1] - fog[0], 1e-6), 0.0, 1.0)
-            fac = fz if fac is None else fac * fz
+            if wall:
+                far = fz if far is None else far * fz
+            else:
+                fac = fz if fac is None else fac * fz
+        if wall:
+            if far is not None:
+                far = _band(far, W_FAR)
+                fac = far if fac is None else fac * far
+            gain, w = min(gain, 1.0), np.maximum(w, E.WALL_LINE)
+            if fac is not None:                         # what is not there is not sent
+                live = np.broadcast_to(fac > 0.004, i0.shape)
+                keep = live if keep is None else keep & live
         if fac is not None:
             i0, i1 = i0 * fac, i1 * fac
         if keep is not None:
@@ -737,7 +836,7 @@ class City:
             elif name == "landmarks":
                 self.draw_buildings(f, cam, only_landmarks=True, **kw)
             elif name == "site":
-                self.draw_site(f, cam, xf=xf, t=t, age=age, gain=gain, view=view, **(site or {}))
+                self.draw_site(f, cam, xf=xf, t=t, age=age, view=view, **dict(dict(gain=gain), **(site or {})))
 
     def draw_streets(self, f, cam, xf=None, lod="district", age=None, wave=2.0, gain=1.0, view=None, fog=None,
                      reveal=None, centre=None, radius=None, heads=True):
@@ -749,7 +848,7 @@ class City:
         """Footprints on the ground; hatch=True (or a gain) adds the scan lines through them."""
         xf, radius, front = self._args(lod, xf, age, wave, reveal, centre, radius)
         self._emit(f, cam, self._tab("blocks", lod), "w", xf, radius, gain, front, view, fog)
-        if hatch:
+        if hatch and not E.WALL:                        # (scan lines at 0.2: a grey that the wall does not show)
             self._emit(f, cam, self._tab("hatch", lod), "w", xf, radius, gain * float(hatch), front, view, fog)
 
     def draw_buildings(self, f, cam, xf=None, lod="district", age=None, wave=2.0, gain=1.0, view=None, fog=None,
@@ -772,6 +871,8 @@ class City:
             return
         self._emit(f, cam, self._tab("river", lod), "w", xf, radius, gain, front, view, fog)
         h, tau = self._wh, self._wh_tau
+        if E.WALL:                                                # one scan line in three, at full level
+            h, tau = h[::3], tau[::3]
         if not len(h):
             return
         on, per = 0.09, 0.15                                      # km: a dash, a period
@@ -785,9 +886,10 @@ class City:
         xa, xb, seg = xa[m], xb[m], seg[m]
         zz, xm = h[seg, 1], 0.5 * (xa + xb)
         e = self.extent
-        i = 0.3 * np.clip(np.minimum(np.minimum(xm - e[0], e[2] - xm), np.minimum(zz - e[1], e[3] - zz)) / BOX_EDGE, 0.0, 1.0)
+        i = np.clip(np.minimum(np.minimum(xm - e[0], e[2] - xm), np.minimum(zz - e[1], e[3] - zz)) / BOX_EDGE, 0.0, 1.0)
         if radius is not None:
             i = i * (1.0 - np.clip((np.hypot(xm, zz) - (1.0 - EDGE) * radius) / (EDGE * radius), 0.0, 1.0))
+        i = _band(i, W_FAR) if E.WALL else 0.3 * i
         if front is not None:                                     # the water is laid down behind the pens
             if front.timed:
                 u = (xm - h[seg, 0]) / np.maximum(h[seg, 2] - h[seg, 0], 1e-9)
@@ -802,16 +904,21 @@ class City:
         i = i[live].astype(np.float32)
         if fog is not None and depth is not None:
             lo = fog[2] if len(fog) > 2 else 0.12
-            i = i * (lo + (1.0 - lo) * np.clip((fog[1] - depth) / max(fog[1] - fog[0], 1e-6), 0.0, 1.0))
+            fz = lo + (1.0 - lo) * np.clip((fog[1] - depth) / max(fog[1] - fog[0], 1e-6), 0.0, 1.0)
+            i = i * (_band(fz, W_FAR) if E.WALL else fz)
+        if E.WALL:                                                # from far away the water is its banks
+            i = i * _band(W_WATER_SZ * (cam.scale if depth is None else cam.focal / depth) * xf.scale, W_SIZE_PX)
         if keep is not None:
             x0, y0, x1, y1, i = x0[keep], y0[keep], x1[keep], y1[keep], i[keep]
-        f.segments("w", x0, y0, x1, y1, i * gain)
+        f.segments("w", x0, y0, x1, y1, i * (min(gain, 1.0) if E.WALL else gain), width=E.ww(1.0))
 
     def draw_site(self, f, cam, xf=None, t=0.0, age=None, gain=1.0, cross=0.07, rings=(0.1, 0.25, 0.5), pole=0.09,
-                  wall=True, towers=True, pulse=0.3, view=None):
+                  wall=True, towers=True, pulse=0.3, view=None, white=None):
         """The site, in red: the two streets over `cross` km each way, a pole of `pole` km over the corner with a
         dot at its head, range rings on the ground (white, radii in km), the wall with its three towers (white)
         and their detectors (red points), a ring that leaves the wall every PULSE_T s and dies at `pulse` km.
+        white = the gain of the white lines when it is not `gain` (the wall rule: the red keeps its level, the
+        white is not dimmed with it).
         A part is left out with 0 / False / (). age: the marker is made first, in 0.7 s (None = built)."""
         if (age is not None and age <= 0.0) or gain <= 0.0:
             return
@@ -823,13 +930,13 @@ class City:
                                                xf(np.asarray(b, np.float32).reshape(-1, 3)), view)
             if keep is not None:
                 x0, y0, x1, y1 = x0[keep], y0[keep], x1[keep], y1[keep]
-            f.segments(layer, x0, y0, x1, y1, i * gain, width=width)
+            f.segments(layer, x0, y0, x1, y1, i * (gain if layer == "r" or white is None else white), width=width)
 
         def points(layer, P, r, i):
             sx, sy, _, ok = cam.project(xf(np.asarray(P, np.float32).reshape(-1, 3)))
             if view is not None:
                 ok = ok & (sx >= view[0]) & (sx <= view[2]) & (sy >= view[1]) & (sy <= view[3])
-            f.dots(layer, sx[ok], sy[ok], r, i * gain)
+            f.dots(layer, sx[ok], sy[ok], r, i * (gain if layer == "r" or white is None else white))
 
         if cross:
             e = np.array([self.axis_9th, -self.axis_9th, self.axis_vine, -self.axis_vine], np.float32) * cross * p
@@ -844,7 +951,7 @@ class City:
             full = int(math.floor(nv * p + 1e-9))                 # (the vertices stay where they are: the end moves)
             a = -0.5 * math.pi + 2.0 * math.pi * np.r_[np.arange(full + 1) / nv, [p] if full < nv else []]
             ring = _g3(np.stack([r * np.cos(a), r * np.sin(a)], 1), 0.0)
-            lines("w", ring[:-1], ring[1:], max(0.34 - 0.06 * k, 0.16), width=1.0)
+            lines("w", ring[:-1], ring[1:], E.wl(max(0.34 - 0.06 * k, 0.16)), width=E.ww(1.0))
         w = self.wall
         if w is None or not wall:
             return
@@ -878,7 +985,7 @@ class City:
         x0, y0, x1, y1, _, keep = _project(cam, xf(a), xf(b), None)
         if keep is not None:
             x0, y0, x1, y1 = x0[keep], y0[keep], x1[keep], y1[keep]
-        f.segments(layer, x0, y0, x1, y1, inten)
+        f.segments(layer, x0, y0, x1, y1, inten, width=E.ww(1.0))
         sx, sy, _, _ = cam.project(xf(_g3(np.stack([at, at + u * length]), 0.0)))
         return (float(sx[0]), float(sy[0])), (float(sx[1]), float(sy[1]))
 

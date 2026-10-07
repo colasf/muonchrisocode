@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -188,7 +189,7 @@ class Muon(Scene):
             for c in range(3):
                 X, Y = gx + lab_w + c * cw, gy + 10 + r * (ch + 7)
                 mu = (r, c) == (2, 1)
-                f.rect("r" if mu else "w", X, Y, X + cw - 10, Y + ch, 0.95 if mu else 0.55, width=L.LW)
+                f.rect("r" if mu else "w", X, Y, X + cw - 10, Y + ch, 0.95 if mu else E.wl(0.55), width=L.LW)
                 if mu:
                     f.rects("r", X + 4, Y + 4, X + cw - 14, Y + ch - 4, 0.95)
                     f.text("w", X + (cw - 10) / 2, Y + ch * 0.5 + fs * 0.42, FERMIONS[r][c], size=fs * 1.3, anchor="ms",
@@ -230,7 +231,8 @@ class Muon(Scene):
             f.text("w", xl, y, hud.erode(lab, gone, 10 + k, fr), size=ls, alpha=0.6)
             red = lab in ("NAME", "LIFETIME")
             f.text("r" if red else "w", vx, y, hud.erode(sval if short else val, gone, 30 + k, fr), size=vs, alpha=0.97)
-            f.segments("w", [xl], [y + 0.6 * ls], [xr], [y + 0.6 * ls], 0.22)
+            if not E.WALL:      # (the hairline under every row: a grey that cannot land; the rows hold without it)
+                f.segments("w", [xl], [y + 0.6 * ls], [xr], [y + 0.6 * ls], 0.22)
         if not decay:
             return
         # decay: the reaction, then N / N0 against its own clock
@@ -246,11 +248,11 @@ class Muon(Scene):
         xs = np.linspace(xl, xr, 160)
         u = (xs - xl) / (xr - xl) * 5.0
         f.polyline("r", xs, cyb - hgt * np.exp(-u), 1.0, width=L.LW_BOLD)
-        f.segments("w", [xl], [cyb], [xr], [cyb], 0.6)
+        f.segments("w", [xl], [cyb], [xr], [cyb], E.wl(0.6), width=E.ww(1.0))
         f.text("w", xr, cyb - hgt + 12, "N / N0", size=L.T_MICRO, alpha=0.7, anchor="rs")
         for k in range(6):
             xk = xl + k / 5.0 * (xr - xl)
-            f.segments("w", [xk], [cyb], [xk], [cyb + 9], 0.8)
+            f.segments("w", [xk], [cyb], [xk], [cyb + 9], E.wl(0.8), width=E.ww(1.0))
             if (xr - xl) / 5.0 >= 150.0 or k % 2 == 0:
                 f.text("w", xk + (4 if k < 5 else -4), cyb + 26, f"{k * 2.197:.1f} {MU}S" if k else "0", size=L.T_MICRO,
                        alpha=0.7, anchor="ls" if k < 5 else "rs")

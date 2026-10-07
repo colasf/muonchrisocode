@@ -38,6 +38,7 @@ import numpy as np
 
 from .. import build as B
 from .. import hud
+from .. import engine as EN
 from .. import human
 from .. import layout as L
 from .. import showdata as sd
@@ -240,8 +241,8 @@ class Flood(Scene):
         ax, ay, _, _ = cam.project(A)
         hx, hy, _, _ = cam.project(Hd)
         fade = np.where(age < dur, 1.0, np.exp(-(age - dur) / 0.15))
-        base = 0.3 + 0.2 * there
-        f.segments("r", ax, ay, hx, hy, 0.12 * fade, base * fade, width=1.2)
+        base = EN.wl(0.3 + 0.2 * there)      # (the wall: the head of a track is a full red line, its tail still runs out)
+        f.segments("r", ax, ay, hx, hy, 0.12 * fade, base * fade, width=EN.ww(1.2))
         fl = age < dur
         f.dots("r", hx[fl], hy[fl], 2.4, 1.3)
         if there > 0.02:            # ionisation inside the body: the bright part of each track
@@ -310,7 +311,7 @@ class Flood(Scene):
             f.rect("w", x0, yb0, x1, yb1, 0.8, width=L.LW)
             f.rects("w", x0 + 3, yb0 + 4, float(X(t)), yb1 - 4, 0.9)
             mins = np.arange(0, SHOW, 60.0)
-            f.segments("w", X(mins), np.full(len(mins), yb1), X(mins), np.full(len(mins), yb1 + 9.0), 0.8)
+            f.segments("w", X(mins), np.full(len(mins), yb1), X(mins), np.full(len(mins), yb1 + 9.0), EN.wl(0.8), width=EN.ww(1.0))
             if proj > 0:                    # "by the end": a red bar runs from now to the end of the show
                 xe = float(X(t)) + (x1 - 3 - float(X(t))) * proj
                 f.rects("r", float(X(t)), yb0 + 11, xe, yb1 - 11, 0.95)
@@ -438,9 +439,15 @@ class Flood(Scene):
         age0 = t - T0 - 0.35                # the map and the list are constructed when the scene starts
         with f.build(age0, (xa - 6, Y_TOP + 14, xa + 2 * half + 22, cy + half + 6), wave=0.4, key=60):
             f.tag("w", xa, Y_TOP + 36, "ENTRY_MAP // FROM ABOVE", size=L.T_MICRO, pad=3)
-            f.rect("w", cx - half, cy - half, cx + half, cy + half, 0.5)
-            f.rings("w", [cx, cx], [cy, cy], [sc * 0.2, sc * 0.4], 0.3)
-            f.segments("w", [cx - half, cx], [cy, cy - half], [cx + half, cx], [cy, cy + half], 0.22)
+            f.rect("w", cx - half, cy - half, cx + half, cy + half, EN.wl(0.5), width=EN.ww(1.0))
+            if EN.WALL:                      # the wall: one full ring and four ticks on the frame, no grey cross-hair
+                f.rings("w", [cx], [cy], [sc * 0.2], 1.0, width=EN.WALL_LINE)
+                f.segments("w", [cx - half, cx + half - 12.0, cx, cx], [cy, cy, cy - half, cy + half - 12.0],
+                           [cx - half + 12.0, cx + half, cx, cx], [cy, cy, cy - half + 12.0, cy + half], 1.0,
+                           width=EN.WALL_LINE)
+            else:
+                f.rings("w", [cx, cx], [cy, cy], [sc * 0.2, sc * 0.4], 0.3)
+                f.segments("w", [cx - half, cx], [cy, cy - half], [cx + half, cx], [cy, cy + half], 0.22)
             f.text("w", cx + sc * 0.2 + 4, cy - 5, "0.2 M", size=L.T_MICRO, alpha=0.6)
             xb = min(xb, xa + 2 * half + 16)
             span = 13.0
@@ -507,14 +514,14 @@ class Flood(Scene):
             f.rects("w", xs + 1.5, yt, xs + bw - 1.5, y1, 0.92)
             # the law, as the outline of the histogram it predicts
             yl = y1 - self.e_share / top * H
-            f.segments("w", xs, yl, xs + bw, yl, 0.5)
-            f.segments("w", xs[1:], yl[:-1], xs[1:], yl[1:], 0.5)
+            f.segments("w", xs, yl, xs + bw, yl, EN.wl(0.5), width=EN.ww(1.0))
+            f.segments("w", xs[1:], yl[:-1], xs[1:], yl[1:], EN.wl(0.5), width=EN.ww(1.0))
             # log axis: 0.1 - 1 - 10 - 100 GeV
-            f.segments("w", [x0], [y1 + 1.0], [x1], [y1 + 1.0], 0.7)
+            f.segments("w", [x0], [y1 + 1.0], [x1], [y1 + 1.0], EN.wl(0.7), width=EN.ww(1.0))
             dec = np.arange(4) / 3.0
             mn = (np.arange(3)[:, None] + np.log10(np.arange(2, 10))[None, :]).ravel() / 3.0
-            f.segments("w", x0 + dec * (x1 - x0), np.full(4, y1 + 1.0), x0 + dec * (x1 - x0), np.full(4, y1 + 10.0), 0.8)
-            f.segments("w", x0 + mn * (x1 - x0), np.full(len(mn), y1 + 1.0), x0 + mn * (x1 - x0), np.full(len(mn), y1 + 5.0), 0.6)
+            f.segments("w", x0 + dec * (x1 - x0), np.full(4, y1 + 1.0), x0 + dec * (x1 - x0), np.full(4, y1 + 10.0), EN.wl(0.8), width=EN.ww(1.0))
+            f.segments("w", x0 + mn * (x1 - x0), np.full(len(mn), y1 + 1.0), x0 + mn * (x1 - x0), np.full(len(mn), y1 + 5.0), EN.wl(0.6), width=EN.ww(1.0))
             for k, (lab, anc) in enumerate((("0.1", "ls"), ("1", "ms"), ("10", "ms"), ("100", "rs"))):
                 f.text("w", x0 + dec[k] * (x1 - x0), y1 + 26.0, lab, size=L.T_MICRO, alpha=0.7, anchor=anc)
             # read-outs, over the high energies (their bars are low)
@@ -572,7 +579,7 @@ class Flood(Scene):
                 lo, hi = np.searchsorted(self.h_t, tt), np.searchsorted(self.h_t, tt + dt)
                 dens = 0.04 + 0.92 * np.tanh((hi - lo) / 3.2 * (150.0 / n))
                 quiet = float(smoothstep(self.t_leave, self.t_gone, t))
-                hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5, inten=0.95 - 0.5 * quiet,
+                hud.barcode_lanes(f, x0, x1, y0 + 12, y1, dens, kk, lanes=3, seed=5, inten=EN.wl(0.95 - 0.5 * quiet),
                                   frac=frac)
         if rest:
             x0, x1 = rest[0]

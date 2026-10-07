@@ -303,8 +303,10 @@ Added 2026-10-03, in the bar under the picture (`engine/src/gui.h`, drawn with a
   what is sent to the display of the output is shifted by that many pixels, to sit the picture on the wall. Whole
   pixels, nothing filtered; what leaves the display is cut. Only the output: not the preview, not Spout. Kept in
   `engine/output.json` (`"move": [x, y]`); `Renderer::output(..., sx, sy)`.
-- `GLOW`, `RED`, `WEIGHT` in the OUTPUT panel (three sliders; a click on a name: back to what the scenes give):
-  GLOW 0 .. 1 = how much of the glow of the scenes is kept (`bloom_gain` times it); RED 0 .. 3 = gain of the red
+- `GLOW W`, `GLOW R`, `RED`, `WEIGHT` in the OUTPUT panel (four sliders; a click on a name: back to what the scenes give):
+  GLOW W 0 .. 2 = how much of the glow of the scenes is kept on the white layer (`bloom_gain` times it; over 1: more
+  than they ask); GLOW R = the same for the red layer, on its own (`gBloomGainR`; `"glow_red"` in output.json, an
+  older file gives its `"glow"` to both); RED 0 .. 3 = gain of the red
   layer before the tonemap (thin red lines come up, full red stays); WEIGHT 0 .. 1.5 = pixels added to the width of
   every line (a 1 px hairline starts to gain above 0.25: a line is drawn in several passes from 1.25 px on).
   `Renderer::tune`, `gRed` / `gWeight` in the frame constants; kept in `engine/output.json`. At 1, 1, 0 the

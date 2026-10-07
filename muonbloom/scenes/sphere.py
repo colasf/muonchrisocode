@@ -49,6 +49,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -989,7 +990,11 @@ class Sphere(Scene):
         X, Y = lay.cx + KX * step, lay.cy + KY * step
         far = np.hypot(X - lay.cx, Y - lay.cy) > lay.out + 26
         major = (KX % 4 == 0) & (KY % 4 == 0)
-        f.pixels("w", X[far], Y[far], np.where(major, 0.95, 0.5)[far])
+        if E.WALL:                  # a pixel does not land: one point in two each way, as a dot (the majors are crosses)
+            m = far & ~major & (KX % 2 == 0) & (KY % 2 == 0)
+            f.dots("w", X[m], Y[m], 1.6, 1.0)
+        else:
+            f.pixels("w", X[far], Y[far], np.where(major, 0.95, 0.5)[far])
         m = far & major
         f.crosses("w", X[m], Y[m], 5.0 + 3.0 * min(1.0, kick), 0.42 + 0.5 * kick)
 
@@ -1004,7 +1009,8 @@ class Sphere(Scene):
             r = r0 + (r1 - r0) * u ** 0.7
             n = int(np.pi * (r0 + r1) / 11.0)           # (the same dots all the way: a count that follows the radius makes them crawl)
             a = np.linspace(0, 2 * np.pi, n, endpoint=False) + 0.4 * age
-            f.dots("w", lay.cx + r * np.cos(a), lay.cy + r * np.sin(a), 1.5, 1.2 * min(1.0, amp) * (1.0 - u) ** 1.3 * appear)
+            f.dots("w", lay.cx + r * np.cos(a), lay.cy + r * np.sin(a), 2.0 if E.WALL else 1.5,
+                   1.2 * min(1.0, amp) * (1.0 - u) ** 1.3 * appear)
 
     def _body(self, f, cam, t, appear, gain=1.0, swell=0.0):
         """The plexus: surface net (rim lit), struts through the interior, vertices. `swell` = breath on a kick."""
@@ -1022,17 +1028,31 @@ class Sphere(Scene):
         if appear < 1.0:                    # scanned in from the top at the start of the scene
             ymid = 0.5 * (P[ea, 1] + P[eb, 1])
             em = em & ((1.0 - ymid) / 2.0 + 0.08 * self.scan_order < appear * 1.1)
-        f.segments("w", sx[ea][em], sy[ea][em], sx[eb][em], sy[eb][em], (rim[ea] * ev)[em], (rim[eb] * ev)[em])
+        if E.WALL:
+            # the wall rule, the same body as DISINTEGRATE draws (disintegrate._eroding_wall): no grey net. One edge
+            # in three and one node in three (by index: it never changes), at the weight that lands and at full
+            # level where the surface turns away from the eye - the rim lights the outline -, no struts
+            k3 = np.arange(len(ea)) % 3 == 0
+            i0, i1 = E.wl(1.6 * rim[ea] * ev), E.wl(1.6 * rim[eb] * ev)
+            em = em & k3
+            f.segments("w", sx[ea][em], sy[ea][em], sx[eb][em], sy[eb][em], i0[em], i1[em], width=E.WALL_LINE)
+        else:
+            f.segments("w", sx[ea][em], sy[ea][em], sx[eb][em], sy[eb][em], (rim[ea] * ev)[em], (rim[eb] * ev)[em])
         sa, sb = b.sa, b.sb
         sm = np.ones(len(sa), bool)
         if appear < 1.0:
             sm = sm & (hash01(np.arange(len(sa)), 3) < max(0.0, appear * 1.4 - 0.4))
         si = (0.085 + 0.1 * np.maximum(rim[sa], rim[sb])) * b.s_var * gain
-        f.segments("w", sx[sa][sm], sy[sa][sm], sx[sb][sm], sy[sb][sm], si[sm])
+        if not E.WALL:
+            f.segments("w", sx[sa][sm], sy[sa][sm], sx[sb][sm], sy[sb][sm], si[sm])
         vm = np.ones(len(P), bool)
         if appear < 1.0:
             vm = vm & ((1.0 - P[:, 1]) / 2.0 < appear * 1.1)
-        f.pixels("w", sx[vm], sy[vm], (0.3 + 0.65 * rim[vm]) * gain)
+        if E.WALL:
+            vm = vm & (np.arange(len(P)) % 3 == 0)
+            f.dots("w", sx[vm], sy[vm], 1.6, E.wl(1.6 * rim[vm] * gain))
+        else:
+            f.pixels("w", sx[vm], sy[vm], (0.3 + 0.65 * rim[vm]) * gain)
 
     def _ring(self, f, phi, v, appear, alive=None, gain=1.0, pulse=None, label_age=None, peak_age=None, follow=None):
         """The lollipop halo = polar opacity histogram on a precise base circle. `pulse` (per bin, 0..1.5)
@@ -1070,20 +1090,24 @@ class Sphere(Scene):
         da = 2 * np.pi / N_BINS
         aa = phi[on][:, None] - da / 2 + np.linspace(0, da, 4)[None, :]
         ax, ay = cx + r0 * np.cos(aa), cy - r0 * np.sin(aa)
-        f.segments("w", ax[:, :-1].ravel(), ay[:, :-1].ravel(), ax[:, 1:].ravel(), ay[:, 1:].ravel(), 0.6 * gain, width=L.LW)
+        f.segments("w", ax[:, :-1].ravel(), ay[:, :-1].ravel(), ax[:, 1:].ravel(), ay[:, 1:].ravel(), E.wl(0.6 * gain), width=L.LW)
         # dotted scale circles at 1.2 / 4.6 / 8 MWE
         for frac, inten in ((0.0, 0.32), (0.5, 0.36), (1.0, 0.6)):
             r = r0 + lay.l0 + (lay.l1 - lay.l0) * frac
-            n = int(2 * np.pi * r / 7)
+            n = int(2 * np.pi * r / (14 if E.WALL else 7))
             aa = np.linspace(0, 2 * np.pi, n, endpoint=False)
             keep = on[np.minimum((aa / da).astype(int), N_BINS - 1)]
-            f.pixels("w", (cx + r * np.cos(aa))[keep], (cy - r * np.sin(aa))[keep], inten * gain * 1.6)
+            if E.WALL:              # dots, twice as far apart, at the level of the wall
+                f.dots("w", (cx + r * np.cos(aa))[keep], (cy - r * np.sin(aa))[keep], 1.5, E.wl(inten * gain * 1.6))
+            else:
+                f.pixels("w", (cx + r * np.cos(aa))[keep], (cy - r * np.sin(aa))[keep], inten * gain * 1.6)
         # inward ticks every 10 deg, long ones every 45 deg
         aa = np.radians(np.arange(0, 360, 10))
         ln = np.where(np.arange(36) % 9 == 0, 15.0, np.where(np.arange(36) % 3 == 0, 9.0, 5.0)) * min(1.0, lay.s)
         keep = on[np.minimum((aa / da).astype(int), N_BINS - 1)]
         f.segments("w", (cx + r0 * np.cos(aa))[keep], (cy - r0 * np.sin(aa))[keep],
-                   (cx + (r0 - ln) * np.cos(aa))[keep], (cy - (r0 - ln) * np.sin(aa))[keep], 0.8 * gain)
+                   (cx + (r0 - ln) * np.cos(aa))[keep], (cy - (r0 - ln) * np.sin(aa))[keep], E.wl(0.8 * gain),
+                   width=E.ww(1.0))
         if gain > 0.5 and (on.all() if label_age is None else label_age >= 0.0):
             kw = dict(rect=(cx - lay.out - 60.0, cy - lay.out - 34.0, cx + lay.out + 60.0, cy + lay.out + 40.0),
                       flow="out", wave=0.25, marks=False, key=77)
@@ -1252,7 +1276,7 @@ class Sphere(Scene):
             ex, ey = lay.body[0] + 5 + text_w("ANOMALY", L.T_TAG) + 12, Y_CORNER - 8.0
             with f.build(age, (min(ex, cx) - 4.0, min(ey, cy) - 4.0, max(ex + 26.0, cx) + 4.0, max(ey, cy) + 4.0), flow="out",
                          origin=(cx, cy), wave=0.2, line=0.2, marks=False, key=90):
-                f.segments("w", [cx, ex + 26], [cy, ey], [ex + 26, ex], [ey, ey], 0.6, width=L.LW_HAIR)
+                f.segments("w", [cx, ex + 26], [cy, ey], [ex + 26, ex], [ey, ey], E.wl(0.6), width=E.ww(L.LW_HAIR))
             lines = ["RHO 11.3 G/CM3  Z~82", f"R {CORE_R:.2f} M  DEPTH {1 - np.linalg.norm(CORE):.2f} M",
                      f"POCA {len(thr):02d}  CONF {conf:.2f}"]
             self._corner(f, -1, "ANOMALY", [(ln, "w") for ln in lines], age=age - swap + 0.03)
@@ -1321,7 +1345,7 @@ class Sphere(Scene):
         # 1 - its boxes and rules: header, frame, rulers in metres, the camera direction of the 3D view
         with self._blk(f, "tomo", t, rect, erode=et):
             header(f, x0, x1, Y_PANEL, fit_title(title, x1 - x0 - 8), et, 3, fr)
-            f.rect("w", px0, py0, px1, py1, 0.45)
+            f.rect("w", px0, py0, px1, py1, E.wl(0.45), width=E.ww(1.0))
             hud.ruler(f, px0, px1, py1, -Hh, Hh, 0.125, 0.5 if S >= 150 else 1.0,
                       fmt=(lambda v: er(f"{v:+.1f}", et, 7, fr) if abs(v) < Hh - 0.1 else ""), down=True, inten=0.7, lab_dy=30)
             hud.vruler(f, px0, py0, py1, -Hh, Hh, 0.125, 0.5, right=False, inten=0.7)
@@ -1345,7 +1369,12 @@ class Sphere(Scene):
                         dur = tr["dur"] * (0.6 if tr["echo"] else 1.0)
                         dist = _path_dist(KX * VOX, KY * VOX, tr["path"][1:4][:, [0, 2]], min(1.0, age / dur))
                         lit = lit + (0.5 if tr["echo"] else 1.3) * math.exp(-age / 0.7) * np.exp(-(dist / 0.1) ** 2)
-            f.pixels("w", X(KX * VOX)[keep], Y(KY * VOX)[keep], np.minimum(lit, 1.8)[keep])
+            if E.WALL:              # dots at full level: the lattice answers by their size, not by their level
+                keep = keep & ((KX % 2 == 0) & (KY % 2 == 0))
+                f.dots("w", X(KX * VOX)[keep], Y(KY * VOX)[keep],
+                       (np.where(major, 2.2, 1.5) + 1.3 * np.clip(lit - np.where(major, 0.95, 0.5), 0.0, 1.3))[keep], 1.0)
+            else:
+                f.pixels("w", X(KX * VOX)[keep], Y(KY * VOX)[keep], np.minimum(lit, 1.8)[keep])
             f.text("w", px0 - 20, py1 + 30, er("X / M", et, 8, fr), size=L.T_MICRO, alpha=0.6, anchor="rs")
             f.text("w", px0 - 20, py0 + 16, er("Z / M", et, 9, fr), size=L.T_MICRO, alpha=0.6, anchor="rs")
             # the contour: the slice of the body as it is now. DISINTEGRATE: the pieces that break off drift away
@@ -1388,8 +1417,12 @@ class Sphere(Scene):
                 chord = float(ycross.max() - ycross.min()) / S
                 inside = (0.5 * (ya + yb_) > ycross.min()) & (0.5 * (ya + yb_) < ycross.max())
             on = np.ones(nd, bool) if erode <= 0 else hash01(np.arange(nd), 26) > erode ** 2
-            f.segments("w", np.full(int(on.sum()), xs), ya[on], np.full(int(on.sum()), xs), yb_[on],
-                       np.where(inside, 0.95, 0.3)[on], width=L.LW)
+            if E.WALL:              # outside the body: one dash in two instead of a dim line
+                on = on & (inside | (np.arange(nd) % 2 == 0))
+                f.segments("w", np.full(int(on.sum()), xs), ya[on], np.full(int(on.sum()), xs), yb_[on], 0.95, width=L.LW)
+            else:
+                f.segments("w", np.full(int(on.sum()), xs), ya[on], np.full(int(on.sum()), xs), yb_[on],
+                           np.where(inside, 0.95, 0.3)[on], width=L.LW)
             if on.any() and len(ycross):
                 f.dots("w", np.full(len(ycross), xs), ycross, 2.6, 1.3)
             f.set_clip()
@@ -1430,7 +1463,8 @@ class Sphere(Scene):
                     a_, b_ = X(ck[sel, 0] * VOX) + 0.5 * vs, Y(ck[sel, 1] * VOX) + 0.5 * vs
                     h = 0.5 * vs - 1.0
                     f.segments("w", np.r_[a_ - h, a_ + h, a_ + h, a_ - h], np.r_[b_ - h, b_ - h, b_ + h, b_ + h],
-                               np.r_[a_ + h, a_ + h, a_ - h, a_ - h], np.r_[b_ - h, b_ + h, b_ + h, b_ - h], np.tile(iv[sel], 4))
+                               np.r_[a_ + h, a_ + h, a_ - h, a_ - h], np.r_[b_ - h, b_ + h, b_ + h, b_ - h],
+                               np.tile(E.wl(iv[sel]), 4), width=E.ww(1.0))
             for (ix, iz), (n_, first) in core_cells.items():
                 va = float(since(hash01(ix, iz, 11)))
                 if va >= DROP:
@@ -1482,7 +1516,10 @@ class Sphere(Scene):
             a = -0.5 * np.pi + np.linspace(0, 2 * np.pi, 60, endpoint=False)
             ac = a_box if core_age is None else min(a_box, core_age)
             a = a[: int(round(60 * float(B.ease(ac / 0.5))))] if ac < 0.5 else a
-            f.pixels("w", X(CORE[0] + CORE_R * np.cos(a)), Y(CORE[2] + CORE_R * np.sin(a)), 1.2 * cf)
+            if E.WALL:
+                f.dots("w", X(CORE[0] + CORE_R * np.cos(a[::2])), Y(CORE[2] + CORE_R * np.sin(a[::2])), 1.7, E.wl(1.2 * cf))
+            else:
+                f.pixels("w", X(CORE[0] + CORE_R * np.cos(a)), Y(CORE[2] + CORE_R * np.sin(a)), 1.2 * cf)
         # readouts: beside the plot, or under it in two columns when the column is narrow
         # (the count ticks when a track comes in, or decays: the digit that changed spins before it locks)
         poca = "POCA   " + tick(len(past), count_age, key=23, step=-1 if lost is not None else 1)
@@ -1534,13 +1571,13 @@ class Sphere(Scene):
         rect = (x0, Y_LOW - 26.0, x1, Y_BASE + 34.0)
         with self._blk(f, "profile", t, rect, erode=erode):             # its boxes and rules
             self._low_panel(f, lay.tomo, f"OPACITY_PROFILE // MWE // {N_BINS} BINS // UNROLLED", erode, 31, fr)
-            f.segments("w", [x0 + 54], [yb + 4], [x0 + 54], [yb - hmax - 6], 0.6)
+            f.segments("w", [x0 + 54], [yb + 4], [x0 + 54], [yb - hmax - 6], E.wl(0.6), width=E.ww(1.0))
             for frac in (0.0, 0.5, 1.0):
-                f.segments("w", [x0 + 54], [yb - frac * hmax], [x0 + 46], [yb - frac * hmax], 0.8)
+                f.segments("w", [x0 + 54], [yb - frac * hmax], [x0 + 46], [yb - frac * hmax], E.wl(0.8), width=E.ww(1.0))
             f.segments("r", [x0 + 54], [yt], [x1], [yt], 0.55)
             for k in range(0, step + 1):
                 xx = x0 + 60 + k * (x1 - x0 - 70) / step
-                f.segments("w", [xx], [yb + 2], [xx], [yb + 10], 0.8)
+                f.segments("w", [xx], [yb + 2], [xx], [yb + 10], E.wl(0.8), width=E.ww(1.0))
         with self._blk(f, "profile", t, rect):                          # its bars and lettering
             f.rects("w", xs[a], yb - vh[a] * hmax, xs[a] + max(2.0, bw - 2.2), yb, 0.92)
             f.rects("r", xs[b], yb - vh[b] * hmax, xs[b] + max(2.0, bw - 2.2), yb, 1.0)
@@ -1652,11 +1689,11 @@ class Sphere(Scene):
                         f.rects("w", x0, yy - 22, x1, yy - 19, 0.9)
                         etag(f, "r" if age < 0.7 else "w", x0 + 3, yy + 8, L.NAMES[key], erode, 53 + k, fr, size=L.T_LABEL,
                              pad=4)
-                        f.segments("w", [x0], [yb + 1], [x1], [yb + 1], 0.35)
+                        f.segments("w", [x0], [yb + 1], [x1], [yb + 1], E.wl(0.35), width=E.ww(1.0))
                         if meter:                       # the scale of the level: 0, half, 1
                             xt = xm0 + np.array([0.0, 0.5, 1.0]) * (xm1 - xm0)
                             f.segments("w", np.r_[xm0, xt], np.r_[yy + 42.0, np.full(3, yy + 42.0)],
-                                       np.r_[xm1, xt], np.r_[yy + 42.0, np.full(3, yy + 46.0)], 0.4)
+                                       np.r_[xm1, xt], np.r_[yy + 42.0, np.full(3, yy + 46.0)], E.wl(0.4), width=E.ww(1.0))
                     else:
                         n, n_e = int((~ec).sum()), int(ec.sum())
                         val = float(ctx.det.value(key, t))
@@ -1755,12 +1792,15 @@ class Sphere(Scene):
         with self._blk(f, "strip", t, L.STRIP, erode=erode, lag=0.2):   # its title and the rules of the three lanes
             etag(f, "w", x0, L.STRIP[1] + 25, title, erode, 81, fr, size=L.T_MICRO, pad=3)
             for key, yl in lanes.items():
-                f.segments("w", [x0 + 22], [yl], [x1], [yl], 0.22)
+                f.segments("w", [x0 + 22], [yl], [x1], [yl], E.wl(0.22), width=E.ww(1.0))
         with self._blk(f, "strip", t, L.STRIP, lag=0.25):               # the comb, the lettering, the hits, the cursor
             past_ = (tb <= t) & keep
             f.rects("w", xb[past_], yc, xb[past_] + 2, yc + 2 + 26 * lv[past_] ** 1.4, 0.9)
             fut = (tb > t) & keep
-            f.rects("w", xb[fut], yc, xb[fut] + 2, yc + 2 + 26 * lv[fut] ** 1.4, 0.22)
+            if E.WALL:              # what is still to come: a stub at full level instead of a dim tooth
+                f.rects("w", xb[fut], yc, xb[fut] + 2, yc + 3, 0.9)
+            else:
+                f.rects("w", xb[fut], yc, xb[fut] + 2, yc + 2 + 26 * lv[fut] ** 1.4, 0.22)
             for tv in np.arange(t0, t1 - 0.1, 10.0):
                 f.text("w", float(X(tv)) + 5, y0 + 24, er(sd.tc(tv)[:5], erode, 86, fr), size=L.T_MICRO, alpha=0.6)
             for key, yl in lanes.items():
@@ -1794,7 +1834,7 @@ class Sphere(Scene):
             n = int((ix1 - ix0) / 4)
             tb = t - span + (np.arange(n) + 0.5) / n * span
             lv = ctx.cues.loud_curve(t - span, t, n)
-            f.polyline("w", X(tb), yb - 4 - 46 * lv ** 1.3, 0.55, width=L.LW_HAIR)
+            f.polyline("w", X(tb), yb - 4 - 46 * lv ** 1.3, E.wl(0.55), width=E.ww(L.LW_HAIR))
             kt, ka = ctx.cues.kicks(t - span, t + 1e-6)
             if len(kt):                                 # (a kick / a hit that has just come in grows)
                 xk = X(kt)                              # the grid scrolls: the bars slide (hud.bars), they leave under its left end

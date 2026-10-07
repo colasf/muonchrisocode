@@ -33,9 +33,10 @@ REST = 0.8                      # rest size of the outermost loop, as a fraction
 SPREAD = 1.35                   # how the loops share the room: 1 = evenly, more = crowded on the detector
 
 
-def loop_size(jf, n, s_max):
+def loop_size(jf, n, s_max, s_min=None):
     """Rest size of loop number jf: small circles on the detector, wide loops outside."""
-    return S_MIN + (s_max - S_MIN) * (np.maximum(jf, 0.0) / n) ** SPREAD
+    s_min = S_MIN if s_min is None else s_min
+    return s_min + (s_max - s_min) * (np.maximum(jf, 0.0) / n) ** SPREAD
 
 
 def open_scale(open_):
@@ -187,6 +188,43 @@ def _aspect(n, t, seed, rate=BREATH):
     return 0.93 + 0.13 * math.sin(w * 0.083 + 0.02 * seed) + 0.07 * math.sin(w * 0.21 + 0.013 * seed) + 0.05 * own
 
 
+def loops(f, ox, oy, t, n, s_ref, s_open, seed, base, rate=BREATH, layer="r", reach=None, s_min=S_MIN, weight=1.0,
+          m_min=(48, 60)):
+    """The loops of a bloom, tangent to the point (ox, oy): the animation of the bloom on top of a tower, for
+    any bloom of the show. n loops that stay in their place: the solid inner ones breathe, the dotted outer
+    ones pump through them, the whole family goes from tall to wide and back (_breath, _aspect). Nothing is
+    switched on or off: a loop only changes size.
+    s_ref = rest size (px) of the outermost loop now, s_open = the same for the bloom fully open (it sets the
+    number of dots, so that they do not change while it opens); base = level; s_min = size of the innermost
+    loop; weight scales the line weights, the dots and their spacing (1 = a tower bloom); m_min = the least
+    number of points of a solid and of a dotted loop."""
+    q = (np.arange(n) + 0.5) / n
+    s = loop_size(q * n, n, REST * s_ref, s_min) * _breath(n, t, seed, rate) * min(1.0, s_ref / (3.0 * s_min))
+    wide = _aspect(n, t, seed, rate)
+    if reach is not None:                                           # opening: they grow out behind the burst
+        s = s * (1.0 - np.exp(-max(float(reach), 0.0) / (GROW * np.maximum(s, 1e-3))))
+    s_full = loop_size(q * n, n, REST * s_open, s_min)              # ... of a fully open bloom: sets the dot counts
+    for j in range(n):
+        sj = float(s[j])
+        if sj < 0.6:                                  # still inside the detector (under its red dot)
+            continue
+        # its shape follows its size: a circle near the detector, a wide petal far out
+        jq = n * float(np.clip((sj - s_min) / max(REST * s_ref - s_min, 1.0), 0.0, 1.0)) ** (1.0 / SPREAD)
+        if q[j] < SOLID:                              # solid inner loops
+            m = int(np.clip(2 * math.pi * sj * 1.2 / 5.0, m_min[0], 800))
+            phi = np.linspace(0, 2 * np.pi, m + 1)
+            x, y = _loop(sj, jq, n, phi, t, seed, wide=float(wide[j]), j_noise=j)
+            f.polyline(layer, ox + x, oy + y, base * (1.3 - 0.55 * q[j]), width=(3.4 - 1.6 * q[j]) * weight)
+        else:                                         # dotted outer loops: always the same number of dots
+            out = (q[j] - SOLID) / (1.0 - SOLID)
+            m = int(np.clip(2 * math.pi * float(s_full[j]) * 1.2 / ((7.0 + 14.0 * (q[j] - SOLID)) * weight), m_min[1], 900))
+            phi = (np.arange(m) + ((t * 0.4 * (1 if j % 2 else -1)) % 1.0)) / m * 2 * np.pi
+            x, y = _loop(sj, jq, n, phi, t, seed, wide=float(wide[j]), j_noise=j, wander=0.27)
+            crowd = min(1.0, 2 * math.pi * sj * 1.2 / m / (5.0 * weight))      # dots closer than their size: no brighter than a line
+            f.dots(layer, ox + x, oy + y, (2.5 - 0.6 * q[j]) * weight,
+                   1.5 * base * (1.3 - 0.55 * q[j]) * (1.0 - 0.55 * out ** 1.3) * crowd)
+
+
 def bloom(f, tw, t, det, gain=1.0, size=1.0, clip=None, rate=BREATH, seed=None, layer="r", open_=None, reach=None):
     """The red bloom on top of a tower: a family of nested loops, all tangent to the detector (the
     TouchDesigner look). The loops stay in their place and breathe, each one on its own (see _breath; `rate`
@@ -204,35 +242,12 @@ def bloom(f, tw, t, det, gain=1.0, size=1.0, clip=None, rate=BREATH, seed=None, 
     n = N_LOOPS[key]
     ox, oy = tw.det
     s_ref = S_MAX[key] * size * open_scale(env)                     # rest size of the outermost loop
-    q = (np.arange(n) + 0.5) / n
-    s = loop_size(q * n, n, REST * s_ref) * _breath(n, t, seed, rate) * min(1.0, s_ref / (3.0 * S_MIN))
-    wide = _aspect(n, t, seed, rate)
-    if reach is not None:                                           # opening: they grow out behind the burst
-        s = s * (1.0 - np.exp(-max(float(reach), 0.0) / (GROW * np.maximum(s, 1e-3))))
     # a hit is answered by the whole bloom at once: it brightens (and swells, through `open_`)
     hot = e_hit * math.exp(-age / 0.7) * (1.0 - math.exp(-age / 0.05)) if age < 5.0 else 0.0
     base = gain * (0.55 + 0.55 * min(1.0, env)) * (1.0 + 0.8 * hot)
-    s_full = loop_size(q * n, n, REST * S_MAX[key] * size)          # ... of a fully open bloom: sets the dot counts
     if clip:
         f.set_clip(*clip)
-    for j in range(n):
-        sj = float(s[j])
-        if sj < 0.6:                                  # still inside the detector (under its red dot)
-            continue
-        # its shape follows its size: a circle near the detector, a wide petal far out
-        jq = n * float(np.clip((sj - S_MIN) / max(REST * s_ref - S_MIN, 1.0), 0.0, 1.0)) ** (1.0 / SPREAD)
-        if q[j] < SOLID:                              # solid inner loops
-            m = int(np.clip(2 * math.pi * sj * 1.2 / 5.0, 48, 800))
-            phi = np.linspace(0, 2 * np.pi, m + 1)
-            x, y = _loop(sj, jq, n, phi, t, seed, wide=float(wide[j]), j_noise=j)
-            f.polyline(layer, ox + x, oy + y, base * (1.3 - 0.55 * q[j]), width=3.4 - 1.6 * q[j])
-        else:                                         # dotted outer loops: always the same number of dots
-            out = (q[j] - SOLID) / (1.0 - SOLID)
-            m = int(np.clip(2 * math.pi * float(s_full[j]) * 1.2 / (7.0 + 14.0 * (q[j] - SOLID)), 60, 900))
-            phi = (np.arange(m) + ((t * 0.4 * (1 if j % 2 else -1)) % 1.0)) / m * 2 * np.pi
-            x, y = _loop(sj, jq, n, phi, t, seed, wide=float(wide[j]), j_noise=j, wander=0.27)
-            crowd = min(1.0, 2 * math.pi * sj * 1.2 / m / 5.0)      # dots closer than their size: no brighter than a line
-            f.dots(layer, ox + x, oy + y, 2.5 - 0.6 * q[j], 1.5 * base * (1.3 - 0.55 * q[j]) * (1.0 - 0.55 * out ** 1.3) * crowd)
+    loops(f, ox, oy, t, n, s_ref, S_MAX[key] * size, seed, base, rate=rate, layer=layer, reach=reach)
     f.dots(layer, [ox], [oy - 3], 10.0, 1.2 * gain * (0.5 + 0.5 * min(1.0, env)) * min(1.0, env / 0.05))
     f.dots("w", [ox], [oy - 3], 3.0, 1.0 * gain * min(1.0, env / 0.05))
     if clip:

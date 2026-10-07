@@ -36,11 +36,15 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud, towers
 from .. import layout as L
 from .. import showdata as sd
 from ..engine import Camera, OrthoCamera, smoothstep
 from ..show import Scene
+
+# the wall rule (engine.WALL): a line of the furniture is never a hairline, and never grey
+WH = E.ww(L.LW_HAIR)
 
 T0, T1 = 104.0, 133.0
 STAGES = ("ENERGY", "CODE", "LIGHT", "SOUND")
@@ -344,6 +348,8 @@ def _build_board():
     b.A, b.B = _model(np.concatenate(m.a)), _model(np.concatenate(m.b))
     b.part, b.lod = np.concatenate(m.p), np.concatenate(m.lod)
     b.inten, b.width = np.concatenate(m.i), np.concatenate(m.w)
+    if E.WALL:              # fewer lines, none of them grey: what was under 0.36 is not drawn
+        b.inten = np.where(b.inten < 0.36, 0.0, E.wl(b.inten)).astype(np.float32)
     cut = np.searchsorted(b.part, np.arange(len(PART_T) + 1))                 # the parts were added in order
     b.slices = [slice(int(cut[k]), int(cut[k + 1])) for k in range(len(PART_T))]
     return b
@@ -533,7 +539,7 @@ class Detector(Scene):
 
         def box(k, x, y, w):
             lay = "r" if hot[k] else "w"
-            f.rect(lay, x, y, x + w, y + bh, 0.75)
+            f.rect(lay, x, y, x + w, y + bh, E.wl(0.75), width=WH)
             f.tag(lay, x + 5, y + 19, f"{k + 1:02d}", size=L.T_MICRO, pad=3)
             f.text(lay, x + 38, y + 19, CALL[k][0], size=L.T_SMALL, alpha=0.9)
 
@@ -545,16 +551,16 @@ class Detector(Scene):
                 box(k, x0, yr(r), bw)
                 if r < len(FLOW) - 1:           # the line to the next box, what it carries
                     ya, yb = yr(r) + bh, yr(r + 1)
-                    f.segments("w", [xa, xa - 5, xa + 5], [ya, yb - 7, yb - 7], [xa, xa, xa], [yb, yb, yb], 0.7)
+                    f.segments("w", [xa, xa - 5, xa + 5], [ya, yb - 7, yb - 7], [xa, xa, xa], [yb, yb, yb], E.wl(0.7), width=WH)
                     f.text("w", xa + 14, yb - 4, what, size=L.T_MICRO, alpha=0.55)
             for k, r, into in ((2, 1, True), (6, 2, False), (7, 0, None)):       # bias supply, BNC, power LED: beside
                 box(k, xs, yr(r), 186.0)
                 if into is not None:
                     ym, xl, xr = yr(r) + bh / 2, x0 + bw, xs
                     xt, sg = (xl, 1.0) if into else (xr, -1.0)                  # the tip of the arrow
-                    f.segments("w", [xl, xt + sg * 7, xt + sg * 7], [ym, ym - 5, ym + 5], [xr, xt, xt], [ym, ym, ym], 0.7)
+                    f.segments("w", [xl, xt + sg * 7, xt + sg * 7], [ym, ym - 5, ym + 5], [xr, xt, xt], [ym, ym, ym], E.wl(0.7), width=WH)
             ym = yr(4) + bh / 2                  # ... and what the radio sends leaves the drawing
-            f.segments("w", [x0 + bw, xs - 9, xs - 9], [ym, ym - 5, ym + 5], [xs - 2, xs - 2, xs - 2], [ym, ym, ym], 0.7)
+            f.segments("w", [x0 + bw, xs - 9, xs - 9], [ym, ym - 5, ym + 5], [xs - 2, xs - 2, xs - 2], [ym, ym, ym], E.wl(0.7), width=WH)
             f.text("r" if hot[5] else "w", xs + 6, ym + 6, "/MUON/C", size=L.T_SMALL, alpha=0.9)
         k, a = self._current(t)                  # the pulse of the last muon, running down the lines
         if k is None or a > 3.2:
@@ -649,6 +655,8 @@ class Detector(Scene):
         lodf = np.array([1.0, 1.0 - smoothstep(3.5, 8.0, shrink), 1.0 - smoothstep(1.5, 3.5, shrink)], np.float32)[M.lod]
         inten = M.inten * lodf
         width = M.width - (M.width - L.LW_HAIR) * float(smoothstep(2.0, 6.0, shrink))
+        if E.WALL:
+            width = np.maximum(width, E.WALL_LINE)
         for p, t_p in enumerate(PART_T):
             a = t - T0 - t_p
             if a < 0.0:
@@ -804,7 +812,7 @@ class Detector(Scene):
                 f.dots(lay, [x], [y], 2.6, 1.3)
                 d = math.hypot(X - x, Y - y)
                 if d > R_CALL + 2.0:
-                    f.segments(lay, [x], [y], [X - (X - x) / d * R_CALL], [Y - (Y - y) / d * R_CALL], 0.65, width=L.LW_HAIR)
+                    f.segments(lay, [x], [y], [X - (X - x) / d * R_CALL], [Y - (Y - y) / d * R_CALL], E.wl(0.65), width=WH)
                 f.rings(lay, [X], [Y], [R_CALL], 0.9, width=L.LW)
                 f.text(lay, X, Y + 5, f"{k + 1:02d}", size=L.T_MICRO, anchor="ms", alpha=0.95)
 
@@ -879,7 +887,7 @@ class Detector(Scene):
                 if s < 3:           # 'becomes' arrow to the next stage
                     xa = x0 + 60
                     f.segments("w", [xa, xa - 7, xa + 7], [y0 + 74, y1 + 6, y1 + 6], [xa, xa, xa],
-                               [y1 + 16, y1 + 16, y1 + 16], 0.7)
+                               [y1 + 16, y1 + 16, y1 + 16], E.wl(0.7), width=WH)
                     f.text("r" if busy else "w", xa + 16, (y0 + 74 + y1 + 16) / 2 + 6, "BECOMES", size=L.T_MICRO,
                            alpha=1.0 if busy else 0.6)
                 draw[s](f, t, x0 + 190, x1 - 6, y0 + 22, y1, k, a)
@@ -901,11 +909,11 @@ class Detector(Scene):
         its pulse is written by a pen (fast rise, slow decay), then read by a cursor."""
         H, W = y1 - y0 - 14, x1 - x0 - 16
         yb = y1 - 4
-        f.segments("w", [x0, x0], [y0, y1], [x0, x1], [y1, y1], 0.6)
+        f.segments("w", [x0, x0], [y0, y1], [x0, x1], [y1, y1], E.wl(0.6), width=WH)
         tk = x0 + 8 + np.arange(11) * W / 10.0
-        f.segments("w", tk, np.full(11, y1), tk, np.full(11, y1 + 5.0), 0.5)
+        f.segments("w", tk, np.full(11, y1), tk, np.full(11, y1 + 5.0), E.wl(0.5), width=WH)
         vk = yb - np.arange(1, 5) * 0.25 * H
-        f.segments("w", np.full(4, x0 - 5.0), vk, np.full(4, x0), vk, 0.5)
+        f.segments("w", np.full(4, x0 - 5.0), vk, np.full(4, x0), vk, E.wl(0.5), width=WH)
         yt = yb - 0.12 * H                              # threshold: its dashes march
         da = np.arange(x0 + 8 - 16 + (t * 10.0) % 16.0, x1 - 8, 16.0)
         s0, s1 = np.maximum(da, x0 + 8), np.minimum(da + 8, x1 - 8)
@@ -915,7 +923,7 @@ class Detector(Scene):
         xs = np.linspace(x0 + 8, x1 - 8, 150)           # the input, live: the noise floor runs to the left
         u = (xs - x0) * 0.055 + t * 4.0
         nz = 0.5 + 0.22 * np.sin(u) + 0.14 * np.sin(2.3 * u + 1.3) + 0.09 * np.sin(5.1 * u + 0.4) + 0.05 * np.sin(9.7 * u + 2.1)
-        f.polyline("w", xs, yb - 0.05 * H * nz, 0.42, width=L.LW_HAIR)
+        f.polyline("w", xs, yb - 0.05 * H * nz, E.wl(0.42), width=WH)
         if k is None:
             return
         tt = self._tt
@@ -947,14 +955,14 @@ class Detector(Scene):
         # the peak, held: a dashed line the pen draws to the right
         xp, yp = x0 + 8 + 0.0491 * W, yb - min(1.0, 0.9665 * e) * H
         dx = np.arange(xp + 12, xp + 12 + (x1 - 8 - xp - 12) * B.ease(B.lin(a, 0.03, 0.4)), 12.0)
-        f.segments("w", dx, np.full_like(dx, yp), np.minimum(dx + 6, x1 - 8), np.full_like(dx, yp), 0.55)
-        f.segments("w", [xp - 6, xp], [yp, yp - 6], [xp + 6, xp], [yp, yp + 6], 1.1 * float(B.spring(a / 0.2)))
+        f.segments("w", dx, np.full_like(dx, yp), np.minimum(dx + 6, x1 - 8), np.full_like(dx, yp), E.wl(0.55), width=WH)
+        f.segments("w", [xp - 6, xp], [yp, yp - 6], [xp + 6, xp], [yp, yp + 6], 1.1 * float(B.spring(a / 0.2)), width=WH)
         if a >= 0.6:                                    # the cursor reads the pulse, back and forth
             g = min(1.0, (a - 0.6) / 0.25)
             tcur = 0.02 + 0.96 * (0.5 - 0.5 * math.cos(2 * math.pi * (a - 0.6) / 3.4))
             v = e * (math.exp(-tcur / 0.22) - math.exp(-tcur / 0.018)) / 0.76
             xcur, ycur = x0 + 8 + tcur * W, yb - min(max(v, 0.0), 1.0) * H
-            f.segments("w", [xcur], [ycur], [xcur], [ycur + (y1 - ycur) * g], 0.55)
+            f.segments("w", [xcur], [ycur], [xcur], [ycur + (y1 - ycur) * g], E.wl(0.55), width=WH)
             f.dots("w", [xcur], [ycur], 3.0, 1.5 * g)
             if g >= 1.0:
                 f.text("w", xcur, y1 + 17, f"{v * 3.3:.2f} V", size=L.T_MICRO, anchor="ms", alpha=0.85)
@@ -972,7 +980,8 @@ class Detector(Scene):
         bx = x0 + 6 + np.arange(nb) * cw
         ya, yb = y0 + 8, y0 + 8 + cw - 8
         f.segments("w", np.r_[bx, bx + cw - 8, bx + cw - 8, bx], np.r_[np.full(2 * nb, ya), np.full(2 * nb, yb)],
-                   np.r_[bx + cw - 8, bx + cw - 8, bx, bx], np.r_[np.full(nb, ya), np.full(2 * nb, yb), np.full(nb, ya)], 0.6)
+                   np.r_[bx + cw - 8, bx + cw - 8, bx, bx], np.r_[np.full(nb, ya), np.full(2 * nb, yb), np.full(nb, ya)], E.wl(0.6),
+                   width=WH)
         if cw >= 36:
             for i in range(nb):
                 f.text("w", bx[i] + (cw - 8) / 2, yb + 17, f"{1 << (nb - 1 - i)}", size=L.T_MICRO, anchor="ms", alpha=0.45)
@@ -1000,8 +1009,14 @@ class Detector(Scene):
                 lv = 0.5                                # the bit being tried
             else:
                 lv = 0.3 if old & w and k is not None else 0.0      # the last word, until this one overwrites it
-            if lv:
-                f.rects("w", bx[i] + 3, ya + 3, bx[i] + cw - 11, yb - 3, lv)
+            if lv and E.WALL and not i < done:          # tried: the lower half; the last word: a small square
+                xm_, ym_ = bx[i] + (cw - 8) / 2, (ya + yb) / 2
+                if lv == 0.5:
+                    f.rects("w", bx[i] + 3, ym_, bx[i] + cw - 11, yb - 3, 1.0)
+                else:
+                    f.rects("w", xm_ - 4, ym_ - 4, xm_ + 4, ym_ + 4, 1.0)
+            elif lv:
+                f.rects("w", bx[i] + 3, ya + 3, bx[i] + cw - 11, yb - 3, E.wl(lv))
         if k is not None and ib < nb + 2.0:             # the bracket under the bit being tried
             xb = x0 + 6 + min(ib, nb - 1.0) * cw
             wb = (cw - 8) * (1.0 - max(0.0, ib - nb) / 2.0)
@@ -1023,13 +1038,13 @@ class Detector(Scene):
         f.text("r" if sent else "w", x0 + 6, ty + 30, osc, size=L.T_LABEL, alpha=0.95)
         wl = min(270.0, x1 - x0 - 12)
         f.segments("w", [x0 + 6, x0 + 6, x0 + 6 + wl / 2, x0 + 6 + wl], [ty + 48, ty + 44, ty + 44, ty + 44],
-                   [x0 + 6 + wl, x0 + 6, x0 + 6 + wl / 2, x0 + 6 + wl], [ty + 48, ty + 52, ty + 52, ty + 52], 0.5)
+                   [x0 + 6 + wl, x0 + 6, x0 + 6 + wl / 2, x0 + 6 + wl], [ty + 48, ty + 52, ty + 52, ty + 52], E.wl(0.5), width=WH)
         hud.bars(f, "r" if sent else "w", x0 + 6, ty + 38, x0 + 6 + wl * v, ty + 45, 0.95)
         # the approximations, as a staircase closing in on what came in
         gx0, gx1, gy0, gy1 = x0 + 318, x1 - 4, yb + 26, y1 - 2
         if gx1 - gx0 < 150:
             return
-        f.segments("w", [gx0, gx0], [gy0, gy1], [gx0, gx1], [gy1, gy1], 0.5)
+        f.segments("w", [gx0, gx0], [gy0, gy1], [gx0, gx1], [gy1, gy1], E.wl(0.5), width=WH)
         f.text("w", gx0 + 8, gy0 + 10, f"SAR // {nb} BIT", size=L.T_MICRO, alpha=0.6)
         if k is None:
             return
@@ -1054,29 +1069,20 @@ class Detector(Scene):
                     if trial <= old:
                         oacc = trial
                 oy = np.repeat(gy(otr), 2)
-                f.polyline("w", sx[m:], oy[m:], 0.5, width=L.LW)
+                f.polyline("w", sx[m:], oy[m:], E.wl(0.5), width=L.LW)
         else:
-            f.polyline("w", sx, sy, 0.5 + 0.5 * math.exp(-(a - nb * T_BIT) / 0.8), width=L.LW)
+            f.polyline("w", sx, sy, E.wl(0.5 + 0.5 * math.exp(-(a - nb * T_BIT) / 0.8)), width=L.LW)
 
     def _small_bloom(self, f, ox, oy, open_, t, seed, n=7, rate=0.45, step=13.0, gain=1.0, clip=None):
-        """A bloom in small, alive: the loops leave the point one after the other and grow out, solid near the
-        point, turning into dots on their way out (as on the towers). open_ sets its size."""
+        """A bloom in small, with the animation of the bloom on top of a tower (towers.loops): its loops stay in
+        their place, the solid inner ones breathe, the dotted outer ones pump through them. open_ sets its size;
+        rate, how fast it lives (0.45 = as a tower bloom)."""
         if clip:
             f.set_clip(*clip)
-        fr = (t * rate) % 1.0
-        phi = self._phi
-        for j in range(n + 1):
-            jf = j + fr
-            q = jf / (n + 1.0)
-            g = gain * min(1.0, jf) * float(1.0 - smoothstep(0.72, 1.0, q)) * (1.25 - 0.6 * q)
-            if g < 0.02:
-                continue
-            x, y = towers._loop((6.0 + step * jf) * (0.35 + 1.1 * open_), jf * 1.3, 12, phi, t, seed)
-            dot = float(smoothstep(0.52, 0.68, q))
-            if dot < 1.0:
-                f.polyline("r", ox + x, oy + y, g * (1.0 - dot), width=L.LW_BOLD - 1.0 * q)
-            if dot > 0.0:
-                f.dots("r", ox + x[::2], oy + y[::2], 1.6, 1.25 * g * dot)
+        reach = 1.25 * (6.0 + step * (n + 0.5))                 # rest size of its outer loop when open_ = 1
+        k = max(0.35 + 1.1 * open_, 0.0) / 1.45
+        towers.loops(f, ox, oy, t, n + 4, reach * k / towers.REST, reach / towers.REST, seed, gain,
+                     rate=towers.BREATH * rate / 0.45, s_min=3.0, weight=0.7, m_min=(24, 14))
         f.dots("r", [ox], [oy - 2], 4.6, 0.9 * gain)
         if clip:
             f.set_clip()
@@ -1095,9 +1101,9 @@ class Detector(Scene):
         wb = bx1 - bx0 - 6
         chars = int((bx1 - bx0) / (L.T_SMALL * 0.61))
         f.text("w", bx0, y0 + 26, "BRIGHTNESS", size=L.T_MICRO, alpha=0.75)
-        f.rect("w", bx0, y0 + 36, bx1, y0 + 58, 0.6)
+        f.rect("w", bx0, y0 + 36, bx1, y0 + 58, E.wl(0.6), width=WH)
         tk = bx0 + 3 + wb * np.arange(5) / 4.0
-        f.segments("w", tk, np.full(5, y0 + 58.0), tk, np.full(5, y0 + 64.0), 0.5)
+        f.segments("w", tk, np.full(5, y0 + 58.0), tk, np.full(5, y0 + 64.0), E.wl(0.5), width=WH)
         hud.bars(f, "r", bx0 + 3, y0 + 39, bx0 + 3 + wb * lv, y0 + 55, 0.95)
         if k is not None and e > lv:                    # the peak, held, then let go
             pk = lv + (e - lv) * float(1.0 - smoothstep(1.4, 2.6, a))
@@ -1117,15 +1123,16 @@ class Detector(Scene):
         keeps running while it dies down; a level meter with its peak held."""
         ym = (y0 + y1) / 2 + 4
         mx = x1 - 18.0                                  # the level meter, at the right end
-        f.segments("w", [x0], [ym], [mx - 12], [ym], 0.3)
-        f.rect("w", mx, y0 + 26, x1, y1, 0.5)
+        if not E.WALL:      # (the axis under the live trace: with the wall rule the trace itself is the line)
+            f.segments("w", [x0], [ym], [mx - 12], [ym], 0.3)
+        f.rect("w", mx, y0 + 26, x1, y1, E.wl(0.5), width=WH)
         mk = y1 - 3 - (y1 - y0 - 32) * np.arange(5) / 4.0
-        f.segments("w", np.full(5, mx - 6.0), mk, np.full(5, mx), mk, 0.5)
+        f.segments("w", np.full(5, mx - 6.0), mk, np.full(5, mx), mk, E.wl(0.5), width=WH)
         tt = self._tw
         xs = x0 + 6 + tt * (mx - 18 - x0 - 6)
         u = xs[::3] * 0.09 + t * 6.0                    # the output, live: its noise floor runs to the left
-        f.polyline("w", xs[::3], ym - 1.6 * (np.sin(u) + 0.7 * np.sin(2.7 * u + 1.1) + 0.5 * np.sin(6.3 * u + 0.6)), 0.4,
-                   width=L.LW_HAIR)
+        f.polyline("w", xs[::3], ym - 1.6 * (np.sin(u) + 0.7 * np.sin(2.7 * u + 1.1) + 0.5 * np.sin(6.3 * u + 0.6)), E.wl(0.4),
+                   width=WH)
         if k is None:
             return
         hh = (y1 - y0) * 0.44
@@ -1144,7 +1151,7 @@ class Detector(Scene):
             f.polyline("w", cx, cy, 1.0 * br, width=L.LW)
             if k > 0:
                 ao = t - self.demo[k - 1][0] - 3 * self.demo[k - 1][4]
-                f.polyline("w", xs[m:], (ym - wave(k - 1, ao) * hh)[m:], 0.55, width=L.LW)
+                f.polyline("w", xs[m:], (ym - wave(k - 1, ao) * hh)[m:], E.wl(0.55), width=L.LW)
         else:
             f.polyline("w", xs, ys, 1.0 * br, width=L.LW)
         if a < 1.0:                                     # the play head: the plot is one second long
@@ -1216,16 +1223,16 @@ class Detector(Scene):
         # are image: they come with their muon and live by themselves
         with f.build(t - (self.c_more - 0.2), (x0 - 8, y0 - 24, x1 + 4, base + mh + 94), key=55, wave=0.45):
             f.tag("w", x0, y0, "MORE ENERGY = BRIGHTER = LOUDER", size=L.T_MICRO, pad=3)
-            f.segments("w", [x0], [base], [x1], [base], 0.6)
+            f.segments("w", [x0], [base], [x1], [base], E.wl(0.6), width=WH)
             for i, (tm, e, _, _, _) in enumerate(ms):
                 f.text("r" if 0.0 <= ages[i] < 0.6 else "w", x0 + (i + 0.5) * w, base + 28, f"E {e:.2f}", size=L.T_SMALL,
                        anchor="ms", alpha=0.9 if t >= tm else 0.35)
             f.text("w", x0, base + mh + 82, "LOUDNESS", size=L.T_MICRO, alpha=0.6)
             for i in range(3):                  # the three meters, empty until their muon comes
                 bx, yb = x0 + (i + 0.5) * w - 16, base + 47 + mh
-                f.rect("w", bx, base + 44, bx + 32, yb + 3, 0.5)
+                f.rect("w", bx, base + 44, bx + 32, yb + 3, E.wl(0.5), width=WH)
                 tk = yb - mh * np.arange(5) / 4.0
-                f.segments("w", np.full(5, bx - 6.0), tk, np.full(5, bx), tk, 0.5)
+                f.segments("w", np.full(5, bx - 6.0), tk, np.full(5, bx), tk, E.wl(0.5), width=WH)
         m = (t - t_first) / step                # the mark under the one being replayed slides to the next
         if m >= 0.0:
             mi = math.floor(m)
@@ -1286,7 +1293,7 @@ class Detector(Scene):
                 hud.panel_header(f, x0, x1, y0, "CHAIN // ENERGY > CODE > LIGHT > SOUND")
                 for s, name in enumerate(STAGES):
                     xx = x0 + s * w
-                    f.rect("w", xx + 4, y0 + 22, xx + w - 10, y0 + 70, 0.7)
+                    f.rect("w", xx + 4, y0 + 22, xx + w - 10, y0 + 70, E.wl(0.7), width=WH)
                     f.text("w", xx + 6, y0 + 98, name if w >= 96 else name[:1], size=L.T_SMALL,
                            alpha=0.9 if self._at(t, s)[0] is not None else 0.45)
             for s, name in enumerate(STAGES):          # a stage fills up when the muon reaches it: red, then white
@@ -1294,7 +1301,7 @@ class Detector(Scene):
                 xx = x0 + s * w
                 if ks is not None:
                     with f.build(a, (xx + 4, y0 + 22, xx + w - 10, y0 + 70), key=64 + s, wave=0.1, flow="lr", marks=False):
-                        lv = 0.5 + 0.5 * math.exp(-a / 0.8)
+                        lv = E.wl(0.5 + 0.5 * math.exp(-a / 0.8))
                         red = float(1.0 - smoothstep(1.0, 1.6, a))
                         if red > 0.0:
                             f.rects("r", xx + 8, y0 + 26, xx + w - 14, y0 + 66, lv * red)

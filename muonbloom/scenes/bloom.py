@@ -38,6 +38,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud, towers
 from .. import layout as L
 from .. import showdata as sd
@@ -137,6 +138,22 @@ class Bloom(Scene):
                 break
         return B.io(since, left, out=0.45, span=0.9)
 
+    def _grid(self, f, ctx):
+        """The lattice of crosses. With the wall rule its crosses are heavy enough to land, so they keep to the
+        open field: above the bottom band, off the towers and their labels, off the title block; no dots."""
+        if not E.WALL:
+            hud.cross_grid(f, (L.FX0, L.FY0, L.FX1, L.FY1), step=96.0, inten=0.26)
+            return
+        step = 96.0
+        ox, oy = L.CENTER
+        kx = np.arange(math.ceil((L.FX0 + 10 - ox) / step), math.floor((L.FX1 - 10 - ox) / step) + 1)
+        ky = np.arange(math.ceil((L.FY0 + 10 - oy) / step), math.floor((L.BOT[1] - 30 - oy) / step) + 1)
+        X, Y = (v.ravel() for v in np.meshgrid(ox + kx * step, oy + ky * step))
+        m = ~((X < 660.0) & (Y < L.HEAD_Y))
+        for tw in ctx.towers.values():
+            m &= ~((X > tw.x0 - 60.0) & (X < tw.x1 + 170.0) & (Y > tw.top - 40.0))
+        f.crosses("w", X[m], Y[m], 7.0, 0.26)
+
     def draw(self, f, t, ctx):
         det = ctx.det
         t0 = sd.scene_start(t)                                    # the cut to the towers
@@ -146,7 +163,7 @@ class Bloom(Scene):
         kt, ka = ctx.cues.kicks(t - 3.0, t + 1e-6)
         kick = min(1.0, float((ka * (1.0 - np.exp(-(t - kt) / 0.09)) * np.exp(-(t - kt) / 0.5)).sum()))
         kick *= float(smoothstep(sd.T_ON["C"], sd.T_ON["C"] + 2.0, t))
-        hud.cross_grid(f, (L.FX0, L.FY0, L.FX1, L.FY1), step=96.0, inten=0.26)
+        self._grid(f, ctx)
         if t > min(sd.T_ON.values()):
             # the lines of a tower grow out of it when its detector comes on, and meet those of its neighbours
             towers.strings(f, ctx.towers, t, det, n=N_LINES, age={k: t - sd.T_ON[k] for k in sd.KEYS}, kick=kick,
@@ -202,13 +219,13 @@ class Bloom(Scene):
         y_lo, y_hi = y_of(0.0), max(y_of(1.2), y_top)
         with f.build(self._scale_age(det, tw.key, t), (x - 60.0, y_hi - 14.0, x + 124.0, y_lo + 10.0), flow="bt",
                      wave=0.35, line=0.35, marks=False, key=80 + L.ORDER.index(tw.key)):
-            f.segments("w", [x], [y_lo], [x], [y_hi], 0.55)
+            f.segments("w", [x], [y_lo], [x], [y_hi], E.wl(0.55), width=E.ww(L.LW_HAIR))
             for k in range(0, 13):
                 y = y_of(k / 10.0)
                 if y < y_hi - 0.5:
                     break
                 major = k % 3 == 0
-                f.segments("w", [x], [y], [x - (12 if major else 6)], [y], 0.7)
+                f.segments("w", [x], [y], [x - (12 if major else 6)], [y], E.wl(0.7), width=E.ww(L.LW_HAIR))
                 if major:
                     f.text("w", x - 16, y + 5, f"{k / 10:.1f}", size=L.T_MICRO, alpha=0.6, anchor="rs")
             y = max(y_of(open_), y_hi)
@@ -285,7 +302,11 @@ class Bloom(Scene):
                 fresh = (t - tt) < 2.0
                 for sel, lay in ((fresh, "r"), (~fresh, "w")):
                     if sel.any():
-                        f.rects(lay, bx[sel], y + 128 - hgt[sel], bx[sel] + bw, y + 128, np.where(ec[sel], 0.45, 0.95))
+                        if E.WALL:              # an echo is not a dimmer bar: only the tip of its bar is drawn
+                            top = y + 128 - hgt[sel]
+                            f.rects(lay, bx[sel], top, bx[sel] + bw, np.where(ec[sel], np.minimum(top + 4.0, y + 128), y + 128), 0.95)
+                        else:
+                            f.rects(lay, bx[sel], y + 128 - hgt[sel], bx[sel] + bw, y + 128, np.where(ec[sel], 0.45, 0.95))
 
     # ------------------------------------------------------------------ bottom band
     def _bottom(self, f, t, ctx, live, age):
@@ -330,7 +351,7 @@ class Bloom(Scene):
                     hud.panel_header(f, x0, x1, y0, "SEQUENCE // DETECTORS ON" if x1 - x0 >= 230 else "SEQUENCE")
                     for k, (name, ts) in enumerate(steps):
                         xx = x0 + k * w
-                        f.rect("w", xx + 4, y0 + 22, xx + w - 8, y0 + 62, 0.7)
+                        f.rect("w", xx + 4, y0 + 22, xx + w - 8, y0 + 62, E.wl(0.7), width=E.ww(L.LW_HAIR))
                         f.text("w", xx + 6, y0 + 88, name, size=fs, alpha=0.9 if t >= ts else 0.5)
                         f.text("w", xx + 6, y0 + 112, sd.tc(ts)[:5], size=min(float(L.T_MICRO), fs), alpha=0.6)
                 for k, (name, ts) in enumerate(steps):

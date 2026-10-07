@@ -56,6 +56,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -152,6 +153,52 @@ def _null_geodesic(b, n=420, r_in=40.0):
 # line work
 # ----------------------------------------------------------------------------
 
+class _Wall:
+    """The frame as a plate draws on it under the wall rule (engine.WALL): the line work of a plate was drawn in
+    greys and hairlines, as on paper, and stray light on the brick eats both. Every white line, curve, ring and
+    dot of a plate goes through here: level engine.wl (full from 0.6, never under 0.8), weight at least
+    engine.WALL_LINE, a dot at least 2 px of radius. Red keeps its level; its hairlines get that weight too.
+    What gets too heavy at full level is made of fewer lines in its plate (thin), not dimmer."""
+    __slots__ = ("_f",)
+
+    def __init__(self, f):
+        self._f = f
+
+    def __getattr__(self, k):
+        return getattr(self._f, k)
+
+    def segments(self, layer, x0, y0, x1, y1, i0, i1=None, width=1.0, spacing=0.5):
+        if layer == "w":
+            i0, i1 = E.wl(i0), (None if i1 is None else E.wl(i1))
+        return self._f.segments(layer, x0, y0, x1, y1, i0, i1, max(width, E.WALL_LINE), spacing)
+
+    def polyline(self, layer, xs, ys, i, width=1.0, closed=False, i_end=None):
+        if layer == "w":
+            i, i_end = E.wl(i), (None if i_end is None else E.wl(i_end))
+        return self._f.polyline(layer, xs, ys, i, width=max(width, E.WALL_LINE), closed=closed, i_end=i_end)
+
+    def rect(self, layer, x0, y0, x1, y1, i, width=1.0):
+        if layer == "w":
+            i, width = E.wl(i), max(width, E.WALL_LINE)
+        return self._f.rect(layer, x0, y0, x1, y1, i, width=width)
+
+    def rings(self, layer, cx, cy, radius, i, spacing=0.5, width=1.0):
+        if layer == "w":
+            i, width = E.wl(i), max(width, E.WALL_LINE)
+        return self._f.rings(layer, cx, cy, radius, i, spacing=spacing, width=width)
+
+    def dots(self, layer, x, y, r, i):
+        if layer == "w":
+            r, i = np.maximum(r, 2.0), E.wl(i)
+        return self._f.dots(layer, x, y, r, i)
+
+
+def thin(n):
+    """One in n of a family of lines that is a tone on paper (a hatch, a grid, a fan): with the wall rule each
+    line is full white, so the tone is made of fewer of them. 1 without the rule."""
+    return n if E.WALL else 1
+
+
 def fsz(n, width, hi):
     """Type size at which n characters fit in `width` (at most `hi`)."""
     return float(min(hi, width / (max(n, 1) * 0.615)))
@@ -207,6 +254,7 @@ def dring(f, layer, cx, cy, r, i=0.6, n=40, w=1.0, ph=0.0, ry=None):
 
 def hatch(f, layer, cx, cy, r, i=0.45, step=8.0, w=1.0):
     """A disc filled with 45 degree hatching (the particles of the textbook figures)."""
+    step = min(step * thin(2), max(step, 0.6 * r))            # (a small disc keeps three lines)
     c = np.arange(-int(r / step), int(r / step) + 1) * step * 1.41421
     hl = np.sqrt(np.maximum(r * r - c * c / 2.0, 0.0)) * 0.70711
     mx, my = cx + c / 2.0, cy - c / 2.0
@@ -924,7 +972,7 @@ def p_scatter(P):
     k = np.arange(1, int((yb - ya + xb - xa) / 9.0))
     c = ya + k * 9.0                                  # hatching: lines x + y = const, cut by the slab
     xs0, xs1 = np.maximum(xa, xa + (c - yb)), np.minimum(xb, xa + (c - ya))
-    m = xs1 > xs0
+    m = (xs1 > xs0) & (k % thin(2) == 0)
     f.segments("w", xs0[m], (c - (xs0 - xa))[m], xs1[m], (c - (xs1 - xa))[m], 0.3)
     n = 9
     ev = P.a["n_on"] // 2
@@ -1351,12 +1399,12 @@ def p_slit(P):
     lam = 0.05 * P.w
     ph = (P.u * 2.0) % 1.0
     a = np.radians(np.linspace(-38.0, 38.0, 13))
-    for k in range(int((xb - xs) / lam)):
+    for k in range(0, int((xb - xs) / lam), thin(2)):
         r = (k + ph) * lam
         if r < xb - xs - 2:
             f.polyline("w", xs + r * np.cos(a), cy + r * np.sin(a), 0.4)
     a = np.radians(np.linspace(-80.0, 80.0, 33))
-    r = ((np.arange(int((xc - xb) / lam * 1.6) + 1) + ph) * lam)[:, None, None]
+    r = ((np.arange(0, int((xc - xb) / lam * 1.6) + 1, thin(2)) + ph) * lam)[:, None, None]
     px = xb + r * np.cos(a)[None, None, :] + 0.0 * np.zeros((1, 2, 1))
     py = np.array([cy - d2, cy + d2])[None, :, None] + r * np.sin(a)[None, None, :]
     ok = (px < xc - 3) & (np.abs(py - cy) < hs)
@@ -1496,7 +1544,7 @@ def p_tunnel(P):
     k = np.arange(1, int((wb + V) / 10.0))
     c = k * 10.0
     xs0, xs1 = np.maximum(0.0, c - V), np.minimum(wb, c)
-    m = xs1 > xs0
+    m = (xs1 > xs0) & (k % thin(2) == 0)
     f.segments("w", xb0 + xs0[m], yb - (c - xs0)[m], xb0 + xs1[m], yb - (c - xs1)[m], 0.25)
     yE = yb - 0.60 * V
     dashes(f, "w", P.x0 + 4, yE, P.x1 - 4, yE, 0.4)
@@ -1918,7 +1966,8 @@ def chrome(f, rect, code, title, cap, a=None, key=0):
         xm = x1 - 56.0 - 6 * 7.0
         v = np.clip(a["spec"][(key * 5 + np.arange(6) * 7) % len(a["spec"])], 0.06, 1.0) ** 1.15
         f.rects("w", xm + np.arange(6) * 7.0, y0 + 26.0 - 15.0 * v, xm + np.arange(6) * 7.0 + 4.0, y0 + 26.0, 0.8)
-    f.segments("w", [x0, x0, x1, x1], [y1, y1, y1, y1], [x0 + 12, x0, x1 - 12, x1], [y1, y1 - 12, y1, y1 - 12], 0.7)
+    f.segments("w", [x0, x0, x1, x1], [y1, y1, y1, y1], [x0 + 12, x0, x1 - 12, x1], [y1, y1 - 12, y1, y1 - 12], E.wl(0.7),
+               width=E.ww(1.0))
     if cap:
         f.text("w", x0 + 16.0, y1 - 4.0, cap, size=fsz(len(cap), x1 - x0 - 32.0, L.T_MICRO), alpha=0.6)
     return (x0 + 8.0, y0 + 44.0, x1 - 8.0, y1 - (26.0 if cap else 8.0))
@@ -2296,7 +2345,7 @@ class Glitch(Scene):
             fn, code, title, cap = PLATES[pid][:4]
             with Quick(f, leaving(t_out - t, 0.35, span=0.4) if taken else None, rect, wave=0.1, line=0.2, cps=420.0,
                        marks=False, key=int(k) * 7 + pid):
-                fn(Pl(f, chrome(f, rect, code, title, cap, a, int(k)), t - t_in, t, a, key=int(k)))
+                fn(Pl(_Wall(f) if E.WALL else f, chrome(f, rect, code, title, cap, a, int(k)), t - t_in, t, a, key=int(k)))
 
     @staticmethod
     def _static(f, t, rect, a, key):
@@ -2323,7 +2372,7 @@ class Glitch(Scene):
             r = V_SHOCK * (a - 0.07 * k)
             if r > 0.0:
                 f.polyline(lay, self.land[0] + r * np.cos(ang), self.land[1] + r * np.sin(ang),
-                           (1.2 if k == 0 else 0.5) * (1.0 - a / 1.3) ** 1.5, width=L.LW_BOLD if k == 0 else L.LW)
+                           (1.2 if k == 0 else 0.9 if E.WALL else 0.5) * (1.0 - a / 1.3) ** 1.5, width=L.LW_BOLD if k == 0 else L.LW)
         f.dots("r", [self.land[0]], [self.land[1]], 4.2 + 14.0 * math.exp(-a / 0.12), 1.7 * (1.0 - a / 1.3))
         f.set_clip()
 
@@ -2415,7 +2464,8 @@ class Glitch(Scene):
             x = lane_x[m]
             y = np.minimum(yh[m], y1 - 6)
             landed = yh[m] >= y1 - 6
-            i1 = np.where(landed, 0.28, 0.6) * gate * out
+            i1 = np.where(landed, 0.28, 0.6)
+            i1 = (i1 if red else E.wl(i1)) * gate * out
             f.segments(lay, x, np.full_like(x, y0), x, y, 0.05 * gate * out, i1, width=L.LW)
             f.dots(lay, x[~landed], y[~landed], 2.6, 1.5 * gate * out)
             if red:
@@ -2451,7 +2501,7 @@ class Glitch(Scene):
         auto_callout(f, ctx, view, x, y, "MU-", [f"ALT {alt:06.3f} KM", "E 3.871 GEV", "N 000001" if t < said else "1 OF 1"],
                      red=True, prefer=(1, -1), dx=64.0, dy=46.0, build=age0 - 0.2)
         with f.build(age0 - 0.3, (xg - 18.0, Y_GROUND - 18.0, xg + 18.0, Y_GROUND + 4.0), wave=0.05, marks=False, key=91):
-            f.segments("r", [xg - 16, xg], [Y_GROUND, Y_GROUND - 16], [xg + 16, xg], [Y_GROUND, Y_GROUND + 2], 0.5)
+            f.segments("r", [xg - 16, xg], [Y_GROUND, Y_GROUND - 16], [xg + 16, xg], [Y_GROUND, Y_GROUND + 2], 0.5, width=E.ww(1.0))
         f.set_clip()
         # what is left of the HUD: the furniture of the DANCE scene, still there, dimmed and emptied (it is not
         # rebuilt); what is new on it - title, cursor, the one row, the counts - is made on the cut
@@ -2459,7 +2509,7 @@ class Glitch(Scene):
         x0, y0, x1, y1, yb = hud.strip_base(f, title=None, alpha=a)
         B.tag(f, "w", x0, y0 - 9, "LONGITUDINAL_PROFILE // --", age0, size=L.T_MICRO, pad=3, alpha=a, cps=110.0, key=83)
         xs = x0 + (16.0 - np.arange(0, 16.01, 1.0)) / 16.0 * (x1 - x0)
-        f.segments("w", xs, np.full_like(xs, y0), xs, y0 + 12, 0.8 * a)
+        f.segments("w", xs, np.full_like(xs, y0), xs, y0 + 12, E.wl(0.8 * a), width=E.ww(1.0))
         xc = x0 + (16.0 - min(alt, 16.0)) / 16.0 * (x1 - x0)
         with f.build(age0 - 0.1, (xc - 6.0, y0 - 8.0, xc + 190.0, y1 + 8.0), flow="tb", wave=0.1, marks=False, key=84):
             hud.strip_cursor(f, float(xc), y0, y1, f"ALT {alt:06.3f} KM", alpha=0.9)
@@ -2470,7 +2520,7 @@ class Glitch(Scene):
                          key=46):
                 f.rects("w", cx0, cy0, cx1, cy0 + 5, 0.95 * a)
                 f.tag("w", cx0 + 4, cy0 + 32, "PARTICLE_STREAM", size=L.T_MICRO, pad=3, alpha=a)
-                f.segments("w", [cx1, cx0], [cy0, cy1], [cx1, cx1], [cy1, cy1], 0.6 * a)
+                f.segments("w", [cx1, cx0], [cy0, cy1], [cx1, cx1], [cy1, cy1], E.wl(0.6 * a), width=E.ww(1.0))
             row = f"00000 MU-   003871.00 {(x - geo.x_mid) / geo.S:+06.2f} {alt:05.2f} +00.00"
             f.text("r", cx0 + 8, cy0 + 62, B.decode(row, age0 - 0.2, cps=120.0, key=85), size=L.T_MICRO, alpha=0.95)
             f.text("w", cx0 + 8, cy1 - 10, B.roll("N 000001", age0, 0.4, 0.3, key=86), size=L.T_SMALL, alpha=0.9 * a)

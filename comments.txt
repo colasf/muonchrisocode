@@ -1,17 +1,20 @@
 # Muon Bloom - comments written in the engine window (key C, or the COMMENT button).
 # [ ] MM:SS:FF | scene | when it was written | the comment      (FF = frames, [x] = done)
-[x] 07:03:07 | glitch | 2026-10-03 19:29 | don't build up during the glitchy sequence they can appear in a cut then desapear with a white flash try to sync it more to the music
-[x] 07:26:52 | glitch | 2026-10-03 19:29 | at the end it fine to deconstruct them like it's already 
-[x] 00:10:39 | origin | 2026-10-04 16:02 | snapshot snapshots/00-10-39_origin.png
-[x] 00:15:58 | origin | 2026-10-04 18:15 | snapshot snapshots/00-15-58_origin.png
-[ ] 00:25:53 | origin | 2026-10-04 19:30 | snapshot snapshots/00-25-53_origin.png
-[ ] 00:25:53 | origin | 2026-10-04 19:30 | snapshot snapshots/00-25-53_origin_2.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_2.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_3.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_4.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_5.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_6.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_7.png
-[ ] 00:29:28 | origin | 2026-10-04 22:46 | snapshot snapshots/00-29-28_origin_8.png
-[ ] 01:17:46 | you | 2026-10-06 20:54 | snapshot snapshots/01-17-46_you.png
+# A line that says "snapshot" names a picture taken there (key S, or the SNAPSHOT button): draw and write on it.
+[x] 00:22:38 | origin | 2026-10-07 18:24 | little cross are too faded we can't see them
+[x] 00:34:32 | star | 2026-10-07 18:25 | we can't see the details in the core
+[x] 00:36:21 | star | 2026-10-07 18:25 | snapshot snapshots/00-36-21_star_drawn.png
+[x] 00:36:21 | star | 2026-10-07 18:25 | snapshot snapshots/00-36-21_star_drawn.png
+[x] 00:36:21 | star | 2026-10-07 18:26 | we can't read these text 
+[x] 00:44:30 | messenger | 2026-10-07 18:26 | cross are not visible
+[x] 01:17:34 | you | 2026-10-07 18:27 | we can't see the grid
+[x] 01:48:08 | detector | 2026-10-07 18:27 | snapshot snapshots/01-48-08_detector_drawn.png
+[x] 01:48:08 | detector | 2026-10-07 18:28 | this things should use the same animation that the red on on top of the tower
+[x] 02:03:41 | detector | 2026-10-07 18:28 | snapshot snapshots/02-03-41_detector_drawn.png
+[x] 02:03:41 | detector | 2026-10-07 18:28 | there things should use the same animation that the one on top of the tower
+[x] 08:11:17 | outlast | 2026-10-07 18:30 | snapshot snapshots/08-11-17_outlast_drawn.png
+[x] 08:11:17 | outlast | 2026-10-07 18:30 | we can see that faded grey
+[x] 06:09:12 | dance | 2026-10-07 18:52 | dots are not visible [drawing: snapshots/06-09-12_dance_drawn.png]
+[x] 05:59:10 | dance | 2026-10-07 18:52 | we don't see the details it look more like white block [drawing: snapshots/05-59-10_dance_drawn.png]
+[x] 07:39:00 | outlast | 2026-10-07 19:33 | snapshot snapshots/07-39-00_outlast_drawn.png
+[x] 07:39:00 | outlast | 2026-10-07 19:34 | i don't like these line gradients we don't see the red line coming from the top anymore don't do the line gradients

@@ -11,6 +11,7 @@ import math
 import numpy as np
 
 from . import build as B
+from . import engine as E
 from . import layout as L
 from . import showdata as sd
 from .engine import CHAR_W, hash01, smoothstep, text_w
@@ -198,7 +199,7 @@ def edge_ticks(f, t, cues, alpha=1.0, y0=250.0, y1=1230.0, left=True, right=True
                 f.dots("w", [xe], [yh], 3.6, 1.7)
         f.segments("w", np.full(shown.sum(), xe), ys[shown], xe + sgn * le[shown], ys[shown], 0.85 * alpha, width=L.LW)
         d = dbl[order] & shown
-        f.segments("w", np.full(d.sum(), xe), ys[d] + 5.0, xe + sgn * le[d] * 0.6, ys[d] + 5.0, 0.6 * alpha)
+        f.segments("w", np.full(d.sum(), xe), ys[d] + 5.0, xe + sgn * le[d] * 0.6, ys[d] + 5.0, E.wl(0.6 * alpha), width=E.ww(1.0))
 
 
 # ----------------------------------------------------------------------------
@@ -238,7 +239,7 @@ def ruler(f, x0, x1, y, v0, v1, minor, major, fmt=None, down=True, inten=0.8, si
         ks, vals, xs = ks[m], vals[m], xs[m]
         ln = ln[m] * (1.0 + 1.8 * np.exp(-(head - pos[m]) / 0.07))
     sgn = 1.0 if down else -1.0
-    f.segments(layer, xs, np.full_like(xs, y), xs, y + sgn * ln, inten)
+    f.segments(layer, xs, np.full_like(xs, y), xs, y + sgn * ln, E.wl(inten), width=E.ww(1.0))
     if fmt:
         every = label_every or major
         pe = max(1, int(round(every / minor)))
@@ -260,7 +261,7 @@ def vruler(f, x, y0, y1, v0, v1, minor, major, fmt=None, right=True, inten=0.8, 
     per = max(1, int(round(major / minor)))
     ln = np.where((ks % per) == 0, 13.0, np.where((ks % max(1, per // 2)) == 0, 8.0, 4.0))
     sgn = 1.0 if right else -1.0
-    f.segments(layer, np.full_like(ys, x), ys, x + sgn * ln, ys, inten)
+    f.segments(layer, np.full_like(ys, x), ys, x + sgn * ln, ys, E.wl(inten), width=E.ww(1.0))
     if fmt:
         for v, y, k in zip(vals, ys, ks):
             if k % per == 0:
@@ -426,10 +427,15 @@ def cross_grid(f, rect, step=96.0, inten=0.34, half=7.0, origin=None, dots=True,
         ky = np.arange(math.ceil((y0 + 10 - oy) / s2), math.floor((y1 - 10 - oy) / s2) + 1)
         KX, KY = np.meshgrid(kx, ky)
         m = ((KX % 4 != 0) | (KY % 4 != 0)).ravel()
+        if E.WALL:                              # single pixels do not land: only the points half-way between the
+            m = m & ((KX % 2 == 0) & (KY % 2 == 0)).ravel()      # crosses are kept, and drawn as dots
         X, Y = (ox + KX * s2).ravel()[m], (oy + KY * s2).ravel()[m]
         if hole is not None:
             m = np.hypot(X - hole[0], Y - hole[1]) > hole[2]
             X, Y = X[m], Y[m]
+        if E.WALL:
+            f.dots("w", X, Y, 1.7, E.wl(inten * 0.75))
+            return
         f.pixels("w", X, Y, inten * 0.75)
 
 
@@ -441,6 +447,10 @@ def starfield(f, rect, n=260, seed=1, t=0.0, drift=(0.0, 0.0), inten=0.6):
     x = x0 + (hash01(k, seed) * w + drift[0] * t * (0.3 + hash01(k, seed + 2))) % w
     y = y0 + (hash01(k, seed + 1) * h + drift[1] * t * (0.3 + hash01(k, seed + 2))) % h
     b = hash01(k, seed + 3)
+    if E.WALL:                                  # one star in two, at full level: its rank is its size
+        m = k % 2 == 0
+        f.dots("w", x[m], y[m], 1.6 + 1.4 * b[m] ** 2, E.wl(inten))
+        return
     f.dots("w", x, y, 0.9 + 1.3 * b ** 4, inten * (0.25 + 0.75 * b ** 2))
 
 
@@ -516,7 +526,7 @@ def through_you_cell(f, ctx, t, alpha=1.0, age=None):
 def scope(f, rect, values, label, readout, alpha=1.0, hot=0.0):
     """Small oscilloscope panel (the 'Voltage' boxes of the bloom scene): red graticule, white trace."""
     x0, y0, x1, y1 = rect
-    f.rect("w", x0, y0, x1, y1, 0.55 * alpha)
+    f.rect("w", x0, y0, x1, y1, E.wl(0.55 * alpha), width=E.ww(1.0))
     gx = np.arange(x0 + 20, x1 - 1, 20.0)
     gy = np.arange(y0 + 20, y1 - 1, 20.0)
     f.segments("r", gx, np.full_like(gx, y0), gx, np.full_like(gx, y1), 0.3 * alpha)
@@ -541,7 +551,7 @@ def strip_base(f, rect=None, title=None, alpha=1.0, band=True, ticks=None, age=N
     if age is None:
         if band:
             f.rects("r", ix0, yb - 3, ix1, yb + 3, alpha)
-        f.segments("w", [ix0, ix0], [iy0, iy1], [ix1, ix1], [iy0, iy1], 0.9 * alpha)
+        f.segments("w", [ix0, ix0], [iy0, iy1], [ix1, ix1], [iy0, iy1], 0.9 * alpha, width=E.ww(1.0))
         if ticks:
             v0, v1, minor, major = ticks
             ruler(f, ix0, ix1, iy0, v0, v1, minor, major, down=True, inten=0.8 * alpha)
@@ -557,7 +567,7 @@ def strip_base(f, rect=None, title=None, alpha=1.0, band=True, ticks=None, age=N
             f.dots("w", [xh], [yb], 4.6, 1.8)
     pr = float(B.ease(B.lin(age, 0.1, 0.5)))                  # the two rules, a little behind the band
     for yy in (iy0, iy1):
-        B.pen(f, "w", ix0, yy, ix1, yy, pr, 0.9 * alpha, width=1.0)
+        B.pen(f, "w", ix0, yy, ix1, yy, pr, 0.9 * alpha, width=E.ww(1.0))
     if ticks:
         v0, v1, minor, major = ticks
         rv = B.lin(age, 0.14, 0.7)
@@ -591,7 +601,11 @@ def _show_strip_body(f, t, ctx, t0, t1, marks, alpha, x0, y0, x1, y1, yb):
     tb = t0 + (np.arange(n) + 0.5) / n * (t1 - t0)
     past = tb <= t
     xb = X(tb)
-    f.rects("w", xb, y0 + 1, xb + 2, y0 + 2 + 40 * lv ** 1.5, np.where(past, 0.95, 0.3) * alpha)
+    if E.WALL:              # what is to come is not grey: only the tip of its bars, the outline of the profile
+        yt = y0 + 2 + 40 * lv ** 1.5
+        f.rects("w", xb, np.where(past, y0 + 1, np.maximum(yt - 3, y0 + 1)), xb + 2, yt, 0.95 * alpha)
+    else:
+        f.rects("w", xb, y0 + 1, xb + 2, y0 + 2 + 40 * lv ** 1.5, np.where(past, 0.95, 0.3) * alpha)
     for key in sd.KEYS:
         ht, he, _ = ctx.det.hits(key, t0, t1, echoes=False)
         if len(ht):
@@ -604,7 +618,7 @@ def _show_strip_body(f, t, ctx, t0, t1, marks, alpha, x0, y0, x1, y1, yb):
         xv = float(X(tv))
         row = sum(1 for p in placed if abs(p - xv) < 14 * len(word) + 30) % 2
         placed.append(xv)
-        f.segments("w", [xv], [yb - 12], [xv], [yb + 12], 0.8 * alpha)
+        f.segments("w", [xv], [yb - 12], [xv], [yb + 12], 0.8 * alpha, width=E.ww(1.0))
         f.tag("r" if tv <= t < tv + 2.5 else "w", xv + 4, yb + 24 + 22 * row, word, size=L.T_MICRO, pad=3,
               alpha=(1.0 if tv <= t else 0.4) * alpha)
     strip_cursor(f, float(X(t)), y0, y1, f"{sd.tc(t)}", alpha)

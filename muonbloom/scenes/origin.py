@@ -53,6 +53,7 @@ from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
+from .. import engine as E
 from ..engine import Camera, hash01, smoothstep, text_w
 from ..show import Scene
 
@@ -256,7 +257,7 @@ def card(f, lay, title, rows, age, red_title=False, red_rows=(), dim_rows=(), cp
         pz = float(B.ease(B.lin(age, CARD_BUILD - 0.25, CARD_BUILD)))      # ... and leaves from the top
         ya, yz = ys0 + (ys1 - ys0) * pz, ys0 + (ys1 - ys0) * pa
         if out and pz < 1.0 and pa > 0.0:
-            f.segments("w", [x - 8.0], [ya], [x - 8.0], [yz], 0.8, width=1.3)
+            f.segments("w", [x - 8.0], [ya], [x - 8.0], [yz], E.wl(0.8), width=E.ww(1.3))
             if pa < 1.0:
                 f.dots("w", [x - 8.0], [yz], 3.0, 1.7)
         B.tag(f, "r" if red_title else "w", x, y, title, age, t0=0.05, size=tsize, pad=8, bold=True, cps=50.0,
@@ -267,7 +268,7 @@ def card(f, lay, title, rows, age, red_title=False, red_rows=(), dim_rows=(), cp
                 continue
             yr = y + 50.0 + j * 26.0
             if pz < 1.0 and yr - 6.0 >= ya:
-                f.segments("w", [x - 8.0], [yr - 6.0], [x - 2.0], [yr - 6.0], 0.8, width=1.3)
+                f.segments("w", [x - 8.0], [yr - 6.0], [x - 2.0], [yr - 6.0], E.wl(0.8), width=E.ww(1.3))
             f.text("r" if k in red_rows else "w", x, yr, B.resolve(s, a, cps=110.0, key=j), size=L.T_SMALL,
                    alpha=0.6 if k in dim_rows else 0.9)
         return
@@ -569,13 +570,17 @@ class StreakField:
             return
         inten = (gain * self.b[m] * (0.5 + 0.5 * np.exp(-0.5 * j ** 2)))[vis]
         x, y, lvl, bold, head_on, red = x[vis], y[vis], lvl[vis], self.bold[m][vis], head_on[vis], self.red[m][vis]
-        ii = np.broadcast_to(np.where(red, 1.3, inten * 0.85)[:, None], lvl.shape) * (lvl > 0.5)       # one level from end to end: no fade
-        for sel, w, lay_ in ((bold & ~red, 1.5, layer), (~bold & ~red, 1.05, layer), (red, 1.9, "r")):
+        ii = np.broadcast_to(np.where(red, 1.3, E.wl(inten * 0.85))[:, None], lvl.shape) * (lvl > 0.5)       # one level from end to end: no fade
+        wb, wt = (2.0, E.WALL_LINE) if E.WALL else (1.5, 1.05)      # (the wall rule: no hairline, no grey line)
+        # ... and, as every line is now white: one thin line in two (a static choice), or the field is a white mass
+        kp = ((np.nonzero(m)[0][vis] % 2 == 0) | bold | red) if E.WALL else np.ones(len(bold), bool)
+        head_on = head_on & kp
+        for sel, w, lay_ in ((bold & ~red, wb, layer), (~bold & ~red & kp, wt, layer), (red, 1.9, "r")):
             if sel.any():
                 f.segments(lay_, x[sel, :-1].ravel(), y[sel, :-1].ravel(), x[sel, 1:].ravel(), y[sel, 1:].ravel(),
                            ii[sel, :-1].ravel(), ii[sel, 1:].ravel(), width=w)
         for sel, lay_ in ((head_on & ~red, layer), (head_on & red, "r")):
-            f.dots(lay_, x[sel, 0], y[sel, 0], np.where(bold[sel] | red[sel], 2.6, 1.8), (1.5 * inten * (lvl[:, 0] > 0.5))[sel])
+            f.dots(lay_, x[sel, 0], y[sel, 0], np.where(bold[sel] | red[sel], 2.6, 1.8), (E.wl(1.5 * inten) * (lvl[:, 0] > 0.5))[sel])
 
 
 # ----------------------------------------------------------------------------
@@ -593,7 +598,7 @@ class Ripples:
         rng = np.random.default_rng(seed)
         self.far = far
         fam = np.sort(np.r_[rng.uniform(70, 780, 9), rng.uniform(780, max(far - 60.0, 900.0), 7)])[::-1]
-        R, tau, bold = [], [], []
+        R, tau, bold, first = [], [], [], []
         self.pulses = np.array([t for t in onsets if t0 + 2.0 < t < T_STAR])
         for k, rk in enumerate(fam):
             n = int(rng.choice([1, 2, 3], p=[0.3, 0.45, 0.25]))
@@ -602,10 +607,14 @@ class Ripples:
                 R.append(rk + rng.normal(0, 4.0) + j * rng.uniform(7, 19))
                 tau.append(ts + 0.09 * j)
                 bold.append(rng.random() < 0.3)
+                first.append(j == 0)
         self.R = np.array(R)
         self.tau = np.array(tau)
         self.bold = np.array(bold)
         n = len(R)
+        # the wall rule: every ring that is drawn is white and at least 1.6 px - so fewer of them: the first of
+        # each family and the bold ones (a static choice), the doubles and triples of hairlines are left out
+        self.keep = (np.array(first) | self.bold) if E.WALL else np.ones(n, bool)
         self.T = rng.uniform(0.85, 1.15, n) * (0.55 + 0.5 * self.R / 900.0)
         self.off = rng.normal(0, 3.6, (n, 2))
         self.fq = rng.uniform(0.07, 0.19, n)
@@ -633,19 +642,21 @@ class Ripples:
         inten = inten * (1.0 + 1.2 * np.exp(-np.maximum(age, 0) / 0.5))
         if soft > 0.0:
             inten = inten * np.clip((r - r_min) / soft, 0.0, 1.0)
-        m = (age > 0) & (r > r_min)
-        for sel, w in ((m & self.bold & ~self.dotted, L.LW_BOLD), (m & ~self.bold & ~self.dotted, 1.3)):
+        m = (age > 0) & (r > r_min) & (self.keep | self.dotted)
+        inten = E.wl(inten)
+        for sel, w in ((m & self.bold & ~self.dotted, L.LW_BOLD), (m & ~self.bold & ~self.dotted, E.ww(1.3))):
             if sel.any():
                 f.rings("w", cx + self.off[sel, 0], cy + self.off[sel, 1], r[sel], inten[sel], width=w)
         for k in np.nonzero(m & self.dotted)[0]:
             a = self.dot_a[int(k)] + self.spin[k] * t
             f.dots("w", cx + self.off[k, 0] + r[k] * np.cos(a), cy + self.off[k, 1] + r[k] * np.sin(a),
-                   1.5 if self.bold[k] else 1.1, 1.3 * inten[k])
+                   (2.2 if self.bold[k] else 1.8) if E.WALL else (1.5 if self.bold[k] else 1.1), 1.3 * inten[k])
         a = t - self.pulses
         pm = (a > 0) & (a < 4.5)
         if pm.any() and scale == 1.0:
             pr = (self.far + 30.0) * (1.0 - np.exp(-a[pm] / 1.35))
-            f.rings("w", np.full(pm.sum(), cx), np.full(pm.sum(), cy), pr, gain * 0.8 * np.exp(-a[pm] / 1.5), width=1.3)
+            f.rings("w", np.full(pm.sum(), cx), np.full(pm.sum(), cy), pr, gain * (1.0 if E.WALL else 0.8) * np.exp(-a[pm] / 1.5),
+                    width=E.ww(1.3))
 
 
 # ----------------------------------------------------------------------------
@@ -759,13 +770,15 @@ class Nova:
         sx, sy, z, ok = cam.project(P)
         sc = FOCAL / np.maximum(z, 1.0)
         m = ok & (sx > L.FX0 - 20) & (sx < L.FX1 + 20) & (sy > L.FY0 - 20) & (sy < L.FY1 + 20)
+        if E.WALL:                                      # heavier crosses: one in three each way on the plane
+            m = m & (np.round(P[:, 0] / 64.0) % 3 == 0) & (np.round(P[:, 1] / 64.0) % 3 == 0)
         f.crosses("w", sx[m], sy[m], 8.0 * sc[m].mean() if m.any() else 8.0, 0.22 * gain)
         # the implosion had pulled the rings in (Origin._star: suck): the bounce throws them back out, and the
         # shock leaves the core - nothing is put in place in one frame
         back = SUCK + (1.0 - SUCK) * float(smoothstep(0.0, 0.35, t - T_X))
         r = rip.radii(t) * back
         a = np.linspace(0, 2 * np.pi, 181)
-        sel = np.nonzero((t - rip.tau > 0) & (r > 60.0 * back))[0]
+        sel = np.nonzero((t - rip.tau > 0) & (r > 60.0 * back) & (rip.keep | rip.dotted))[0]
         shock = 260.0 * (1.0 - math.exp(-(t - T_X) / 0.09)) + 1250.0 * (1.0 - math.exp(-(t - T_X) / 1.6))
         for k in sel:
             rr = r[k] * (1.0 + 0.3 * math.exp(-((r[k] - shock) / 180.0) ** 2))
@@ -773,9 +786,10 @@ class Nova:
             P = np.stack([rr * np.cos(ak) + rip.off[k, 0], rr * np.sin(ak) + rip.off[k, 1], np.zeros_like(ak)], 1)
             px, py, pz, pok = cam.project(P.astype(np.float32))
             if rip.dotted[k]:
-                f.dots("w", px[pok], py[pok], 1.5 if rip.bold[k] else 1.1, 0.8 * gain * rip.i[k])
+                f.dots("w", px[pok], py[pok], (2.2 if rip.bold[k] else 1.8) if E.WALL else (1.5 if rip.bold[k] else 1.1),
+                       E.wl(0.8 * gain * rip.i[k]))
             elif pok.all():
-                f.polyline("w", px, py, gain * rip.i[k] * 0.6, width=L.LW_BOLD if rip.bold[k] else 1.2)
+                f.polyline("w", px, py, E.wl(gain * rip.i[k] * 0.6), width=L.LW_BOLD if rip.bold[k] else E.ww(1.2))
         P = np.stack([shock * np.cos(a), shock * np.sin(a), np.zeros_like(a)], 1)
         px, py, pz, pok = cam.project(P.astype(np.float32))
         if pok.all():
@@ -814,7 +828,7 @@ class Nova:
         r_in = c_in + (r_in - c_in) * out
         ca, sa = np.cos(self.ray_a), np.sin(self.ray_a)
         f.segments("w", x + r_in * ca, y + r_in * sa, x + (r_in + ln) * ca, y + (r_in + ln) * sa,
-                   (0.9 + 1.6 * flash) * gain * self.ray_b, 0.0, width=1.2)
+                   (0.9 + 1.6 * flash) * gain * self.ray_b, 0.0, width=E.ww(1.2))
 
     def draw_hero(self, f, cam, t, gain=1.0):
         """The ray that will reach us: a red hair inside the white, a red point at its tip. Returns the tip."""
@@ -1049,7 +1063,10 @@ class Origin(Scene):
             g = min(hole / 10.0, 1.0)                   # a hole that opens from nothing: no cross goes in one frame
             w = 1.0 - g + g * np.clip((np.hypot(X - C[0], Y - C[1]) - hole) / min(70.0, 4.0 * hole), 0.0, 1.0)
             on = on & (w > 0.0)
-        f.crosses("w", X[on & ~major], Y[on & ~major], 7.0, (0.2 * a * w)[on & ~major])
+        minor = on & ~major
+        if E.WALL:                                      # heavier crosses: one in two each way, or they are a wallpaper
+            minor = minor & ((KX % 2 == 0) & (KY % 2 == 0)).ravel()
+        f.crosses("w", X[minor], Y[minor], 7.0, (0.2 * a * w)[minor])
         f.crosses("w", X[on & major], Y[on & major], 10.0, (0.42 * a * w)[on & major], width=1.3)
         new = on & (row >= head - 1.0)
         if new.any() and head < len(ky) + 1.0:
@@ -1080,15 +1097,15 @@ class Origin(Scene):
         xl, xr = C[0] - g - (C[0] - g - L.FX0) * grow, C[0] + g + (L.FX1 - C[0] - g) * grow
         yt, yb = C[1] - g - (C[1] - g - L.FY0) * grow, C[1] + g + (L.FY1 - C[1] - g) * grow
         f.segments("r", [xl, C[0] + g, C[0], C[0]], [C[1], C[1], yt, C[1] + g],
-                   [C[0] - g, xr, C[0], C[0]], [C[1], C[1], C[1] - g, yb], 0.42, width=1.2)
+                   [C[0] - g, xr, C[0], C[0]], [C[1], C[1], C[1] - g, yb], 0.8 if E.WALL else 0.42, width=E.ww(1.2))
         k = np.arange(1, 30) * 100.0
         for sgn in (-1.0, 1.0):
             xs = C[0] + sgn * k
             xs = xs[(xs > xl) & (xs < xr)]
-            f.segments("r", xs, np.full_like(xs, C[1] - 6), xs, np.full_like(xs, C[1] + 6), 0.6)
+            f.segments("r", xs, np.full_like(xs, C[1] - 6), xs, np.full_like(xs, C[1] + 6), E.wl(0.6), width=E.ww(1.0))
             ys = C[1] + sgn * k
             ys = ys[(ys > yt) & (ys < yb)]
-            f.segments("r", np.full_like(ys, C[0] - 6), ys, np.full_like(ys, C[0] + 6), ys, 0.6)
+            f.segments("r", np.full_like(ys, C[0] - 6), ys, np.full_like(ys, C[0] + 6), ys, E.wl(0.6), width=E.ww(1.0))
 
     def _dot(self, f, t, ctx, size=1.0):
         """The red dot and its crosshair (the axes of the whole image). Returns its radius."""
@@ -1171,12 +1188,12 @@ class Origin(Scene):
         tr = grow * (1.0 - (1.0 - rr / rmax) ** (1.0 / 3.0))        # when the pen passes each tick
         on = age >= tr
         if reach > 60.0:
-            f.segments("w", [C[0] + 60 * ca], [C[1] + 60 * sa], [C[0] + reach * ca], [C[1] + reach * sa], 0.6, width=1.3)
+            f.segments("w", [C[0] + 60 * ca], [C[1] + 60 * sa], [C[0] + reach * ca], [C[1] + reach * sa], E.wl(0.6), width=E.ww(1.3))
             if u < 1.0:
                 f.dots("w", [C[0] + reach * ca], [C[1] + reach * sa], 3.2, 1.7)
         hl = 9.0 + 17.0 * np.exp(-(age - tr[on]) / 0.1)
         f.segments("w", C[0] + rr[on] * ca + hl * sa, C[1] + rr[on] * sa - hl * ca, C[0] + rr[on] * ca - hl * sa,
-                   C[1] + rr[on] * sa + hl * ca, 0.9, width=1.3)
+                   C[1] + rr[on] * sa + hl * ca, 0.9, width=E.ww(1.3))
         right = lay.note_side > 0
         for k, r in enumerate(rr):
             if k % 2 == 0 or not on[k]:
@@ -1222,7 +1239,7 @@ class Origin(Scene):
         hot = ee > 9.0
         f.rects("r", xs[hot], iy1 - 1 - hh[hot] * 0.9, xs[hot] + 3, iy1 - 1, 0.95)
         lo = ~hot
-        f.rects("w", xs[lo], iy1 - 5, xs[lo] + 2, iy1 - 1, 0.5)
+        f.rects("w", xs[lo], iy1 - 5, xs[lo] + 2, iy1 - 1, E.wl(0.5))
         xc = float(X(t))
         pc = B.lin(age, 0.92, 1.02)                         # the cursor drops once the head has passed it
         if pc > 0.0:
@@ -1254,8 +1271,10 @@ class Origin(Scene):
         C = self.C
         k = max(R / 212.0, 0.25)
         gain = gain * float(smoothstep(0.5, 9.0, R))              # it comes out of the point: no first frame
-        fill = np.arange(hole + 6.0, R - 3.0, 1.0 / f.s)          # a dim fill, as rings: the red core stays red
-        f.rings("w", np.full(len(fill), C[0]), np.full(len(fill), C[1]), fill, 0.14 * gain)
+        wall = E.WALL       # the wall rule: no grey in the body - black between full white bars, one line in two
+        if not wall:
+            fill = np.arange(hole + 6.0, R - 3.0, 1.0 / f.s)      # a dim fill, as rings: the red core stays red
+            f.rings("w", np.full(len(fill), C[0]), np.full(len(fill), C[1]), fill, 0.14 * gain)
         # the shells: rings of radial bars
         sr = np.asarray(self.SHELL_R)
         ra, rb = sr[self.bar_band], sr[self.bar_band + 1]
@@ -1265,35 +1284,44 @@ class Origin(Scene):
         a = 2 * np.pi * (self.bar_a + self.bar_turn[self.bar_band] * t)
         br = 0.5 + 0.5 * np.sin(self.blink_ph + self.blink_w * t)
         breath = np.where(self.bar_blink, 0.1 + 0.9 * br * br * (3.0 - 2.0 * br), 1.0)[self.bar_run]
-        on = r1 > r0 + 1.0
-        # (the lines keep one width: a line of 1.25 px or less is drawn in one pass and would change level there)
-        lvl = gain * self.bar_b * breath * (1.0 + 0.5 * pulse) * (0.67 + 0.33 * float(smoothstep(0.4, 0.6, k)))
+        if wall:            # a bar that breathes gets shorter instead of dimmer; its level is the white of the wall
+            r1 = r0 + (r1 - r0) * breath
+            on = (r1 > r0 + 1.0) & (np.arange(len(r0)) % 2 == 0)
+            lvl = np.full(len(r0), min(gain, 1.0))
+        else:
+            on = r1 > r0 + 1.0
+            # (the lines keep one width: a line of 1.25 px or less is drawn in one pass and would change level there)
+            lvl = gain * self.bar_b * breath * (1.0 + 0.5 * pulse) * (0.67 + 0.33 * float(smoothstep(0.4, 0.6, k)))
         f.segments("w", C[0] + r0[on] * np.cos(a[on]), C[1] + r0[on] * np.sin(a[on]), C[0] + r1[on] * np.cos(a[on]),
-                   C[1] + r1[on] * np.sin(a[on]), lvl[on], width=1.5)
+                   C[1] + r1[on] * np.sin(a[on]), lvl[on], width=2.2 if wall else 1.5)
         rr = sr[1:-1] * R
-        ring(f, "w", C[0], C[1], rr, 0.7 * gain * np.clip((rr - hole - 8.0) / 14.0, 0.0, 1.0), width=1.3)
+        ring(f, "w", C[0], C[1], rr, E.wl(0.7 * gain * np.clip((rr - hole - 8.0) / 14.0, 0.0, 1.0)), width=E.ww(1.3))
         # granulation: points that flicker
         P = self.gran
         rg = np.hypot(P[:, 0], P[:, 1]) * R
         edge = np.clip((rg - hole - 5.0) / 10.0, 0.0, 1.0) * np.clip((R - 5.0 - rg) / 8.0, 0.0, 1.0)
         m = edge > 0.0
         flick = 0.6 + 0.4 * np.sin(self.gran_ph + t * 2.3)
-        f.dots("w", C[0] + P[m, 0] * R, C[1] + P[m, 1] * R, self.gran_r[m] * max(k, 0.6),
-               gain * self.gran_b[m] * flick[m] * edge[m])
+        if wall:            # the grains flicker in size, at full level
+            f.dots("w", C[0] + P[m, 0] * R, C[1] + P[m, 1] * R, self.gran_r[m] * max(k, 0.6) * flick[m] * edge[m],
+                   min(gain, 1.0))
+        else:
+            f.dots("w", C[0] + P[m, 0] * R, C[1] + P[m, 1] * R, self.gran_r[m] * max(k, 0.6),
+                   gain * self.gran_b[m] * flick[m] * edge[m])
         ring(f, "w", C[0], C[1], [hole + 3.0], 1.1 * gain * float(smoothstep(hole + 5.0, hole + 24.0, R)), width=1.6)
         # the limb: a bold ring, hotter than white so that it glows, and a line that boils around it
         ring(f, "w", C[0], C[1], [R, R - 6.0 * k], [2.4 * gain, 0.9 * gain], width=3.0)
         th = np.linspace(0.0, 2 * np.pi, 361)
         boil = sum(np.sin(kk * th + ph + w * t) / (1.0 + 0.12 * kk) for kk, ph, w in zip(self.limb_k, self.limb_ph, self.limb_w))
         rb_ = R + (9.0 + 3.6 * boil + 5.0 * pulse) * k
-        f.polyline("w", C[0] + rb_ * np.cos(th), C[1] + rb_ * np.sin(th), 0.9 * gain, width=1.3)
+        f.polyline("w", C[0] + rb_ * np.cos(th), C[1] + rb_ * np.sin(th), 0.9 * gain, width=E.ww(1.3))
         # the crown: rays that breathe and swell with the music; the wind runs out along the long ones
         nv = self.nova
         ln = nv.ray_len * R * (0.78 + 0.22 * np.sin(nv.ray_ph + nv.ray_w * t) + 0.3 * pulse)
         r_in = R + 15.0 * k
         ca, sa = np.cos(nv.ray_a), np.sin(nv.ray_a)
         f.segments("w", C[0] + r_in * ca, C[1] + r_in * sa, C[0] + (r_in + ln) * ca, C[1] + (r_in + ln) * sa,
-                   1.15 * gain * nv.ray_b, 0.0, width=1.2)
+                   1.15 * gain * nv.ray_b, 0.0, width=E.ww(1.2))
         far = nv.ray_len > 0.6
         pw = (nv.ray_u[far] + nv.ray_v[far] * t) % 1.0
         rw = r_in + ln[far] * pw
@@ -1393,7 +1421,7 @@ class Origin(Scene):
             # name decoded): a shell is never just there
             with f.build(a - 0.5 - 0.35 * k, (xx + 1, y0 + 16, xx + cw - 4, y0 + 118), wave=0.12, line=0.2, marks=False,
                          key=70 + k):
-                f.rect("w", xx + 3, y0 + 20, xx + cw - 6, y0 + 62, 0.7 * al)
+                f.rect("w", xx + 3, y0 + 20, xx + cw - 6, y0 + 62, E.wl(0.7 * al), width=E.ww(1.0))
                 if not last:
                     f.rects("w", xx + 7, y0 + 24, xx + cw - 10, y0 + 58, 0.85 * al)
                 else:
@@ -1433,10 +1461,10 @@ class Origin(Scene):
         xa, xb, ya = x0 + 6, x1 - 6, y1 - 24
         frac = math.log10(rk / 10.0) / math.log10(300.0)
         f.rects("r" if implode > 0 else "w", xa, ya - 12, xa + (xb - xa) * frac, ya - 5, 0.95 * al)
-        f.segments("w", [xa], [ya], [xb], [ya], 0.7 * al)
+        f.segments("w", [xa], [ya], [xb], [ya], E.wl(0.7 * al), width=E.ww(1.0))
         for v, lab in ((10.0, "10"), (100.0, "100"), (1000.0, "1 000")):
             xv = xa + math.log10(v / 10.0) / math.log10(300.0) * (xb - xa)
-            f.segments("w", [xv], [ya], [xv], [ya + 7], 0.8 * al)
+            f.segments("w", [xv], [ya], [xv], [ya + 7], E.wl(0.8 * al), width=E.ww(1.0))
             f.text("w", xv + 4, ya + 20, lab, size=L.T_MICRO, alpha=0.65 * al)
         s = title_fit(["NEUTRON STAR AT 30", "-> 30"], x1 - x0 - 150)
         f.text("w", x1, y0 + 36, s, size=L.T_MICRO, alpha=0.75 * al, anchor="rs")

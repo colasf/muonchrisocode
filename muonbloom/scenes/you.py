@@ -48,6 +48,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import human
 from .. import layout as L
@@ -208,6 +209,9 @@ class Body:
         X, Z = np.meshgrid(g, g)
         self.lattice = np.stack([X.ravel(), np.zeros(X.size), Z.ravel()], 1).astype(np.float32)
         self.lat_major = ((np.abs(np.round(X * 10)) % 5 == 0) & (np.abs(np.round(Z * 10)) % 5 == 0)).ravel()
+        self.lat_even = ((np.abs(np.round(X * 10)) % 2 == 0) & (np.abs(np.round(Z * 10)) % 2 == 0)).ravel() & ~self.lat_major
+        self.lev_wall = self.clev % 2 == 0                  # the wall rule: one slice in two (6 cm), full level
+        self.lev_wall_top = self.clev % 10 == 0             # ... one in ten seen from above (they pile up)
 
     def inside(self, p):
         """Which part contains each point (N, 3) -> index or -1."""
@@ -261,7 +265,11 @@ class Body:
     def draw_floor(self, f, cam, gain=1.0):
         sx, sy, z, ok = cam.project(self.lattice)
         fog = np.clip(1.4 - z / 9.0, 0.3, 1.0) if not cam.ortho else 1.0
-        f.pixels("w", sx[ok], sy[ok], (np.where(self.lat_major, 0.9, 0.4) * fog * gain)[ok])
+        if E.WALL:              # the wall rule: single pixels do not land - one point in two each way, as dots that
+            m = ok & self.lat_even          # get smaller with the distance (full level), the majors keep their cross
+            f.dots("w", sx[m], sy[m], 1.4 + 1.0 * np.broadcast_to(fog, sx.shape)[m], min(gain, 1.0))
+        else:
+            f.pixels("w", sx[ok], sy[ok], (np.where(self.lat_major, 0.9, 0.4) * fog * gain)[ok])
         mj = self.lat_major & ok
         f.crosses("w", sx[mj], sy[mj], 4.5, 0.5 * gain)
 
@@ -283,9 +291,12 @@ class Body:
                 v = cam.pos.astype(np.float32)[None] - self.pts
                 v /= np.linalg.norm(v, axis=1, keepdims=True)
                 facing = np.abs((self.nrm * v).sum(1))
-            inten = (0.16 + 0.78 * (1 - facing) ** 2) * cloud * gain * (1.0 - 0.6 * dissolve)
+            if E.WALL:          # the wall rule: no haze over the body - the cloud is the rim of the figure, full level
+                inten = np.clip(2.2 * (1 - facing) ** 2 - 0.25, 0.0, 1.0) * min(cloud * gain, 1.0) * (1.0 - 0.6 * dissolve)
+            else:
+                inten = (0.16 + 0.78 * (1 - facing) ** 2) * cloud * gain * (1.0 - 0.6 * dissolve)
             if top:
-                inten = inten * 0.14
+                inten = inten * (0.0 if E.WALL else 0.14)       # (seen from above the rim piles up into a blob)
             red = np.zeros(len(P), np.float32)
             for hp, strength in hot_pts:
                 d = np.linalg.norm(self.pts - np.asarray(hp, np.float32)[None], axis=1)
@@ -300,6 +311,8 @@ class Body:
             bx, by, bz, bok = cam.project(self.cb)
             okc = aok & bok
             ci = np.full(len(self.ca), (0.27 if not top else 0.09) * slices * gain, np.float32)
+            if E.WALL:          # one slice in two at full level, black between them
+                ci = np.where(self.lev_wall_top if top else self.lev_wall, min(slices * gain, 1.0), 0.0).astype(np.float32)
             if reveal is not None:
                 yc, hh = reveal
                 ylev = self.levels[self.clev]
@@ -308,7 +321,9 @@ class Body:
             if dissolve > 0:
                 ci = ci * np.where(hash01(self.clev, np.arange(len(self.clev)) // 5, 3) > dissolve * 1.15, 1.0, 0.0)
             hot = np.zeros(len(self.ca), np.float32) if hot_lev is None else np.asarray(hot_lev, np.float32)[self.clev]
-            f.segments("w", ax[okc], ay[okc], bx[okc], by[okc], (ci * (1 - hot))[okc], width=1.3)
+            if E.WALL:
+                okc = okc & (ci > 0.0)
+            f.segments("w", ax[okc], ay[okc], bx[okc], by[okc], (ci * (1 - hot))[okc], width=E.ww(1.3))
             hm = okc & (hot > 0.02) & (ci > 0.001)
             if hm.any():
                 f.segments("r", ax[hm], ay[hm], bx[hm], by[hm], 1.4 * hot[hm] * gain, width=1.8)
@@ -321,7 +336,7 @@ class Body:
         ys, off = human.outline(float(r_[0]), float(r_[2]))
         sx = cam.cx + cam.scale * (off + ys * r_[1] - float(cam.pos @ r_))
         sy = cam.cy - cam.scale * (ys * u_[1] - float(cam.pos @ u_))
-        f.dots("w", sx, sy, 1.5, 0.75 * alpha)
+        f.dots("w", sx, sy, E.ww(1.5), E.wl(0.75 * alpha))
 
 
 def draw_muon(f, cam, m, a, col=None, gain=1.0, tag=True, lines=True):
@@ -334,7 +349,8 @@ def draw_muon(f, cam, m, a, col=None, gain=1.0, tag=True, lines=True):
     if not ok.all():
         return
     hero = m["hero"]
-    f.segments("r", sx[:1], sy[:1], sx[1:], sy[1:], (0.8 if hero else 0.55) * fade * gain, width=1.9 if hero else 1.3)
+    f.segments("r", sx[:1], sy[:1], sx[1:], sy[1:], (0.8 if hero or E.WALL else 0.55) * fade * gain,
+               width=1.9 if hero else E.ww(1.3))
     for (u0, u1) in m["runs"]:
         if u0 >= prog:
             continue
@@ -575,11 +591,11 @@ class You(Scene):
             X, Y = float(o[0][0]), float(o[1][0])
             rr = [r for r in (0.25, 0.5, 0.75, 1.0) if cam.scale * r < 0.5 * width(col) + 10]
             with f.build(t - self._cut(t), clip, flow="out", origin=(X, Y), wave=0.35, marks=False, key=31):
-                f.rings("w", [X] * len(rr), [Y] * len(rr), [cam.scale * r for r in rr], 0.32)
+                f.rings("w", [X] * len(rr), [Y] * len(rr), [cam.scale * r for r in rr], E.wl(0.32), width=E.ww(1.0))
                 for r in rr:
                     f.text("w", X + cam.scale * r * 0.7071 + 6, Y + cam.scale * r * 0.7071 + 14, f"{r:.2f} M",
                            size=L.T_MICRO, alpha=0.7)
-                f.segments("r", [clip[0], X], [Y, clip[1]], [clip[2], X], [Y, clip[3]], 0.3)
+                f.segments("r", [clip[0], X], [Y, clip[1]], [clip[2], X], [Y, clip[3]], 0.6 if E.WALL else 0.3)
         self._draw_rain(f, cam, t)
         for m, a in zip(self.mus, ages):
             if a < 0 or a > m["dur"] + (2.6 if m["hero"] else 0.9) or m is self.echo:
@@ -612,7 +628,10 @@ class You(Scene):
         hx, hy, _, hok = cam.project(Hd)
         fade = np.where(age < dur, 1.0, np.exp(-(age - dur) / 0.1))
         ok = aok & hok
-        f.segments("r", ax[ok], ay[ok], hx[ok], hy[ok], 0.1 * fade[ok], 0.42 * fade[ok])
+        if E.WALL:              # the rain: a tail that still dies away, a body that lands
+            f.segments("r", ax[ok], ay[ok], hx[ok], hy[ok], 0.2 * fade[ok], 0.7 * fade[ok], width=1.3)
+        else:
+            f.segments("r", ax[ok], ay[ok], hx[ok], hy[ok], 0.1 * fade[ok], 0.42 * fade[ok])
         fl = ok & (age < dur)
         f.dots("r", hx[fl], hy[fl], 2.0, 1.1)
         gd = ok & (age >= dur) & (age < dur + 0.3)
@@ -670,14 +689,14 @@ class You(Scene):
         xa, xb, ya, yb = x0 - 6, x0 + n * pitch - 2, y + 16, y + 40
         ym = 0.5 * (ya + yb)
         pc, pe = B.lin(a, 0.0, 0.08), float(B.ease(B.lin(a, 0.06, 0.42)))      # its left end, then its two long sides
-        f.segments("w", [xa], [ym - 12 * pc], [xa], [ym + 12 * pc], 0.6)
+        f.segments("w", [xa], [ym - 12 * pc], [xa], [ym + 12 * pc], E.wl(0.6), width=E.ww(1.0))
         xe = xa + (xb - xa) * pe
         if pe > 0.0:
-            f.segments("w", [xa, xa], [ya, yb], [xe, xe], [ya, yb], 0.6)
+            f.segments("w", [xa, xa], [ya, yb], [xe, xe], [ya, yb], E.wl(0.6), width=E.ww(1.0))
             if pe < 1.0:
                 f.dots("w", [xe, xe], [ya, yb], 3.0, 1.7)
             else:
-                f.segments("w", [xb], [ya], [xb], [yb], 0.6)
+                f.segments("w", [xb], [ya], [xb], [yb], E.wl(0.6), width=E.ww(1.0))
         g = B.spring((a - np.arange(n) * STEP) / 0.14)       # a block per 16th note: it opens from its middle line
         on = (g > 0.02) & (xs + pitch - 8 <= xe)
         f.rects("w", xs[on], ym - 7 * g[on], xs[on] + pitch - 8, ym + 7 * g[on], 0.95)
@@ -835,12 +854,13 @@ class You(Scene):
             f.polyline("w", cx_ + rd * np.cos(ring), cy_ + rd * np.sin(ring), 1.05, width=2.2)
             ab = np.linspace(0, 2 * np.pi, 40, endpoint=False) + 0.25 * t       # its shell: a ring of bars, turning
             f.segments("w", cx_ + 0.52 * rd * np.cos(ab), cy_ + 0.52 * rd * np.sin(ab), cx_ + 0.82 * rd * np.cos(ab),
-                       cy_ + 0.82 * rd * np.sin(ab), 0.5)
-            f.polyline("w", cx_ + 0.4 * rd * np.cos(ring), cy_ + 0.4 * rd * np.sin(ring), 0.5)
+                       cy_ + 0.82 * rd * np.sin(ab), E.wl(0.5), width=E.ww(1.0))
+            f.polyline("w", cx_ + 0.4 * rd * np.cos(ring), cy_ + 0.4 * rd * np.sin(ring), E.wl(0.5), width=E.ww(1.0))
             f.dots("r", [cx_], [cy_], 4.0 + 1.8 * kick, 1.5)
             ph = ((t - BAR0) % (BAR / 2)) / (BAR / 2)
             rs = rd + (0.85 * R - rd) * (1 - (1 - ph) ** 2)
-            f.polyline("w", cx_ + rs * np.cos(ring), cy_ + rs * np.sin(ring), 0.42 * (1 - ph) ** 1.5)
+            f.polyline("w", cx_ + rs * np.cos(ring), cy_ + rs * np.sin(ring), (0.95 if E.WALL else 0.42) * (1 - ph) ** 1.5,
+                       width=E.ww(1.0))
             # the rays: 28 of them, as drawn. One is red, aimed at the figure
             th, ln = self.src_th.copy(), self.src_len.copy()
             aim = math.pi if left else 0.0
@@ -1200,7 +1220,7 @@ class You(Scene):
         first = max(a for _, _, _, a in entries)
         plate(f, box, first)
         with f.build(first, box, flow="tb", wave=0.25, key=53):
-            f.rect("w", *box, 0.4)
+            f.rect("w", *box, E.wl(0.4), width=E.ww(1.0))
         for n, ((title, lines, red, age), h) in enumerate(zip(entries, hs)):
             with f.build(age, (x0 + 8, y - size - 6, x0 + w, y + h - size - 12), flow="tb", wave=0.15, marks=False,
                          key=60 + n):
@@ -1233,9 +1253,12 @@ class You(Scene):
         inside = lambda x, y, s=1.0: ((x - ex) / (ea * s)) ** 2 + ((y - ey) / (eb * s)) ** 2 < 1.0
         # skin
         f.polyline("w", X(wx), Y(wavy(-1.5, 0)), 0.95, width=L.LW_BOLD)
-        f.polyline("w", X(wx), Y(wavy(-1.34, 1)), 0.6, width=L.LW)
+        f.polyline("w", X(wx), Y(wavy(-1.34, 1)), E.wl(0.6), width=L.LW)
         sx_ = wx[0] + self.skin[:, 0] * (wx[-1] - wx[0])
-        f.pixels("w", X(sx_), Y(-1.49 + 0.14 * self.skin[:, 1]), 0.55)
+        if E.WALL:              # the grain of the skin: one point in six, as dots
+            f.dots("w", X(sx_[::6]), Y(-1.49 + 0.14 * self.skin[::6, 1]), 1.6, 1.0)
+        else:
+            f.pixels("w", X(sx_), Y(-1.49 + 0.14 * self.skin[:, 1]), 0.55)
         # fat: lobules, each one swelling a little on its own
         ni = int((wx[-1] - wx[0]) / 0.125 / 2) + 2
         i, j = np.meshgrid(np.arange(-ni, ni + 1), np.arange(0, 3))
@@ -1243,8 +1266,8 @@ class You(Scene):
         fx_, fy_ = i * 0.125 + (j % 2) * 0.06 + jx, -1.27 + j * 0.105 + jy
         fph = 6.2832 * hash01(i, j, 6)
         fx_, fy_ = fx_ + 0.007 * np.sin(1.3 * t + fph), fy_ + 0.007 * np.sin(1.05 * t + 1.7 * fph)
-        f.rings("w", X(fx_.ravel()), Y(fy_.ravel()), (0.05 * ppu * (1.0 + 0.07 * np.sin(1.6 * t + 2.3 * fph))).ravel(), 0.3)
-        f.polyline("w", X(wx), Y(wavy(-1.02, 2)), 0.6, width=L.LW)
+        f.rings("w", X(fx_.ravel()), Y(fy_.ravel()), (0.05 * ppu * (1.0 + 0.07 * np.sin(1.6 * t + 2.3 * fph))).ravel(), E.wl(0.3), width=E.ww(1.0))
+        f.polyline("w", X(wx), Y(wavy(-1.02, 2)), E.wl(0.6), width=L.LW)
         # muscle fibres, parting around the bone: a ripple runs along each of them, at its own speed
         def fibre(k, w):
             """y of fibres k at the abscissas w (broadcast), and whether it is outside the bone."""
@@ -1259,8 +1282,12 @@ class You(Scene):
         yy, m = fibre(kf, wx[None, :])
         seg = m[:, :-1] & m[:, 1:]
         xs, ys = np.broadcast_to(X(wx)[None, :], yy.shape), Y(yy)
-        f.segments("w", xs[:, :-1][seg], ys[:, :-1][seg], xs[:, 1:][seg], ys[:, 1:][seg],
-                   np.broadcast_to(self.fib_i[:, None], seg.shape)[seg])
+        if E.WALL:              # one fibre in three, at full level
+            seg = seg & (np.arange(len(self.fib_y)) % 3 == 0)[:, None]
+            f.segments("w", xs[:, :-1][seg], ys[:, :-1][seg], xs[:, 1:][seg], ys[:, 1:][seg], 0.9, width=E.WALL_LINE)
+        else:
+            f.segments("w", xs[:, :-1][seg], ys[:, :-1][seg], xs[:, 1:][seg], ys[:, 1:][seg],
+                       np.broadcast_to(self.fib_i[:, None], seg.shape)[seg])
         # ... and pulses travel along some of them (a short bright stretch of the fibre, its head leading)
         w0, w1 = (WALL[0] - cx) / ppu0, (WALL[2] - cx) / ppu0
         head = w0 + ((self.dash_v * (t - T_IN) + self.dash_o * (w1 - w0)) % (w1 - w0))
@@ -1269,36 +1296,43 @@ class You(Scene):
         dseg = dm[:, :-1] & dm[:, 1:]
         di = np.broadcast_to(np.linspace(0.0, 1.0, 9)[None, :], dw.shape)
         f.segments("w", X(dw)[:, :-1][dseg], Y(dy)[:, :-1][dseg], X(dw)[:, 1:][dseg], Y(dy)[:, 1:][dseg],
-                   0.75 * di[:, :-1][dseg], 0.75 * di[:, 1:][dseg], width=1.5)
+                   E.wl(0.75) * di[:, :-1][dseg], E.wl(0.75) * di[:, 1:][dseg], width=2.4 if E.WALL else 1.5)
         hm = dm[:, -1]
         f.dots("w", X(dw)[:, -1][hm], Y(dy)[:, -1][hm], 1.7, 1.2)
         # bone: cortical shell (its hatching travels round the ring), trabecular sponge, marrow
         a = np.linspace(0, 2 * np.pi, 200)
         f.polyline("w", X(ex + ea * np.cos(a)), Y(ey + eb * np.sin(a)), 1.0, width=L.LW_BOLD + 0.6)
-        f.polyline("w", X(ex + ea * 0.8 * np.cos(a)), Y(ey + eb * 0.74 * np.sin(a)), 0.75, width=L.LW)
-        ah = np.linspace(0, 2 * np.pi, 150, endpoint=False) + 0.2 * t
+        f.polyline("w", X(ex + ea * 0.8 * np.cos(a)), Y(ey + eb * 0.74 * np.sin(a)), E.wl(0.75), width=L.LW)
+        ah = np.linspace(0, 2 * np.pi, 50 if E.WALL else 150, endpoint=False) + 0.2 * t       # (the wall: one hatch in three)
         f.segments("w", X(ex + ea * 0.97 * np.cos(ah)), Y(ey + eb * 0.97 * np.sin(ah)), X(ex + ea * 0.83 * np.cos(ah)),
-                   Y(ey + eb * 0.77 * np.sin(ah)), 0.5)
+                   Y(ey + eb * 0.77 * np.sin(ah)), E.wl(0.5), width=E.ww(1.0))
         swell = 1.0 + 0.012 * math.sin(br)
         nx_ = ex + self.tr_x * swell + 0.012 * np.sin(1.9 * t + self.tr_ph[0])
         ny_ = ey + self.tr_y * swell + 0.012 * np.sin(1.5 * t + self.tr_ph[1])
-        f.segments("w", X(nx_[self.tr_a]), Y(ny_[self.tr_a]), X(nx_[self.tr_b]), Y(ny_[self.tr_b]), 0.6, width=1.3)
+        f.segments("w", X(nx_[self.tr_a]), Y(ny_[self.tr_a]), X(nx_[self.tr_b]), Y(ny_[self.tr_b]), E.wl(0.6), width=E.ww(1.3))
         ok = self.tr_ok
-        f.dots("w", X(nx_[ok]), Y(ny_[ok]), 1.8 + 0.5 * np.sin(2.6 * t + self.tr_ph[0][ok]), 0.8)
+        f.dots("w", X(nx_[ok]), Y(ny_[ok]), 1.8 + 0.5 * np.sin(2.6 * t + self.tr_ph[0][ok]), E.wl(0.8))
         mk = inside(ex + self.marrow[:, 0] * ea, ey + self.marrow[:, 1] * eb, 0.74)
-        f.pixels("w", X(ex + self.marrow[mk, 0] * ea), Y(ey + self.marrow[mk, 1] * eb),
-                 0.45 * (0.55 + 0.45 * np.sin(2.4 * t + self.marrow_ph[mk])))
+        if E.WALL:              # the marrow: one point in four, as dots that twinkle in size
+            mk = mk & (np.arange(len(mk)) % 4 == 0)
+            f.dots("w", X(ex + self.marrow[mk, 0] * ea), Y(ey + self.marrow[mk, 1] * eb),
+                   1.6 * (0.55 + 0.45 * np.sin(2.4 * t + self.marrow_ph[mk])), 1.0)
+        else:
+            f.pixels("w", X(ex + self.marrow[mk, 0] * ea), Y(ey + self.marrow[mk, 1] * eb),
+                     0.45 * (0.55 + 0.45 * np.sin(2.4 * t + self.marrow_ph[mk])))
         # pleura + lung: the alveoli fill and empty, a wave of it running along the lung
         lift = -0.012 * math.sin(br)
         f.polyline("w", X(wx), Y(wavy(0.95, 3) + lift), 0.8, width=L.LW)
-        f.polyline("w", X(wx), Y(wavy(1.0, 3) + lift), 0.55)
+        f.polyline("w", X(wx), Y(wavy(1.0, 3) + lift), E.wl(0.55), width=E.ww(1.0))
         ni = int((wx[-1] - wx[0]) / 0.09 / 2) + 2
         i, j = np.meshgrid(np.arange(-ni, ni + 1), np.arange(0, 7))
         jx, jy = _jit(i, j, 9, 0.02)
         lx, ly = i * 0.09 + (j % 2) * 0.045 + jx, 1.07 + j * 0.08 + jy
         vis = (Y(ly) < Y_BOT + 20).ravel()
         lr = 0.036 * ppu * (1.0 + 0.11 * np.sin(br - 1.1 * lx + 0.6 * j))
-        f.rings("w", X(lx.ravel()[vis]), Y(ly.ravel()[vis] + lift), lr.ravel()[vis], 0.26)
+        if E.WALL:              # the alveoli: one in two, at full level
+            vis = vis & ((i + j) % 2 == 0).ravel()
+        f.rings("w", X(lx.ravel()[vis]), Y(ly.ravel()[vis] + lift), lr.ravel()[vis], E.wl(0.26), width=E.ww(1.0))
         # the track
         self._lattice(f)
         self._track(f, t, tick=15.0)
@@ -1396,14 +1430,14 @@ class You(Scene):
                                (c2x[:-1, :], c2y[:-1, :], c1x[1:, :], c1y[1:, :])):
             X0, Y0 = S(x0.ravel(), y0.ravel())
             X1, Y1 = S(x1.ravel(), y1.ravel())
-            f.segments("w", X0, Y0, X1, Y1, 0.5, width=1.3)
+            f.segments("w", X0, Y0, X1, Y1, E.wl(0.5), width=E.ww(1.3))
         # the nuclei: the points the walls follow (each one sits a little off the seed of its cell)
         NX, NY = S(px.ravel(), py.ravel())
         UX, UY = NX + self.c_nx.ravel() * ppu, NY + self.c_ny.ravel() * ppu
         nr = self.c_nr.ravel() * ppu
         vis = (NX > WALL[0] - 30) & (NX < WALL[2] + 30) & (NY > WALL[1] - 30) & (NY < WALL[3] + 30)
-        f.rings("w", UX[vis], UY[vis], nr[vis], 0.42)
-        f.dots("w", UX[vis], UY[vis], 1.8, 0.7)
+        f.rings("w", UX[vis], UY[vis], nr[vis], E.wl(0.42), width=E.ww(1.0))
+        f.dots("w", UX[vis], UY[vis], 1.8, E.wl(0.7))
         # the path of the track in each cell it meets, from wall to wall: the wall between two cells is where
         # the track is as far from one seed as from the other, so the lengths follow the seeds without a step
         o = self.c_order
@@ -1443,7 +1477,7 @@ class You(Scene):
             n_show = min(len(o), 22)
             plate(f, (sx0, yt - 58, sx1, yt + n_show * 17 + 136), t - CUTS[3] - 0.15, 0.4)
             with f.build(t - CUTS[3] - 0.15, (sx0, yt - 58, sx1, yt + n_show * 17 + 136), flow="tb", wave=0.5, key=51):
-                f.rect("w", sx0, yt - 58, sx1, yt + n_show * 17 + 136, 0.4)
+                f.rect("w", sx0, yt - 58, sx1, yt + n_show * 17 + 136, E.wl(0.4), width=E.ww(1.0))
                 sx0, sx1 = sx0 + 16, sx1 - 16
                 f.tag("w", sx0 + 6, yt - 26, fit_text(["ION PAIRS PER CELL // IN THE ORDER IT MET THEM",
                                                        "ION PAIRS PER CELL"], sx1 - sx0, L.T_MICRO), size=L.T_MICRO, pad=3)
@@ -1499,9 +1533,9 @@ class You(Scene):
         for d in (0.0, dg):
             z = 0.5 + 0.5 * np.sin(k * s + phi + d)                    # 1 = in front
             y = ya - R * np.cos(k * s + phi + d)
-            f.segments("w", xs[:-1], y[:-1], xs[1:], y[1:], 0.4 + 0.85 * z[:-1], 0.4 + 0.85 * z[1:],
+            f.segments("w", xs[:-1], y[:-1], xs[1:], y[1:], E.wl(0.4 + 0.85 * z[:-1]), E.wl(0.4 + 0.85 * z[1:]),
                        width=1.4 + 2.6 * z[:-1])
-        f.segments("w", [w0, w0], [top, bot], [w1, w1], [top, bot], 0.3)
+        f.segments("w", [w0, w0], [top, bot], [w1, w1], [top, bot], E.wl(0.3), width=E.ww(1.0))
         # a rung per base pair: the purine (A, G) is the heavy, longer half, the pyrimidine (T, C) the light one
         sp = self.DNA_RISE * ppu
         n = np.arange(int(math.ceil((w0 + 6 - cx) / sp - 0.5)), int(math.floor((w1 - 6 - cx) / sp - 0.5)) + 1)
@@ -1634,10 +1668,11 @@ class You(Scene):
         for sgn in (-1.0, 1.0):
             hx_ = OX + 0.096 * ppu * np.cos(ang + sgn * 0.912)
             hy_ = OY + 0.096 * ppu * np.sin(ang + sgn * 0.912)
-            f.segments("w", OX, OY, hx_, hy_, 0.55, width=1.3)
-            f.dots("w", hx_, hy_, 3.2, 0.85)
-        f.dots("w", OX, OY, 6.0, 0.9)
-        f.rings("w", OX, OY, 0.14 * ppu, 0.13)
+            f.segments("w", OX, OY, hx_, hy_, E.wl(0.55), width=E.ww(1.3))
+            f.dots("w", hx_, hy_, 3.2, E.wl(0.85))
+        f.dots("w", OX, OY, 6.0, E.wl(0.9))
+        if not E.WALL:          # (the faint ring of every molecule: it cannot land, and at full level it is a wallpaper)
+            f.rings("w", OX, OY, 0.14 * ppu, 0.13)
         self._lattice(f)
         self._track(f, t, width_=1.8)
         tage = t - CUTS[5]
@@ -1695,7 +1730,7 @@ class You(Scene):
         # (figures spinning); the name stays an open red block
         plate(f, box, age - 0.1, 0.45)
         with f.build(age - 0.1, box, flow="tb", wave=0.6, key=52):
-            f.rect("w", *box, 0.4)
+            f.rect("w", *box, E.wl(0.4), width=E.ww(1.0))
             f.tag("r", xl, yl - fs * 1.2, "MEASURED ON THE TRACK", size=L.T_MICRO, pad=3)
             for k, ln in enumerate(lines):
                 f.text("w", xl, yl + 8 + k * fs * 1.45, ln, size=fs, alpha=0.92)

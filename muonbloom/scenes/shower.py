@@ -46,6 +46,7 @@ import zlib
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -67,6 +68,11 @@ K_W = np.array([1.0, 1.0, 1.5, 1.4, 2.6, 1.4], np.float32)
 K_RED = np.array([0, 0, 0, 1, 1, 1], np.int8)
 K_HEAD = np.array([1.2, 0.0, 2.4, 2.8, 4.4, 2.6], np.float32)
 K_HEAD_I = np.array([0.5, 0.0, 1.3, 1.4, 1.6, 1.3], np.float32)
+# The wall rule (engine.WALL): the electromagnetic part is a web of dim hairlines that the brick eats. Fewer tracks
+# (a static choice per track: K_KEEP of them), at a level and a weight that land; they still die away with age.
+K_INT_WALL = np.array([0.95, 0.85, 0.95, 0.9, 1.5, 0.9], np.float32)
+K_W_WALL = np.array([1.6, 1.6, 1.6, 1.6, 2.6, 1.6], np.float32)
+K_KEEP = np.array([0.4, 0.25, 1.0, 1.0, 1.0, 1.0], np.float32)
 
 CITY = "39.103N 084.512W"                       # Cincinnati
 COL_W = 390.0                                   # width of the particle stream column
@@ -793,11 +799,21 @@ class World:
             P = np.stack([xs, np.zeros_like(xs), np.zeros_like(xs)], 1)
             ax, ay, _, _ = cam.project(P)
             f.segments("w", [view[0]], [ay[0]], [view[2]], [ay[0]], 0.9 * gain, width=L.LW)
-            f.segments("w", ax, ay, ax, ay - np.where(np.arange(len(xs)) % 5 == 0, 16, 7), 0.7 * gain)
+            f.segments("w", ax, ay, ax, ay - np.where(np.arange(len(xs)) % 5 == 0, 16, 7), E.wl(0.7 * gain), width=E.ww(1.0))
             return
         sx, sy, z, ok = cam.project(self.lattice)
         inten = np.where(self.lat_major, 0.95, 0.5) * self.fog(z) * gain
-        if kind == "top":
+        if E.WALL:              # the wall rule: single pixels do not land. One point per km (one in two each way) as a
+            L_ = self.lattice   # dot at full level; it gets smaller with the distance and is gone before the horizon
+            m = ok & (np.abs(L_[:, 0]) % 1 < 1e-3) & (np.abs(L_[:, 2]) % 1 < 1e-3)
+            near = np.clip((self.fog(z) - 0.3) / 0.6, 0.0, 1.0)
+            rad = np.where(self.lat_major, 3.4, 2.3) * (0.55 + 0.45 * near) * np.minimum(near / 0.15, 1.0)
+            m = m & (rad > 0.05)
+            f.dots("w", sx[m], sy[m], rad[m], min(float(gain), 1.0))
+            if kind == "top":
+                mj = self.lat_major & ok
+                f.crosses("w", sx[mj], sy[mj], 6.0, 0.6 * gain)
+        elif kind == "top":
             f.pixels("w", sx[ok], sy[ok], inten[ok] * 1.25)
             mj = self.lat_major & ok
             f.crosses("w", sx[mj], sy[mj], 6.0, 0.6 * gain)
@@ -807,7 +823,8 @@ class World:
         P = np.stack([xs, np.zeros_like(xs), np.zeros_like(xs)], 1)
         lx, ly, lz, lok = cam.project(P)
         m = lok[:-1] & lok[1:]
-        f.segments("r", lx[:-1][m], ly[:-1][m], lx[1:][m], ly[1:][m], 0.5 * self.fog(lz[:-1][m]) * gain)
+        f.segments("r", lx[:-1][m], ly[:-1][m], lx[1:][m], ly[1:][m], (0.9 if E.WALL else 0.5) * self.fog(lz[:-1][m]) * gain,
+                   width=E.ww(1.0))
 
     def draw_cascades(self, f, cam, age, alive, env, gain=1.0, kinds=None, floor=None):
         """The tracks of the live events, each drawn up to where its particle is now.
@@ -817,6 +834,15 @@ class World:
         if not len(live):
             return
         idx = np.concatenate([np.arange(*self.ranges[e]) for e in live])
+        k_int, k_w = (K_INT_WALL, K_W_WALL) if E.WALL else (K_INT, K_W)
+        if E.WALL:
+            keep_w = getattr(self, "_wall_keep", None)
+            if keep_w is None:                               # per track (a run of segments that follow each other)
+                track = np.cumsum(np.r_[True, np.diff(self.SA) != 1])
+                keep_w = self._wall_keep = hash01(track, 77) < K_KEEP[self.SK]
+            idx = idx[keep_w[idx]]
+            if not len(idx):
+                return
         if kinds is not None:
             lut = np.zeros(len(K_INT), bool)
             lut[list(kinds)] = True
@@ -839,7 +865,7 @@ class World:
         frac = np.clip((G[part] - ta[part]) / np.maximum(tb[part] - ta[part], 1e-6), 0, 1)
         pb[part] = pa[part] + (pb[part] - pa[part]) * frac[:, None]
         tau = K_TAU[kind]
-        base = K_INT[kind] * var * env[ev].astype(np.float32) * gain
+        base = k_int[kind] * var * env[ev].astype(np.float32) * gain
         flash = np.where(kind <= K_G, 0.5, 1.3).astype(np.float32)
         keep = None if floor is None else np.asarray(floor, np.float32)[kind]
 
@@ -868,7 +894,7 @@ class World:
         ia = ia * self.fog(az)
         ib = ib * self.fog(bz)
         red = K_RED[kind] == 1
-        width = K_W[kind]
+        width = k_w[kind]
         for m, name in ((ok & ~red, "w"), (ok & red, "r")):
             if m.any():
                 f.segments(name, ax[m], ay[m], bx[m], by[m], ia[m], ib[m], width=width[m])
@@ -904,7 +930,7 @@ class World:
                       h[:, 3:4] + r[:, None] * np.sin(ang)[None]], -1)
         sx, sy, z, ok = cam.project(P.reshape(-1, 3))
         sx, sy, z, ok = (v.reshape(len(h), n + 1) for v in (sx, sy, z, ok))
-        inten = ((1 - u) ** 2.4 * np.where(mu, 0.85, 0.5))[:, None] * self.fog(z) * gain
+        inten = ((1 - u) ** 2.4 * np.where(mu, 0.85, E.wl(0.5)))[:, None] * self.fog(z) * gain
         for sel, name in ((mu, "r"), (~mu, "w")):
             if sel.any():
                 okm = ok[sel][:, :-1] & ok[sel][:, 1:]
@@ -952,7 +978,7 @@ class World:
             r0 = 16 + 40 * u
             fade = (1 - u) ** 1.6
             f.segments("w", cx + np.cos(ang) * r0, cy + np.sin(ang) * r0, cx + np.cos(ang) * (r0 + ln),
-                       cy + np.sin(ang) * (r0 + ln), 0.6 * fade)
+                       cy + np.sin(ang) * (r0 + ln), E.wl(0.6) * fade, width=E.ww(1.0))
             f.dots("w", cx + np.cos(ang) * (r0 + ln), cy + np.sin(ang) * (r0 + ln), 3.0, 1.2 * fade)
             ra = np.linspace(0.0, 2 * np.pi, 121)              # (a fixed number of vertices: the ring only grows)
             rr = 20 + 230 * (1 - (1 - u) ** 2)
@@ -1022,7 +1048,7 @@ class World:
             with f.build(B.io(a, 2.6 - a, out=0.35, span=0.6), bx, flow="out", origin=(x, y), wave=0.12, line=0.12,
                          cps=80.0, marks=False):
                 f.dots("w", [x], [y], 2.2, 1.0)
-                f.segments("w", [x], [y], [x + 20], [y - 20], 0.5)
+                f.segments("w", [x], [y], [x + 20], [y - 20], E.wl(0.5), width=E.ww(1.0))
                 if word:
                     f.tag("r" if red else "w", x + 24, y - 24, word, size=L.T_SMALL, pad=3)
                     f.text("w", x + 24 + 10.4 * len(word) + 16, y - 24, num, size=L.T_SMALL)
@@ -1043,7 +1069,7 @@ class World:
         with f.build(age, (x0 - 6, y0 - 8, x1 + 6, y1 + 6), flow="tb", wave=0.4, key=46):
             f.rects("w", x0, y0, x1, y0 + 5, 0.95 * alpha)
             f.tag("w", x0 + 4, y0 + 32, title, size=L.T_MICRO, pad=3, alpha=alpha)
-            f.segments("w", [x1, x0], [y0, y1], [x1, x1], [y1, y1], 0.6 * alpha)
+            f.segments("w", [x1, x0], [y0, y1], [x1, x1], [y1, y1], E.wl(0.6 * alpha), width=E.ww(1.0))
             pitch = 19.0
             size = col_type(rect)
             n_rows = int((y1 - y0 - 96) / pitch)
@@ -1122,7 +1148,7 @@ class World:
                     f.rects("r", bx[mm], y1 - 38 - hb[mm], bx[mm] + 6, y1 - 38, 0.95 * alpha)
                 else:
                     hb = 18.0 * np.sqrt(cnt / norm) * hash01(np.arange(160), k)
-                    f.rects("w", bx[m], y1 - 38 - hb[m], bx[m] + 6, y1 - 38, 0.55 * alpha)
+                    f.rects("w", bx[m], y1 - 38 - hb[m], bx[m] + 6, y1 - 38, E.wl(0.55 * alpha))
             xc = float(X(front))
             f.segments("r", [xc], [y0 - 4], [xc], [y1 + 4], 1.2 * alpha, width=L.LW)
             anchor = "ls" if xc < x1 - 260 else "rs"
@@ -1217,9 +1243,14 @@ def altitude_rules(f, ctx, st, cam, x_ref, z_ref, lay=None, hmax=17, label_x=Non
     hs = [h for h in range(hmax) if view[1] + 8 < float(py[h]) < view[3] - 4]
     rect = (x0, view[1], x1, view[3])
     with f.build(age, rect, flow="tb", wave=wave, line=0.3, marks=False, key=43):
-        for five in (True, False):       # two calls: the few five-km rules keep the head of their pen
+        for five in ((True,) if E.WALL else (True, False)):      # two calls: the few five-km rules keep the head of their pen
+            # (the wall rule: the five-km rules only, at a level that lands; every km keeps its label)
             ys = np.array([float(py[h]) for h in hs if (h % 5 == 0) == five], np.float32)
             if len(ys):
+                if E.WALL:      # ... as dashes: a full white rule across the whole view would cut it in slices
+                    gx, gy = (v.ravel() for v in np.meshgrid(np.arange(x0, x1 - 8.0, 26.0, dtype=np.float32), ys))
+                    f.segments("w", gx, gy, gx + 8.0, gy, min(float(gain), 1.0), width=E.WALL_LINE)
+                    continue
                 f.segments("w", np.full_like(ys, x0), ys, np.full_like(ys, x1), ys, (0.3 if five else 0.13) * gain)
     with f.build(age if label_age is None else label_age, rect, flow="tb", wave=wave, marks=False, key=44):
         for h in hs:
@@ -1460,7 +1491,7 @@ class Shower(Scene):
         e = self.world.events[0]
         ax, ay, _, _ = cam.project(np.stack([e["G"], e["P1"]]).astype(np.float32))
         with f.build(age, clip, flow="tb", wave=0.2, marks=False, key=key):          # drawn the way it will come
-            f.segments("r", [ax[1]], [ay[1]], [ax[0]], [ay[0]], 0.4)
+            f.segments("r", [ax[1]], [ay[1]], [ax[0]], [ay[0]], 0.7 if E.WALL else 0.4)
 
     def _front_line(self, f, ctx, t, a, front, age0):
         """The front: one red line across every plate, at the same altitude in all of them; the ground and its
@@ -1586,9 +1617,9 @@ class Shower(Scene):
                 lay = "r" if name == "mu" else "w"
                 yy = y0 + 30 + r * 31
                 f.text(lay, x0 + 2, yy + 13, lab, size=L.T_MICRO, alpha=0.9)
-                f.segments("w", [bx0], [yy + 18], [bx1], [yy + 18], 0.35)
+                f.segments("w", [bx0], [yy + 18], [bx1], [yy + 18], E.wl(0.35), width=E.ww(1.0))
                 xt = bx0 + np.arange(0, dec + 0.01) / dec * (bx1 - bx0)
-                f.segments("w", xt, np.full_like(xt, yy + 18), xt, np.full_like(xt, yy + 12), 0.6)
+                f.segments("w", xt, np.full_like(xt, yy + 18), xt, np.full_like(xt, yy + 12), E.wl(0.6), width=E.ww(1.0))
                 if n > 0:
                     hud.bars(f, lay, bx0, yy + 2, bx0 + min(1.0, math.log10(n + 1.0) / dec) * (bx1 - bx0), yy + 14, 0.95)
                 f.text(lay, x1 - 2, yy + 14, f"{n:05d}", size=L.T_SMALL, alpha=0.95, anchor="rs")
@@ -1602,9 +1633,9 @@ class Shower(Scene):
             rx0, rx1 = x0 + 4.0, x1 - 4.0
             yr = y0 + 64.0
             px = lambda v: rx0 + np.asarray(v, np.float64) / X_AIR * (rx1 - rx0)
-            f.segments("w", [rx0], [yr], [rx1], [yr], 0.8)
+            f.segments("w", [rx0], [yr], [rx1], [yr], E.wl(0.8), width=E.ww(1.0))
             xs = px(np.arange(0.0, X_AIR + 0.1, X0_AIR))
-            f.segments("w", xs, np.full_like(xs, yr), xs, np.full_like(xs, yr - 7), 0.6)
+            f.segments("w", xs, np.full_like(xs, yr), xs, np.full_like(xs, yr - 7), E.wl(0.6), width=E.ww(1.0))
             xl = px(np.arange(0.0, X_AIR + 0.1, L_INT))
             f.segments("w", xl, np.full_like(xl, yr), xl, np.full_like(xl, yr - 20), 0.9)
             xc = float(px(X))

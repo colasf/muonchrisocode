@@ -44,6 +44,7 @@ from .. import build as B
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
+from .. import engine as E
 from ..engine import CHAR_W, hash01, smoothstep
 from ..show import Scene
 
@@ -244,6 +245,8 @@ class Outlast(Scene):
     # --- the lanes ------------------------------------------------------------------
     def _draw_strata(self, f, xs, Y, dmax):
         s = self.strata[self.strata <= dmax]
+        if E.WALL:          # the wall rule: the strata are not drawn. Faint, they do not land; as full white dashes
+            return          # they hid the red lanes coming down from the top (the user, 2026-10-07: no line gradients)
         ys = Y(s)
         f.segments("w", np.full_like(ys, xs[0] - 8), ys, np.full_like(ys, xs[-1] + 8), ys, 0.05)
 
@@ -262,7 +265,10 @@ class Outlast(Scene):
             vis = head > 1.0
             n = int(vis.sum())
             if n:
-                f.segments(lay, xs[vis], np.full(n, Y_TOP), xs[vis], Y(head[vis]), inten[vis], width=1.3)
+                if which == 0:              # (the wall rule: the white lanes at the level and weight that land)
+                    inten = E.wl(inten)
+                f.segments(lay, xs[vis], np.full(n, Y_TOP), xs[vis], Y(head[vis]), inten[vis],
+                           width=E.ww(1.3) if which == 0 else 1.3)
             dm = dead & vis                         # where each one died: a small bar stays
             if dm.any():
                 yd = Y(head[dm])
@@ -282,7 +288,7 @@ class Outlast(Scene):
                 for k, (ln, it) in enumerate(((20.0, 0.95), (13.0, 0.35), (13.0, 0.35))):
                     th = ang[:, k] * (1.1 if k == 0 else 2.6) + (0 if k == 0 else math.pi * (k - 1.5))
                     Ln = ln * scale * grow
-                    f.segments("w", cx, cy, cx + np.sin(th) * Ln, cy + np.cos(th) * Ln, it * fade, width=1.2)
+                    f.segments("w", cx, cy, cx + np.sin(th) * Ln, cy + np.cos(th) * Ln, E.wl(it) * fade, width=E.ww(1.2))
                 f.dots(lay, cx, cy, 1.7 + 0.8 * micro, 1.5 * fade)
             # arrivals at the ground: a comb growing under the ground line
             gm = S["ground"]
@@ -363,11 +369,11 @@ class Outlast(Scene):
             with f.build(sa - 0.25 - 0.15 * which, rect, flow="tb", wave=0.45, key=30 + which):
                 # the altitude ruler of the block, its top rule, its counters
                 f.set_clip(blk[0] - 2, Y_TOP - 8, blk[1] + 2, Y_GND + 10)
-                f.segments("w", [xr_], [Y_TOP], [xr_], [Y_GND], 0.7)
+                f.segments("w", [xr_], [Y_TOP], [xr_], [Y_GND], E.wl(0.7), width=E.ww(1.0))
                 hud.vruler(f, xr_, Y_TOP, Y_GND, 15.0, alt_bot, minor, major, fmt=fmt, right=right, inten=0.8,
                            size=L.T_MICRO)
                 f.set_clip()
-                f.segments("w", [xs[0] - 10], [Y_TOP], [xs[-1] + 10], [Y_TOP], 0.75, width=L.LW)
+                f.segments("w", [xs[0] - 10], [Y_TOP], [xs[-1] + 10], [Y_TOP], E.wl(0.75), width=L.LW)
                 S = st[which]
                 alive = int((~S["dead"]).sum())
                 gnd = int(S["ground"].sum())
@@ -433,7 +439,7 @@ class Outlast(Scene):
             age = (r - self.r_led[0]) if last else B.io(r - self.r_led[0], self.r_led[1] - r, out=0.45)
             # its dark plate over the lanes opens downwards (and closes when the ledger is taken apart): no fade
             po = float(B.ease(B.lin(age, 0.0, 0.3)))
-            f.dim(self.xc[0] - 8, y0 - 30, self.xc[-1] + 8, y0 - 30 + (Y_GND - 8 - (y0 - 30)) * po, 0.2)
+            f.dim(self.xc[0] - 8, y0 - 30, self.xc[-1] + 8, y0 - 30 + (Y_GND - 8 - (y0 - 30)) * po, 0.0 if E.WALL else 0.2)
         w = x1 - x0
         compact = w < 0.7 * 652.0
         if compact:
@@ -454,7 +460,7 @@ class Outlast(Scene):
                                     "AT GROUND"], w, L.T_MICRO), size=L.T_MICRO, pad=3)
             for dx, name in cols:
                 f.text("w", x + dx * s, y0 + 40 * s, name, size=fh, alpha=0.6)
-            f.segments("w", [x], [y0 + 52 * s], [x + (392 if compact else 652) * s], [y0 + 52 * s], 0.5)
+            f.segments("w", [x], [y0 + 52 * s], [x + (392 if compact else 652) * s], [y0 + 52 * s], E.wl(0.5), width=E.ww(1.0))
             for q, run in enumerate(self.runs):
                 y = y0 + 98 * s + q * pitch
                 cls_x, rel_x = x + cx[-2], x + cx[-1]
@@ -513,7 +519,7 @@ class Outlast(Scene):
         for q, run in enumerate(self.runs):
             yb = y_top + (q + 1) * rh - 10
             hmax = rh - 52
-            f.segments("w", [x0], [yb], [x1], [yb], 0.5 if q <= p else 0.25)
+            f.segments("w", [x0], [yb], [x1], [yb], E.wl(0.5 if q <= p else 0.25), width=E.ww(1.0))
             f.tag("r" if q == p else "w", x0, yb - hmax - 12, f"RUN {q + 1:02d} // GAMMA {run['g']:04.1f}",
                   size=L.T_MICRO, pad=3, alpha=1.0 if q <= p else 0.4)
             if q > p:
@@ -595,12 +601,12 @@ class Outlast(Scene):
             xt = ax0 + 2.197 / 4.0 * (ax1 - ax0)
             f.segments("r", [xt], [ya - 30], [xt], [ya + 16], 1.2, width=L.LW)
             f.tag("r", xt + 7, ya + 62, "TAU 2.197 US", size=L.T_MICRO, pad=3)
-            f.segments("r", [xt], [ya + 16], [xt], [ya + 62], 0.6)
+            f.segments("r", [xt], [ya + 16], [xt], [ya + 62], 0.6, width=E.ww(1.0))
             # lab-time axis, 0..60 us
             f.text("w", ax0, yb - 34, f"T_LAB    {t_lab:07.3f} US", size=L.T_SMALL, alpha=0.8)
             hud.ruler(f, ax0, ax1, yb, 0.0, 60.0, 2.0, 20.0, fmt=lambda v: f"{v:.0f}", down=True, lab_dy=30)
             xl = float(ax0 + min(t_lab, 60.0) / 60.0 * (ax1 - ax0))
-            f.rects("w", ax0, yb - 16, xl, yb - 6, 0.55)
+            f.rects("w", ax0, yb - 16, xl, yb - 6, E.wl(0.55))
         if run["Lr"] < ATM:                       # the clock passes the lifetime: the tag is made at that moment,
             r_past = T_TRAVEL * float(_finv(run["Lr"] / ATM))             # and taken apart before the next run resets the clock
             B.tag(f, "r", x1, ya - 34, _fit(["PAST ITS LIFETIME", "> TAU"], w - 19 * L.T_SMALL * CHAR_W - 16, L.T_MICRO),
@@ -617,9 +623,14 @@ class Outlast(Scene):
                 yc1 = yc0 + 18
                 # the contracted atmosphere is the one of the run: redrawn when the run starts
                 with f.build(own if k else None, rect, wave=0.3, marks=False, key=92):
-                    s_ = ax0 + self.strata[::(int(math.ceil(g)) if k else 1)] / ATM * wdt
-                    f.segments("w", s_, np.full(len(s_), yc0 + 2), s_, np.full(len(s_), yc1 - 2), 0.3 if k == 0 else 0.5)
-                    f.rect("w", ax0, yc0, ax0 + wdt, yc1, 0.8 if k else 0.45, width=L.LW if k else 1.0)
+                    if E.WALL:              # the wall rule: one stratum in four, full white, black between them
+                        s_ = ax0 + self.strata[::4 * (int(math.ceil(g)) if k else 1)] / ATM * wdt
+                        f.segments("w", s_, np.full(len(s_), yc0 + 2), s_, np.full(len(s_), yc1 - 2), 1.0, width=L.LW)
+                        f.rect("w", ax0, yc0, ax0 + wdt, yc1, 1.0, width=L.LW)
+                    else:
+                        s_ = ax0 + self.strata[::(int(math.ceil(g)) if k else 1)] / ATM * wdt
+                        f.segments("w", s_, np.full(len(s_), yc0 + 2), s_, np.full(len(s_), yc1 - 2), 0.3 if k == 0 else 0.5)
+                        f.rect("w", ax0, yc0, ax0 + wdt, yc1, 0.8 if k else 0.45, width=L.LW if k else 1.0)
                     f.text(lay, ax0, yc1 + 24, _fit(opts, full, L.T_MICRO), size=L.T_MICRO, alpha=0.9)
                 xm = ax0 + frac * wdt
                 f.segments(lay, [xm], [yc0 - 6], [xm], [yc1 + 6], 1.2, width=L.LW)
@@ -636,13 +647,13 @@ class Outlast(Scene):
         rect = (x0 - 8.0, 724.0, x1 + 8.0, 1170.0)
         with f.build(sa - 0.6, rect, wave=0.45, key=85):
             hud.panel_header(f, x0, x1, 748, _fit(["SURVIVAL // N/N0 VS DISTANCE", "SURVIVAL // N/N0"], w, L.T_MICRO))
-            f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.7, width=L.LW)
+            f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], E.wl(0.7), width=L.LW)
             hud.ruler(f, px0, px1, py1, 0.0, 15.0, 1.0, 5.0, fmt=lambda v: f"{v:.0f} KM" if v < 14 else "", down=True,
                       lab_dy=32)
             f.text("w", px1, py1 + 32, "15", size=L.T_MICRO, alpha=0.75, anchor="rs")
             for v in (0.25, 0.5, 0.75, 1.0):
                 y = py1 - v * (py1 - py0)
-                f.segments("w", [px0 - 9], [y], [px0], [y], 0.7)
+                f.segments("w", [px0 - 9], [y], [px0], [y], E.wl(0.7), width=E.ww(1.0))
                 f.text("w", px0 - 12, y + 5, f"{v:.2f}"[1:] if v < 1 else "1", size=L.T_MICRO, alpha=0.6, anchor="rs")
             # the two theoretical curves and the two probabilities are the ones of the run: rewritten at its start
             d = np.linspace(0, ATM, 220)
@@ -650,7 +661,10 @@ class Outlast(Scene):
             with f.build(own, (px0, py0, px1, py1), flow="lr", wave=0.5, marks=False, key=86):
                 for Ld, lay in ((run["Lc"], "w"), (run["Lr"], "r")):
                     yv = py1 - np.exp(-d / Ld) * (py1 - py0)
-                    f.dots(lay, xs[::3], yv[::3], 1.3, 0.8)
+                    if E.WALL:              # a dotted curve that lands: fewer, larger, full level
+                        f.dots(lay, xs[::8], yv[::8], 2.0, 1.0)
+                    else:
+                        f.dots(lay, xs[::3], yv[::3], 1.3, 0.8)
                 pc = math.exp(-ATM / run["Lc"])
                 pr = math.exp(-ATM / run["Lr"])
                 room = px1 - px0 - 30
@@ -690,9 +704,9 @@ class Outlast(Scene):
                 hh = np.clip(run["dr"][order] / ATM, 0, 1) * 44.0
                 f.rects("w", bx[m], y0 + 1, bx[m] + 2, y0 + 2 + hh[m], 0.95)
                 hc = np.maximum(np.clip(run["dc"][order] / ATM, 0, 1) * 30.0, 2.0)
-                f.rects("w", bx[m], y1 - 1 - hc[m], bx[m] + 2, y1 - 1, 0.7)
+                f.rects("w", bx[m], y1 - 1 - hc[m], bx[m] + 2, y1 - 1, E.wl(0.7))
                 lay = "r" if p == p_now else "w"
-                f.segments("w", [xs0], [yb - 14], [xs0], [yb + 14], 0.8)
+                f.segments("w", [xs0], [yb - 14], [xs0], [yb + 14], 0.8, width=E.ww(1.0))
                 f.tag(lay, xs0 + 5, yb + 28, f"RUN {p + 1:02d} GAMMA {run['g']:04.1f}", size=L.T_MICRO, pad=3,
                       alpha=1.0 if p <= p_now else 0.45)
             xo = float(X(self.t_out))
@@ -725,9 +739,13 @@ class Outlast(Scene):
                         dead = S["dead"][ids]
                         f.rects("r" if which else "w", cx[gnd] + 2, cy, cx[gnd] + cw - 2, cy + 18, 1.0)
                         live = ~gnd & ~dead
-                        f.rects("w", cx[live] + 4, cy + 7, cx[live] + cw - 4, cy + 11, 0.7)
+                        f.rects("w", cx[live] + 4, cy + 7, cx[live] + cw - 4, cy + 11, E.wl(0.7))
                         nd = int(dead.sum())
-                        f.segments("w", cx[dead] + 3, np.full(nd, cy + 9), cx[dead] + cw - 3, np.full(nd, cy + 9), 0.3)
+                        if E.WALL:          # a dead one: a short full white tick in the middle of its cell
+                            xm = cx[dead] + 0.5 * cw
+                            f.segments("w", xm - 2.5, np.full(nd, cy + 9), xm + 2.5, np.full(nd, cy + 9), 1.0, width=L.LW)
+                        else:
+                            f.segments("w", cx[dead] + 3, np.full(nd, cy + 9), cx[dead] + cw - 3, np.full(nd, cy + 9), 0.3)
         if self.pan_bar:                          # decay barcode (last 6 s)
             x0, x1 = self.pan_bar
             with f.build(sa - 0.65, box(x0, x1), key=89):

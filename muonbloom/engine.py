@@ -19,6 +19,7 @@ of simply appearing - see build.py. Data never fades in.
 from __future__ import annotations
 
 import math
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,6 +32,37 @@ DESIGN_W, DESIGN_H = 2978, 1400
 LAYERS = ("w", "r")
 RED = np.array([1.0, 0.045, 0.035], np.float32)
 CHAR_W = 0.61                                 # Space Mono advance, in em
+
+# The wall rule (2026-10-07, after the first night on site: stray light on the brick eats every grey, the small
+# type and the letters cut out of small tags). Nothing that must be read is grey: marks and small type are drawn
+# at full level and heavier, a small tag is bold text over a rule instead of a box with cut-out letters; what
+# ranks an element is its size, its weight and its density. MUONBLOOM_WALL=0 gives the picture of before.
+WALL = os.environ.get("MUONBLOOM_WALL", "1") != "0"
+WALL_TYPE = 24                                # type under this size is set in bold
+WALL_TAG = 30                                 # a tag under this size is text over a rule
+WALL_RULE = 2.4                               # ... of this weight (design px), and the least weight of a cross
+WALL_LINE = 1.6                               # the least weight of a line that must be seen
+
+
+def wall_level(a):
+    """Level of a mark or of a text on the wall: full from 0.6, never under 0.8 once it is there, and still
+    continuous from nothing (an element that grows out of 0 does not jump)."""
+    a = np.asarray(a, np.float32)
+    return np.where(a >= 1.0, a, np.minimum(a / 0.15, 1.0) * (0.8 + 0.2 * np.clip((a - 0.4) / 0.2, 0.0, 1.0)))
+
+
+def wl(level):
+    """For the scenes: the level of a line, a dot or a text that must be seen (wall_level with the rule on, the
+    level as given with MUONBLOOM_WALL=0). A scalar stays a float."""
+    if not WALL:
+        return level
+    v = wall_level(level)
+    return float(v) if np.ndim(level) == 0 else v
+
+
+def ww(width):
+    """For the scenes: the weight of a line that must be seen (at least WALL_LINE with the rule on)."""
+    return max(width, WALL_LINE) if WALL else width
 
 _FONT_DIRS = [
     Path(__file__).resolve().parents[2] / "touchdesigner" / "muonchristo" / "font",
@@ -416,6 +448,8 @@ class Frame:
     def crosses(self, layer, cx, cy, half, i, width=1.0):
         cx = np.asarray(cx, np.float32)
         cy = np.asarray(cy, np.float32)
+        if WALL and layer == "w":                # a registration mark that lands: larger, heavier, full level
+            half, i, width = np.maximum(np.asarray(half) * 1.4, 9.0), wall_level(i), max(width, WALL_RULE)
         self.segments(layer, np.r_[cx - half, cx], np.r_[cy, cy - half], np.r_[cx + half, cx], np.r_[cy, cy + half],
                       np.r_[np.broadcast_to(i, cx.shape), np.broadcast_to(i, cx.shape)], width=width)
 
@@ -539,6 +573,8 @@ class Frame:
 
     def text(self, layer, x, y, s, size=22, alpha=1.0, anchor="ls", bold=False):
         """Text (Space Mono). Inside a block being built it is decoded out of noise."""
+        if WALL:
+            alpha, bold = float(wall_level(alpha)), bold or size < WALL_TYPE
         b = self._bld
         if b is not None and s:
             if b is _B.MUTE:
@@ -582,7 +618,11 @@ class Frame:
         ref = the string that sizes the box (default: `s`): a tag being written keeps its final box while its
         letters change (`s` must then have the length of `ref`, or be left-anchored); wipe < 1 draws only
         that fraction of the box, from the left. Returns the box (design px on screen), or None.
-        Inside a block being built the box is pushed out and the letters are decoded behind its edge."""
+        Inside a block being built the box is pushed out and the letters are decoded behind its edge.
+        With the wall rule a tag under WALL_TAG is bold text over a rule (the letters cut out of a small box
+        fill in on the brick): same box, same place, what is under it still gives way."""
+        if WALL:
+            alpha, bold = float(wall_level(alpha)), bold or size < WALL_TAG
         b = self._bld
         if b is not None and s and ref is None:
             if b is _B.MUTE:
@@ -605,9 +645,16 @@ class Frame:
         l, t, r, b = d.textbbox((X, Y), ref or s, font=f, anchor=anchor)
         p = pad * self.s
         box = (l - p, t - p, l - p + (r - l + 2 * p) * min(wipe, 1.0), b + p)
-        d.rectangle(box, fill=int(255 * min(alpha, 1.0)))
-        if s:
-            d.text((X, Y), s, font=f, fill=0, anchor=anchor)
+        if WALL and size < WALL_TAG:            # text over a rule
+            d.rectangle(box, fill=0)
+            if s:
+                d.text((X, Y), s, font=f, fill=int(255 * min(alpha, 1.0)), anchor=anchor)
+            h = max(2, int(round(WALL_RULE * self.s)))
+            d.rectangle((box[0], int(box[3]) + 1, box[2], int(box[3]) + h), fill=int(255 * min(alpha, 1.0)))
+        else:
+            d.rectangle(box, fill=int(255 * min(alpha, 1.0)))
+            if s:
+                d.text((X, Y), s, font=f, fill=0, anchor=anchor)
         other = "w" if layer == "r" else "r"
         if other in self._txt:
             self._txt_draw[other].rectangle(box, fill=0)
@@ -623,6 +670,8 @@ class Frame:
             s = b.text(s, x, y, False)
         if alpha <= 0.004 or not s.strip():
             return
+        if WALL:
+            alpha = float(wall_level(alpha))
         img, _ = self._text_layer(layer)
         sc = self.s
         f = font(max(6, int(round(size * sc))))

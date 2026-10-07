@@ -31,6 +31,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -233,14 +234,18 @@ class Messenger(Scene):
         ok = (x > L.FX0) & (x < L.FX1) & (y > L.FY0) & (y < L.FY1)
         b = self.st_b[m][ok]
         dark = 1.0 - 0.75 * float(smoothstep(64.4, 65.4, t)) * (1.0 - float(smoothstep(66.2, 66.9, t)))
-        f.dots("w", x[ok], y[ok], 1.0 + 1.5 * b ** 5, gain * dark * (0.3 + 0.7 * b ** 2))
+        if E.WALL:          # the wall rule: fewer stars (a static choice), each a white dot that lands; the dark
+            keep = b > 0.4  # before the limb makes them smaller instead of greyer
+            f.dots("w", x[ok][keep], y[ok][keep], (1.7 + 1.5 * b[keep] ** 5) * (0.45 + 0.55 * dark), E.wl(gain))
+        else:
+            f.dots("w", x[ok], y[ok], 1.0 + 1.5 * b ** 5, gain * dark * (0.3 + 0.7 * b ** 2))
         sp = self.st_c[m][ok] / a[m][ok] ** 2                # the fastest ones leave a short streak
         fast = sp > 60.0
         if fast.any():
             ln = np.minimum(sp[fast] * 0.09, 60.0)
             ca, sa = np.cos(self.st_a[m][ok][fast]), np.sin(self.st_a[m][ok][fast])
             f.segments("w", x[ok][fast], y[ok][fast], x[ok][fast] + ca * ln, y[ok][fast] + sa * ln,
-                       gain * dark * 0.5, 0.0, width=1.3)
+                       gain * dark * (1.0 if E.WALL else 0.5), 0.0, width=E.ww(1.3))
 
     def _gal_x(self, u):
         """Where a galaxy comes up through the bottom of the wall (u = 0 .. 1, left to right): anywhere but
@@ -436,7 +441,10 @@ class Messenger(Scene):
             gy = y + R * (px * s2 + py * c2)
             al = float(smoothstep(0.0, 0.3, a)) * (1.0 - float(smoothstep(GAL_LIFE - 0.8, GAL_LIFE, a)))
             core = np.exp(-np.hypot(P[:, 0], P[:, 1]) * 2.6)
-            f.dots("w", gx, gy, np.clip(R / 80.0, 1.0, 2.6), al * (0.28 + 0.9 * core))
+            if E.WALL:      # one point in two, each at the white of the wall and large enough to land
+                f.dots("w", gx[::2], gy[::2], np.clip(R / 80.0, 1.6, 2.6), E.wl(al * (0.28 + 0.9 * core[::2])))
+            else:
+                f.dots("w", gx, gy, np.clip(R / 80.0, 1.0, 2.6), al * (0.28 + 0.9 * core))
             f.dots("w", [x], [y], max(2.5, R * 0.05), 1.3 * al)
             if k in self.tag_plan:
                 out.append((k, x, y, R, a))
@@ -472,9 +480,9 @@ class Messenger(Scene):
         for j, (dy, it) in enumerate(((0.0, 1.0), (46.0, 0.6), (84.0, 0.6), (112.0, 1.0))):
             ys = top + dy + R - np.sqrt(R * R - (xs - C[0]) ** 2)
             if j in (0, 3):
-                f.polyline("w", xs, ys, 0.9 * it * u, width=L.LW_BOLD if j == 0 else L.LW)
+                f.polyline("w", xs, ys, E.wl(0.9 * it * u), width=L.LW_BOLD if j == 0 else L.LW)
             else:
-                f.dots("w", xs[::2], ys[::2], 1.5, 0.9 * it * u)
+                f.dots("w", xs[::2], ys[::2], 1.9 if E.WALL else 1.5, E.wl(0.9 * it * u))
         yh = top + 84.0                             # where it will hit: straight below the messenger
         p = float(B.ease(B.lin(t, 65.2, 65.8)))     # the aim line is drawn downwards; the cross rises with the limb
         f.segments("r", [T[0]], [T[1] + 40.0], [T[0]], [T[1] + 40.0 + (yh - T[1] - 40.0) * p], 0.0, 0.8 * p, width=1.3)
@@ -544,7 +552,7 @@ class Messenger(Scene):
             on = ak >= 0.0
             hl = 11.0 * (1.0 + 1.6 * np.exp(-np.maximum(ak, 0.0) / 0.07))
             mx, my = x + ux * s, y + uy * s
-            f.segments("w", (mx - uy * hl)[on], (my + ux * hl)[on], (mx + uy * hl)[on], (my - ux * hl)[on], 0.85, width=1.3)
+            f.segments("w", (mx - uy * hl)[on], (my + ux * hl)[on], (mx + uy * hl)[on], (my - ux * hl)[on], 0.85, width=E.ww(1.3))
         # red rings: one family per drum accent, a small one per kick
         if t >= ACCENTS[0] - 0.02:
             for ta in ACCENTS[ACCENTS <= t]:
@@ -613,7 +621,10 @@ class Messenger(Scene):
         lv = ctx.cues.loud_curve(T0, T1, n)
         tb = T0 + (np.arange(n) + 0.5) / n * (T1 - T0)
         xb = X(tb)
-        f.rects("w", xb, iy0 + 1, xb + 2, iy0 + 2 + 30 * lv ** 1.5, np.where(tb <= t, 0.9, 0.28))
+        if E.WALL:          # what is still to come is a short stub, not a grey bar
+            f.rects("w", xb, iy0 + 1, xb + 2, iy0 + 2 + 30 * lv ** 1.5 * np.where(tb <= t, 1.0, 0.3), 0.9)
+        else:
+            f.rects("w", xb, iy0 + 1, xb + 2, iy0 + 2 + 30 * lv ** 1.5, np.where(tb <= t, 0.9, 0.28))
         for d in range(9, -1, -1):                                  # decades of years
             xd = float(X(when(10.0 ** d)))
             f.segments("w", [xd], [yb - 14], [xd], [yb + 14], 0.95, width=L.LW)
@@ -622,14 +633,14 @@ class Messenger(Scene):
             for m in (2, 5):
                 if d < 9 or m * 10.0 ** d < YEAR0:
                     xm = float(X(when(m * 10.0 ** d)))
-                    f.segments("w", [xm], [yb - 7], [xm], [yb + 7], 0.6)
+                    f.segments("w", [xm], [yb - 7], [xm], [yb + 7], E.wl(0.6), width=E.ww(1.0))
         y = years(t)
         for k, (ye, name) in enumerate(EARTH):
             te = when(ye)
             xe = float(X(te))
             passed = t >= te
             late = xe > ix1 - 330
-            f.segments("w", [xe], [yb + 6], [xe], [yb + 20], 0.9 if passed else 0.4)
+            f.segments("w", [xe], [yb + 6], [xe], [yb + (20 if passed or not E.WALL else 12)], 0.9 if passed else E.wl(0.4), width=E.ww(1.0))
             f.tag("r" if passed and t - te < 2.5 else "w", xe + (-4 if late else 4), yb + 30, name,
                   size=L.T_MICRO, pad=3, alpha=1.0 if passed else 0.4, anchor="rs" if late else "ls")
         xc = float(X(t))
@@ -701,10 +712,10 @@ class Messenger(Scene):
         xs = gx0 + (le - 9.0) / 11.0 * (gx1 - gx0)
         ys = gy0 + (-lf) / 32.0 * (gy1 - gy0)
         f.polyline("w", xs, ys, 0.95, width=L.LW)
-        f.segments("w", [gx0, gx0], [gy0, gy1], [gx0, gx1], [gy1, gy1], 0.6)
+        f.segments("w", [gx0, gx0], [gy0, gy1], [gx0, gx1], [gy1, gy1], E.wl(0.6), width=E.ww(1.0))
         for e in (9, 12, 15, 18):
             xe = gx0 + (e - 9.0) / 11.0 * (gx1 - gx0)
-            f.segments("w", [xe], [gy1], [xe], [gy1 + 6], 0.8)
+            f.segments("w", [xe], [gy1], [xe], [gy1 + 6], 0.8, width=E.ww(1.0))
             f.text("w", xe + 3, gy1 + 18, f"1E{e}", size=L.T_MICRO, alpha=0.6)
         xk = gx0 + (15.5 - 9.0) / 11.0 * (gx1 - gx0)
         yk = gy0 + (2.7 * 6.5) / 32.0 * (gy1 - gy0)

@@ -43,8 +43,8 @@ const float TWR_W = 90.0f, OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W =
 const float RIGHT_W = TWR_W + OUT_W + SND_W + SNP_W + CMT_W + ASK_W;                          // SNAPSHOT, COMMENT and CLAUDE buttons, at its right
 const float BOX_H = 40.0f;                  // the line a comment is typed in, above the bar
 const float PANEL_H = 134.0f;               // the OUTPUT panel and the TOWERS panel, above the bar
-const float GLOW_MAX = 1.0f, RED_MAX = 3.0f, WEIGHT_MAX = 1.5f;      // the ends of its GLOW, RED and WEIGHT sliders
-const float TUNE_X0 = 176.0f, TUNE_W = 180.0f, TUNE_PITCH = 420.0f;  // where those sliders are
+const float GLOW_MAX = 2.0f, RED_MAX = 3.0f, WEIGHT_MAX = 1.5f;      // the ends of its GLOW W, GLOW R, RED and WEIGHT sliders
+const float TUNE_X0 = 176.0f, TUNE_W = 180.0f, TUNE_PITCH = 380.0f;  // where those sliders are
 const float LIFT_MAX = 3.0f;                // the end of the LIFT slider
 const int MOVE_MAX = 400;                   // how far MOVE can take the output from its place, pixels
 const float SLIDER_X0 = 150.0f, SLIDER_W = 300.0f;
@@ -1045,7 +1045,8 @@ struct OutWindow {
 // The OUTPUT panel, above the bar (in the preview window only): what is sent out, and how.
 //     LIFT       the mid levels of the picture raised (Renderer::lift): a slider, 0 at its left; a click on the name: 0
 //     TEST CARD  the test card instead of the show
-//     GLOW       how much of the glow of the scenes is kept (1: all of it, 0: none)
+//     GLOW W     the glow of the white: how much of the glow of the scenes is kept (1: all of it, 0: none, 2: twice)
+//     GLOW R     the same for the red, on its own
 //     RED        gain of the red, before the tonemap (1: as the scenes give it): thin red lines come up, full red stays
 //     WEIGHT     pixels added to the width of every line (0: none; a hairline starts to gain from 0.3)
 //                a click on a name: back to what the scenes give
@@ -1057,7 +1058,7 @@ struct OutWindow {
 struct OutputPanel {
     struct Hit { float x0, y0, x1, y1; int id; };
     bool open = false;
-    int drag = 0;                           // the slider being dragged: 2 LIFT, 31 GLOW, 33 RED, 35 WEIGHT
+    int drag = 0;                           // the slider being dragged: 2 LIFT, 31 GLOW W, 33 GLOW R, 35 RED, 37 WEIGHT
     std::vector<Hit> hits;                  // 1 the name LIFT, 2 its slider, 3 TEST CARD, 4 .. 8 MOVE left right up down 0, 9 AUTO, 10 OFF, 11 .. the displays
     std::vector<Display> list;              // the displays, as shown
 
@@ -1068,7 +1069,7 @@ struct OutputPanel {
     }
 
     void rects(std::vector<Renderer::Over>& o, int w, int h, int bar, float lift, bool card, const std::string& cardNote, const std::wstring& active,
-               bool gone, bool exact, const std::wstring& own, const LiveOptions& lo, int mx, int my, int moveX, int moveY, float glow, float red, float weight,
+               bool gone, bool exact, const std::wstring& own, const LiveOptions& lo, int mx, int my, int moveX, int moveY, float glow, float glowRed, float red, float weight,
                bool autoOn)
     {
         const float y1 = (float)(h - bar), y0 = y1 - PANEL_H, px = 2.0f;
@@ -1106,11 +1107,11 @@ struct OutputPanel {
         x = button(x, y, "0", 8, false, !moveX && !moveY);
         const float xm = x;                 // (where the first row ends)
         if (!cardNote.empty()) gui::text(o, x + 6.0f, y + 7.0f, cardNote, px, 1.0f, 0.85f, 0.0f);
-        // glow, red, line weight: three sliders
+        // glow of the white, glow of the red, red, line weight: four sliders
         y = y0 + 94.0f;
-        const struct { const char* name; float v, vmax; int id; } tune[3] = { { "GLOW", glow, GLOW_MAX, 30 }, { "RED", red, RED_MAX, 32 },
-                                                                             { "WEIGHT", weight, WEIGHT_MAX, 34 } };
-        for (int k = 0; k < 3; k++) {
+        const struct { const char* name; float v, vmax; int id; } tune[4] = { { "GLOW W", glow, GLOW_MAX, 30 }, { "GLOW R", glowRed, GLOW_MAX, 32 },
+                                                                             { "RED", red, RED_MAX, 34 }, { "WEIGHT", weight, WEIGHT_MAX, 36 } };
+        for (int k = 0; k < 4; k++) {
             const float xl = 14.0f + k * TUNE_PITCH, xs = TUNE_X0 + k * TUNE_PITCH, xk = xs + TUNE_W * std::clamp(tune[k].v / tune[k].vmax, 0.0f, 1.0f);
             snprintf(b, sizeof b, "%s %.2f", tune[k].name, tune[k].v);
             gui::text(o, xl, y + 7.0f, b, px, 1.0f, 1.0f, 1.0f);
@@ -1219,9 +1220,10 @@ struct TowerPanel {
 };
 
 // What was set in the OUTPUT panel, kept from one run to the next: engine/output.json
-//     { "lift": 0.60, "display": "\\\\.\\DISPLAY2", "move": [0, 0], "glow": 1.00, "red": 1.00, "weight": 0.00 }
+//     { "lift": 0.60, "display": "\\\\.\\DISPLAY2", "move": [0, 0], "glow": 1.00, "glow_red": 1.00, "red": 1.00, "weight": 0.00 }
+// "glow" is the glow of the white; a file written before "glow_red" gives its "glow" to both.
 // "display": the device name of the display that takes the raster, "" for none, or "auto" (the OUTPUT panel).
-bool loadOutput(const fs::path& path, float& lift, std::wstring& display, int& moveX, int& moveY, float& glow, float& red, float& weight)
+bool loadOutput(const fs::path& path, float& lift, std::wstring& display, int& moveX, int& moveY, float& glow, float& glowRed, float& red, float& weight)
 {
     std::ifstream f(path);
     if (!f) return false;
@@ -1233,8 +1235,9 @@ bool loadOutput(const fs::path& path, float& lift, std::wstring& display, int& m
         const double v = atof(s.c_str() + c + 1);
         if (v >= 0.0 && v <= LIFT_MAX) lift = (float)v;
     }
-    const struct { const char* key; float* v; float vmax; } num[3] = { { "\"glow\"", &glow, GLOW_MAX }, { "\"red\"", &red, RED_MAX },
-                                                                       { "\"weight\"", &weight, WEIGHT_MAX } };
+    struct { const char* key; float* v; float vmax; } num[4] = { { "\"glow\"", &glow, GLOW_MAX }, { "\"glow_red\"", &glowRed, GLOW_MAX },
+                                                                 { "\"red\"", &red, RED_MAX }, { "\"weight\"", &weight, WEIGHT_MAX } };
+    if (s.find("\"glow_red\"") == std::string::npos) num[1].key = "\"glow\"";      // (an older file)
     for (auto& n : num) {
         a = s.find(n.key);
         c = a == std::string::npos ? a : s.find(':', a);
@@ -1264,7 +1267,7 @@ bool loadOutput(const fs::path& path, float& lift, std::wstring& display, int& m
     return true;
 }
 
-bool saveOutput(const fs::path& path, float lift, const std::wstring& display, int moveX, int moveY, float glow, float red, float weight)
+bool saveOutput(const fs::path& path, float lift, const std::wstring& display, int moveX, int moveY, float glow, float glowRed, float red, float weight)
 {
     fs::path tmp = path;
     tmp += L".tmp";
@@ -1276,10 +1279,10 @@ bool saveOutput(const fs::path& path, float lift, const std::wstring& display, i
             if (ch == L'\\') d += '\\';
             d += (char)(ch < 128 ? ch : '?');
         }
-        char b[64];
+        char b[128];
         snprintf(b, sizeof b, "{\n  \"lift\": %.2f,\n  \"display\": \"", lift);
         f << b << d << "\",\n  \"move\": [" << moveX << ", " << moveY << "]";
-        snprintf(b, sizeof b, ",\n  \"glow\": %.2f,\n  \"red\": %.2f,\n  \"weight\": %.2f\n}\n", glow, red, weight);
+        snprintf(b, sizeof b, ",\n  \"glow\": %.2f,\n  \"glow_red\": %.2f,\n  \"red\": %.2f,\n  \"weight\": %.2f\n}\n", glow, glowRed, red, weight);
         f << b;
         if (!f) return false;
     }
@@ -1504,12 +1507,12 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     float lift = 0.0f;
     std::wstring outDevice;                         // the display of the output ("" = none)
     OutWindow out;
-    float glow = 1.0f, red = 1.0f, weight = 0.0f;   // GLOW, RED and WEIGHT of the panel
-    loadOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, red, weight);
+    float glow = 1.0f, glowRed = 1.0f, red = 1.0f, weight = 0.0f;   // GLOW W, GLOW R, RED and WEIGHT of the panel
+    loadOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, glowRed, red, weight);
     bool outAuto = outDevice == L"auto";            // AUTO: the display is whichever other one the machine has
     if (outAuto) outDevice.clear();
     std::wstring autoFailed;                        // (a display AUTO could not open: not tried again until the displays change)
-    p.renderer.tune(glow, red, weight);
+    p.renderer.tune(glow, glowRed, red, weight);
     if (lo.lift >= 0.0f) lift = std::min(lo.lift, LIFT_MAX);
     p.renderer.lift(lift);
     OutputPanel outPanel;
@@ -2047,11 +2050,11 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 if (id == 1) setLift(0.0f);
                 else if (id == 2) outPanel.drag = 2;
                 else if (id == 3) showCard(!cardWanted);
-                else if (id == 31 || id == 33 || id == 35) outPanel.drag = id;
-                else if (id == 30 || id == 32 || id == 34) {            // a click on a name: as the scenes give it
-                    (id == 30 ? glow : id == 32 ? red : weight) = id == 34 ? 0.0f : 1.0f;
-                    p.renderer.tune(glow, red, weight);
-                    if (id == 34) p.invalidate();           // (the lines are drawn again)
+                else if (id == 31 || id == 33 || id == 35 || id == 37) outPanel.drag = id;
+                else if (id == 30 || id == 32 || id == 34 || id == 36) {            // a click on a name: as the scenes give it
+                    (id == 30 ? glow : id == 32 ? glowRed : id == 34 ? red : weight) = id == 36 ? 0.0f : 1.0f;
+                    p.renderer.tune(glow, glowRed, red, weight);
+                    if (id == 36) p.invalidate();           // (the lines are drawn again)
                     outDirty = settingsDirty = true;
                 }
                 else if (id >= 4 && id <= 8) {              // MOVE: a pixel, ten with Shift; 0 puts it back
@@ -2080,16 +2083,16 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 else outPanel.drag = 0;
                 barDirty = true;
             }
-            if (outPanel.drag >= 31) {              // GLOW, RED, WEIGHT
+            if (outPanel.drag >= 31) {              // GLOW W, GLOW R, RED, WEIGHT
                 const int k = (outPanel.drag - 31) / 2;
-                float& v = k == 0 ? glow : k == 1 ? red : weight;
-                const float vmax = k == 0 ? GLOW_MAX : k == 1 ? RED_MAX : WEIGHT_MAX;
+                float& v = k == 0 ? glow : k == 1 ? glowRed : k == 2 ? red : weight;
+                const float vmax = k <= 1 ? GLOW_MAX : k == 2 ? RED_MAX : WEIGHT_MAX;
                 if (win.down) {
                     const float nv = std::round(std::clamp(((float)win.mx - TUNE_X0 - k * TUNE_PITCH) / TUNE_W, 0.0f, 1.0f) * vmax * 20.0f) / 20.0f;
                     if (nv != v) {
                         v = nv;
-                        p.renderer.tune(glow, red, weight);
-                        if (k == 2) p.invalidate();
+                        p.renderer.tune(glow, glowRed, red, weight);
+                        if (k == 3) p.invalidate();
                         outDirty = settingsDirty = true;
                     }
                 } else outPanel.drag = 0;
@@ -2448,7 +2451,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (commenting) commentBox(barRects, win.w, win.h, win.bar, gui::timecode(commentT, o.fps), commentText, asking);
             else if (outPanel.open)
                 outPanel.rects(barRects, win.w, win.h, win.bar, lift, cardWanted, cardNote, outDevice, outGone, out.exact, displayOf(win.hwnd), lo, win.mx,
-                               win.my, out.moveX, out.moveY, glow, red, weight, outAuto);
+                               win.my, out.moveX, out.moveY, glow, glowRed, red, weight, outAuto);
             else if (tool.on)
                 towerPanel.rects(barRects, win.w, win.h, win.bar, tool, win.mx, win.my, !outDevice.empty() && !outGone);
             if (panel && liveDet) meter.rects(barRects, level, levelSel, now());
@@ -2526,7 +2529,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             if (p.renderer.cardOn() && !cardMaker && !cardBroken && cardStale() && makeCard()) cardNote = "MAKING IT AGAIN ...";   // the towers moved
             if (settingsDirty && !outPanel.drag) {
                 settingsDirty = false;
-                if (!saveOutput(outputFile, lift, outAuto ? std::wstring(L"auto") : outDevice, out.moveX, out.moveY, glow, red, weight)) warn("cannot write %s", narrow(outputFile.wstring()).c_str());
+                if (!saveOutput(outputFile, lift, outAuto ? std::wstring(L"auto") : outDevice, out.moveX, out.moveY, glow, glowRed, red, weight)) warn("cannot write %s", narrow(outputFile.wstring()).c_str());
             }
             double dt = w - statAt;
             std::wstring look, hov;
@@ -2646,7 +2649,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     audio.close();
     out.close();
     if (cardMaker) CloseHandle(cardMaker);
-    if (settingsDirty) saveOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, red, weight);
+    if (settingsDirty) saveOutput(outputFile, lift, outDevice, out.moveX, out.moveY, glow, glowRed, red, weight);
     if (spoutOn) spout.ReleaseSender();
     SetThreadExecutionState(ES_CONTINUOUS);
     if (gLog) fclose(gLog);

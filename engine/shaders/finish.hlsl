@@ -73,8 +73,8 @@ float4 PSFinal(float4 pos : SV_Position) : SV_Target
 {
     int2 p = int2(pos.xy);
     float2 light = gA.Load(int3(p, 0));
-    if (gBloomGain != 0.0)
-        light += up2(gB, p, int2(dP0.zw)) * gBloomGain;
+    if (gBloomGain != 0.0 || gBloomGainR != 0.0)
+        light += up2(gB, p, int2(dP0.zw)) * float2(gBloomGain, gBloomGainR);
     light.y *= gRed;                      // the RED of the OUTPUT panel
     float wt = tonemap(light.x), rt = tonemap(light.y);
     float3 rgb = dA == 1 ? float3(1.0 - wt, 1.0 - wt - rt, 1.0 - wt - rt) : wt + rt * float3(1.0, 0.045, 0.035);

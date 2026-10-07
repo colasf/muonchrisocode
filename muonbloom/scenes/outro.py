@@ -67,6 +67,7 @@ from .. import showdata as sd
 from ..engine import CHAR_W, hash01, smoothstep
 from ..show import Scene
 from .messenger import GAMMA as GAMMA_P            # the messenger of the opening: a proton of gamma 3.4E6 ...
+from .. import engine as E
 from .origin import YEAR0                          # ... sent out by a star that collapsed 4.8E9 years ago
 
 T0, T_COIL, T_END = 588.0, 664.44, 726.44
@@ -609,7 +610,7 @@ class Outro(Scene):
         if t >= T_FRAME_OUT[1]:           # black, as the show begins
             return {"frame": False, "cell": False, "edge_ticks": False, "scopes": False, "towers": "own"}
         drain = float(smoothstep(*T_DRAIN, t))
-        self._lattice(f, t, 0.72 + 0.28 * drain)
+        self._lattice(f, t, 0.72 + 0.28 * drain, ctx, drain)
         if t < c["nothing"] + 1.0:
             self._remains(f, t)
         a_img = float(1 - smoothstep(*T_DIM, t))                 # what is DRAWN of the journey dims into the whirl
@@ -674,7 +675,7 @@ class Outro(Scene):
         if t > T_FRAME_OUT[0]:
             opt["frame_alpha"] = float(1 - smoothstep(*T_FRAME_OUT, t))
 
-    def _lattice(self, f, t, gain):
+    def _lattice(self, f, t, gain, ctx=None, drain=1.0):
         """The lattice of the first image of the show (origin.py): 64 px, centred on the red dot, a bolder cross
         every fourth one. Quieter under the journey, at full strength again when everything has returned. At
         the end it is un-drawn the way the opening drew it, backwards: row by row from the bottom up, the row
@@ -690,11 +691,31 @@ class Outro(Scene):
         X, Y = (cx + KX * 64.0).ravel(), (cy + KY * 64.0).ravel()
         major = ((KX % 4 == 0) & (KY % 4 == 0)).ravel()
         on = np.ones(len(X), bool)
+        last = np.zeros(len(X), bool)
         if u > 0.0:
             row = (KY - ky[0]).ravel()
             head = (1.0 - u) * len(ky)
             on = row < head
             last = on & (row >= head - 1.0)
+        if E.WALL:
+            # the wall rule: full white crosses, so fewer of them. Under the journey only the bold ones (256 px);
+            # the small ones (one in two each way, as in the opening) grow back out of the dot while the whirl
+            # drains into it. A cross under the count of the finale or under the credits shrinks to nothing as
+            # they are made (the veils) - its size changes, never its level.
+            dist = np.hypot(X - cx, Y - cy)
+            grow = np.clip((drain * (float(dist.max()) + 90.0) - dist) / 90.0, 0.0, 1.0)
+            minor = ~major & ((KX % 2 == 0) & (KY % 2 == 0)).ravel()
+            half = np.where(major, 14.0, np.where(minor, 9.8 * grow, 0.0)) * np.where(last, 1.35, 1.0)
+            # (while the credits are taken apart the crosses stay away from them, and grow back as the title goes)
+            veils = self._veils(min(t, T_CREDITS_OUT[0]), ctx) if ctx is not None else []
+            if veils:
+                k = np.clip((self._veil_factor(X, Y, veils, soft=16.0) - 0.3) / 0.5, 0.0, 1.0)
+                half = half * (k + (1.0 - k) * float(smoothstep(T_CREDITS_OUT[1] - 0.7, T_CREDITS_OUT[1], t)))
+            m = on & (half > 0.5)
+            x, y, h = X[m], Y[m], half[m]
+            f.segments("w", np.r_[x - h, x], np.r_[y, y - h], np.r_[x + h, x], np.r_[y, y + h], 1.0, width=E.WALL_RULE)
+            return
+        if u > 0.0:
             f.crosses("w", X[last], Y[last], 9.0, 0.9 * gain, width=1.3)
         f.crosses("w", X[on & ~major], Y[on & ~major], 7.0, 0.2 * gain)
         f.crosses("w", X[on & major], Y[on & major], 10.0, 0.42 * gain, width=1.3)
@@ -707,10 +728,10 @@ class Outro(Scene):
         dt = t - T0
         x, y = r["x"] + r["vx"] * dt, r["y"] + r["vy"] * dt
         m = (a > 0.01) & ~r["seg"]
-        f.dots("w", x[m], y[m], r["r"][m], (0.75 * r["b"] * a)[m])
+        f.dots("w", x[m], y[m], r["r"][m], E.wl(0.75 * r["b"] * a)[m])
         m = (a > 0.01) & r["seg"]
         dx, dy = np.cos(r["ang"][m]) * r["ln"][m], np.sin(r["ang"][m]) * r["ln"][m]
-        f.segments("w", x[m], y[m], x[m] + dx, y[m] + dy, (0.5 * r["b"] * a)[m])
+        f.segments("w", x[m], y[m], x[m] + dx, y[m] + dy, E.wl(0.5 * r["b"] * a)[m], width=E.ww(1.0))
         n = int((a > 0.5).sum())
         if n:                             # their count: decoded at the cut, unwritten when the last one goes
             age = B.io(t - T0 - 0.2, self.t_rem_end - t, out=0.4, span=0.6)
@@ -733,7 +754,7 @@ class Outro(Scene):
             s = np.linspace(0.0, 1.0, 520)
             u = (1 - (1 - s) ** 2.0) * u_rev if cp > 0 else s * u_rev
             px, py, _, _ = self._path(u, t)
-            f.polyline("w", px, py, 0.85 * (1 - 0.7 * swirl) * (1 - drain), width=L.LW)
+            f.polyline("w", px, py, E.wl(0.85 * (1 - 0.7 * swirl) * (1 - drain)), width=L.LW)
         if t >= T_ANN_OUT[1] or cp > 0.2:
             return
 
@@ -753,7 +774,7 @@ class Outro(Scene):
         xs = self.X(lts)
         ln = mark(xs, 7.0)
         m = ln > 0.3
-        f.segments("w", xs[m], np.full(m.sum(), AX_Y), xs[m], AX_Y + ln[m], 0.8)
+        f.segments("w", xs[m], np.full(m.sum(), AX_Y), xs[m], AX_Y + ln[m], 0.8, width=E.ww(1.0))
         for k, (lt, lab) in enumerate(self.units):
             x = float(self.X(lt))
             if not self._fits(x + 2, x + 74) or x > self.x_now - 150:
@@ -849,12 +870,12 @@ class Outro(Scene):
                          (x_star - 8, gy - 68, gx + 68, max(star_top, gy + 68) + 4), flow="out",
                          origin=(x_star, star_top), wave=0.35, marks=False, key=52):
                 m = ii > 0.004
-                _circles(f, "w", gx, gy, rr[m], ii[m], n=44)
+                _circles(f, "w", gx, gy, rr[m], E.wl(ii[m]), n=44, width=E.ww(1.0))
                 _circles(f, "r", gx, gy, [6.0 + 22.0 * (1.0 - math.exp(-a / 0.22))],
                          [0.7 * g * math.exp(-a / 0.28) * (1.0 - math.exp(-a / 0.04))], n=44)
                 f.dots("r", [gx], [gy], 4.5 + 2.0 * beat, (1.3 + 0.5 * beat) * g)
                 if gx - 66 > x_star + 8:
-                    f.segments("w", [x_star, x_star], [star_top, gy], [x_star, gx - 66], [gy, gy], 0.45 * g)
+                    f.segments("w", [x_star, x_star], [star_top, gy], [x_star, gx - 66], [gy, gy], E.wl(0.45 * g), width=E.ww(1.0))
         mid = [cc for cc in self.bcols[1:] if not (cc[0] <= self.x_now <= cc[1]) and cc[1] - cc[0] >= 330]
         if mid and t >= T_AXIS[0]:                        # the messenger: a point and the line it draws
             cc = max(mid, key=lambda v: v[1] - v[0])
@@ -884,7 +905,7 @@ class Outro(Scene):
                          (x_a - half - 6, ay_ - 24, x_a + half + 14, AX_Y - 144), flow="tb", wave=0.35, marks=False,
                          key=54):
                 f.segments("r", [ax_], [ay_ - 20], [ax_], [ay_ + 24], 0.9 * g, width=L.LW)
-                f.segments("w", np.full(15, ax_), y_split, ax_ + sp, np.full(15, AX_Y - 198.0), 0.55 * g)
+                f.segments("w", np.full(15, ax_), y_split, ax_ + sp, np.full(15, AX_Y - 198.0), E.wl(0.55 * g), width=E.ww(1.0))
                 f.segments("r", [ax_], [ay_ + 24], [ax_ + 6], [AX_Y - 150], 0.8 * g, width=L.LW)
         if t >= self.t_fig:               # you, at the end of the line
             self._you(f, t, a_img)
@@ -932,7 +953,9 @@ class Outro(Scene):
         xb, yb, db = proj(human.CB)
         yy = y_feet - human.LEVELS[human.CLEV] * S
         near = np.clip((0.5 * (da + db) + 0.06) / 0.12, 0.0, 1.0)         # the side that faces us is the bright one
-        ii = 0.3 + 0.6 * near
+        # (the wall rule: only the side that faces us is drawn, at the level that lands - the far side goes to
+        # nothing as it turns away, where it used to stay as a grey that the wall does not show)
+        ii = 0.9 * near if E.WALL else 0.3 + 0.6 * near
         there = np.abs(yy - AX_Y) <= 190.0 * B.lin(t, self.t_fig, self.t_fig + 0.7)       # from the heart outwards
         heart = np.abs(yy - AX_Y) < 16
         hot = 0.0
@@ -942,9 +965,9 @@ class Outro(Scene):
         if ab >= 0:
             hot = max(hot, math.exp(-ab / 2.2))
         m = there & ~heart
-        f.segments("w", xa[m], ya[m], xb[m], yb[m], ii[m] * g, width=1.2)
+        f.segments("w", xa[m], ya[m], xb[m], yb[m], E.wl(ii[m] * g), width=E.ww(1.2))
         m = there & heart
-        f.segments("w", xa[m], ya[m], xb[m], yb[m], ii[m] * g * (1 - hot), width=1.2)
+        f.segments("w", xa[m], ya[m], xb[m], yb[m], E.wl(ii[m] * g) * (1 - hot), width=E.ww(1.2))
         if hot > 0.02:
             f.segments("r", xa[m], ya[m], xb[m], yb[m], 2.0 * ii[m] * hot * a_img, width=1.2)
             _circles(f, "r", x_heart, AX_Y, [10 + 60 * (1 - hot)], [hot * a_img], n=72, width=L.LW)
@@ -1012,7 +1035,7 @@ class Outro(Scene):
                    else f"OWN TIME {own * 1e6:.2f} / 2.197 US")
             with f.build(age(c["reach"], "clocks"), (x0 - 6, by - 6, x1 + 6, by + 56), flow="lr", wave=0.3, marks=False,
                          key=33):
-                f.rect("w", x0, by, x1, by + 22, 0.7)
+                f.rect("w", x0, by, x1, by + 22, E.wl(0.7), width=E.ww(1.0))
                 hud.bars(f, "r", x0 + 3, by + 3, x0 + 3 + (w - 6) * frac, by + 19, 0.95)
                 f.text("w", x0, by + 48, cap, size=L.T_MICRO, alpha=0.8)
             B.tag(f, "r", x1, by + (52 if w >= 700 else 84), "JUST LONG ENOUGH",
@@ -1029,7 +1052,7 @@ class Outro(Scene):
                 k = int(n * B.lin(a, 0.25, 1.35))             # the trace writes itself in one beat
                 base = y0 + 150
                 xr = x1 - 34.0                    # the last label of the ruler ("0.8") still ends inside the column
-                f.segments("w", [x0], [base], [xr], [base], 0.25)
+                f.segments("w", [x0], [base], [xr], [base], E.wl(0.25), width=E.ww(1.0))
                 if k > 1:
                     f.polyline("w", x0 + u[:k] * (xr - x0), base - v[:k] * 96, 0.95, width=L.LW)
                     if k < n:                     # the pen
@@ -1057,6 +1080,8 @@ class Outro(Scene):
         """'The universe does not stop': the journey again and again, faster, until it is a whirl."""
         age = t - self.d_act
         idx = np.nonzero(age > 0)[0]
+        if E.WALL:                        # the wall rule: trails at the level that lands, so one traveller in two
+            idx = idx[idx % 2 == 0]
         if not len(idx):
             return
         u = (self._phi(t) - self._phi_v(self.d_act[idx]) + self.d_ph[idx]) % 1.0
@@ -1076,9 +1101,13 @@ class Outro(Scene):
             a = a * (1.0 - smoothstep(r_cut - 90.0, r_cut, r[:, 0]))
         credits = 1.0 - 0.45 * float(smoothstep(T_PWR - 0.5, T_PWR + 1.5, t))      # quieter under the credit lines
         b = self.d_b[idx] * a * (0.55 + 0.45 * loud + 0.5 * kick + 1.2 * hit) * (0.7 + 0.5 * m[:, 0]) * credits
+        b = E.wl(b)                       # (the wall rule: the head of a trail at the level that lands; its tail still decays)
         veils = self._veils(t, ctx)
         if veils:
-            b = b * self._veil_factor(px[:, 0], py[:, 0], veils)
+            k = self._veil_factor(px[:, 0], py[:, 0], veils)
+            if E.WALL:                    # ... and nothing is left as a grey under the count or the credits
+                k = np.clip((k - 0.14) / 0.86, 0.0, 1.0)
+            b = b * k
         lit = b > 0.004                   # (what is not lit is not handed to the renderer)
         if not lit.any():
             return
@@ -1100,7 +1129,7 @@ class Outro(Scene):
         r = self.rings * (1 + 0.025 * np.sin(t * 0.9 + 1.7 * k) + 0.02 * kick * (1 + k % 3))
         r = r * (1.0 - drain) ** (1.0 + 0.25 * (k % 4))
         m = r > 6.0
-        _circles(f, "w", self.cx, self.cy, r[m], 0.72 * g * (1 - 0.6 * drain), n=200, width=L.LW)
+        _circles(f, "w", self.cx, self.cy, r[m], E.wl(0.72 * g * (1 - 0.6 * drain)), n=200, width=L.LW)
         kt, ka = ctx.cues.kicks(max(self.t_hit - 0.05, t - 2.5), t + 1e-6)     # every kick throws one more ring out
         if len(kt):
             age = t - kt.astype(np.float64)
@@ -1402,7 +1431,7 @@ class Outro(Scene):
                 if ln:
                     a = age(T_CRED_LINES + 0.35 * k, 6 + (n - 1 - k), len(ln) / 60.0 + 0.4)
                     f.text("w", x0, y + k * s * 1.55, B.resolve(ln, a, cps=60.0, key=20 + k, pad=ln[0] == " "), size=s,
-                           alpha=al)
+                           alpha=al, bold=E.WALL)
         if self.cred["B"]:
             x0, x1 = self.cred["B"]
             w = x1 - x0
@@ -1414,10 +1443,10 @@ class Outro(Scene):
             yn = 410 + ns * 0.92
             f.text("r", x0 - 4, yn, B.resolve(num, age(tb + 0.5, 4, 1.2), cps=12.0, spin=0.6, key=16), size=ns)
             f.text("w", x0, yn + s * 1.8, B.resolve("MUONS WENT THROUGH YOU", age(tb + 1.2, 3, 0.85), cps=50.0, key=17),
-                   size=s, alpha=0.9)
+                   size=s, alpha=0.9, bold=E.WALL)
             caught = f"THE THREE TOWERS CAUGHT {ctx.det.total(T_END)}"
-            f.text("w", x0, yn + s * 5.4, B.resolve(caught, age(tb + 2.0, 2, 1.0), cps=50.0, key=18), size=s, alpha=0.8)
+            f.text("w", x0, yn + s * 5.4, B.resolve(caught, age(tb + 2.0, 2, 1.0), cps=50.0, key=18), size=s, alpha=0.8, bold=E.WALL)
             f.text("w", x0, yn + s * 6.95, B.resolve("YOU FELT NONE OF THEM", age(tb + 2.8, 1, 0.85), cps=50.0, key=19),
-                   size=s, alpha=0.8)
-            B.tag(f, "r", x0, yn + s * 10.4, "IT CONTINUES", age(tb + 3.8, 0, 0.9), size=min(40.0, s * 1.55), pad=8,
+                   size=s, alpha=0.8, bold=E.WALL)
+            B.tag(f, "r", x0, yn + s * 10.4, "IT CONTINUES", age(tb + 3.8, 0, 0.9), size=min(40.0, s * 1.55), pad=8, bold=E.WALL,
                   cps=20.0, key=19, commit=there)

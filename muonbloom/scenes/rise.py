@@ -48,6 +48,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -358,19 +359,20 @@ class Rise(Scene):
             return
         f.rect(layer, tw.x0, tw.top, tw.x1, tw.bot, inten, width=L.LW_BOLD)
         ys = np.arange(tw.top + 48.0, tw.bot - 1, 48.0)
-        f.segments(layer, np.full_like(ys, tw.x0), ys, np.full_like(ys, tw.x0 + 8), ys, 0.8 * inten)
-        f.segments(layer, np.full_like(ys, tw.x1 - 8), ys, np.full_like(ys, tw.x1), ys, 0.8 * inten)
-        f.segments(layer, [tw.x0], [tw.top + tw.det_h], [tw.x1], [tw.top + tw.det_h], 0.7 * inten)
+        lw = E.ww(1.0)                               # (the wall: marks and guides at the weight and the level that land)
+        f.segments(layer, np.full_like(ys, tw.x0), ys, np.full_like(ys, tw.x0 + 8), ys, E.wl(0.8 * inten), width=lw)
+        f.segments(layer, np.full_like(ys, tw.x1 - 8), ys, np.full_like(ys, tw.x1), ys, E.wl(0.8 * inten), width=lw)
+        f.segments(layer, [tw.x0], [tw.top + tw.det_h], [tw.x1], [tw.top + tw.det_h], E.wl(0.7 * inten), width=lw)
         if yh is None:
             return
         yg = yh + 0.5 * tw.w * HEAD_CAP              # where the round head of the column begins
         if yg < tw.top - 1.0:
-            f.segments(layer, [tw.x0, tw.x1], [tw.top, tw.top], [tw.x0, tw.x1], [yg, yg], 0.42 * inten)
+            f.segments(layer, [tw.x0, tw.x1], [tw.top, tw.top], [tw.x0, tw.x1], [yg, yg], E.wl(0.42 * inten), width=lw)
             ys = np.arange(tw.top - 48.0, yg, -48.0)
             if len(ys):
                 ln = 8.0 * np.clip((ys - yg) / 14.0, 0.0, 1.0)        # a mark grows as the light passes it
-                f.segments(layer, np.full_like(ys, tw.x0), ys, tw.x0 + ln, ys, 0.6 * inten)
-                f.segments(layer, tw.x1 - ln, ys, np.full_like(ys, tw.x1), ys, 0.6 * inten)
+                f.segments(layer, np.full_like(ys, tw.x0), ys, tw.x0 + ln, ys, E.wl(0.6 * inten), width=lw)
+                f.segments(layer, tw.x1 - ln, ys, np.full_like(ys, tw.x1), ys, E.wl(0.6 * inten), width=lw)
 
     def _draw_column(self, f, c, yh, t, gain, bands=(), flare=0.0):
         H = c["bot"] - yh
@@ -426,7 +428,7 @@ class Rise(Scene):
             xa, xb = sorted((edge - sgn * 2.0, edge + sgn * 50.0))
             with f.build(B.io(t - self.t_lad[k], self.off[k] + 0.4 - t, out=0.4, span=0.9),
                          (xa, float(yh[k]), xb, Y_LOW), flow="bt", wave=0.4, marks=False, key=60 + (k == "R")):
-                f.segments("w", np.full(N_RUNG, edge), ys, np.full(N_RUNG, edge + sgn * 14), ys, 0.6, width=L.LW)
+                f.segments("w", np.full(N_RUNG, edge), ys, np.full(N_RUNG, edge + sgn * 14), ys, E.wl(0.6), width=L.LW)
                 for i in range(0, N_RUNG, 2):
                     f.text("w", edge + sgn * 30, float(ys[i]) + 5, f"{i + 1:02d}", size=L.T_MICRO, alpha=0.4, anchor=anchor)
             for j, (tn, idx, vel) in enumerate(notes):      # the arps of the music, mirrored on both ladders
@@ -502,6 +504,11 @@ class Rise(Scene):
         tw_ = 0.6 + 0.4 * np.sin(self.fan_ph[:n] + t * (2.0 + 7.0 * u))
         i0 = amt * (0.09 + 0.36 * (1 - u) ** 2) * tw_ * (1.0 + 0.6 * math.tanh(st["pulse"]))
         i0 = i0 * np.clip(nf - np.arange(n), 0.0, 1.0)          # a ray that joins the fan comes up: no pop
+        if E.WALL:              # the wall: one ray in four, full white at its foot, at the weight that lands; it
+            k = slice(0, n, 4)  # still comes up from nothing (wall_level is continuous) and runs out towards its end
+            iw = E.wl(i0[k] * 2.5)
+            f.segments("w", xs[k], ys[k], xe[k], np.full(len(iw), L.FY0 + 3.0), iw, iw * 0.4, width=E.WALL_LINE)
+            return
         f.segments("w", xs, ys, xe, np.full(n, L.FY0 + 3.0), i0, i0 * 0.3)
 
     def _draw_bass(self, f, t, st, ctx):
@@ -520,13 +527,14 @@ class Rise(Scene):
             u = aj / 1.3
             e = (1 - u) ** 2 * pw * min(1.0, self.bass_a[j]) * (0.4 + 0.6 * st["lv"])
             g = 1 - (1 - u) ** 3
-            _ring(f, "w", cx, yh, 30 + 780 * g, 0.8 * e, L.LW)
-            _ring(f, "w", cx, yh, 18 + 380 * g, 0.5 * e)
+            _ring(f, "w", cx, yh, 30 + 780 * g, E.wl(0.8 * e), L.LW)
+            if not E.WALL:      # (the wall: the dim inner ring is not drawn)
+                _ring(f, "w", cx, yh, 18 + 380 * g, 0.5 * e)
             grow = 1 - (1 - min(1.0, aj / 0.3)) ** 3
             ang = self.bass_ang[j]
             ln = (24 + self.bass_len[j] * 440) * grow + 90 * u       # the tips go where they went
             f.segments("w", np.full(len(ang), cx), np.full(len(ang), yh), cx + np.cos(ang) * ln, yh + np.sin(ang) * ln,
-                       0.8 * e, 0.0)
+                       E.wl(0.8 * e), 0.0, width=E.ww(1.0))
             f.dots("w", cx + np.cos(ang) * ln, yh + np.sin(ang) * ln, 2.0, 1.3 * e)
         for (th, key, e_h, echo, _, _) in self.hits:        # a real hit of the centre detector: red
             aj = t - th
@@ -553,6 +561,11 @@ class Rise(Scene):
         twk = 0.55 + 0.45 * np.sin(p[:, 3] * 6.283 + t * (3.0 + 5.0 * p[:, 1]))
         inten = amt * (0.12 + 0.36 * p[:, 1]) * twk * np.sin(np.pi * ph) ** 0.5 * (1.0 + 0.5 * math.tanh(st["pulse"]))
         inten = inten * (1.0 - 0.6 * st["beam"])
+        if E.WALL:              # the wall: one streak in five, its head at the level that lands (its tail runs out)
+            k = slice(0, n, 5)
+            iw = E.wl(inten[k] * 2.2)
+            f.segments("w", x[k], y[k], x[k], (y + ln)[k], iw, iw * 0.12, width=E.WALL_LINE)
+            return
         f.segments("w", x, y, x, y + ln, inten, inten * 0.12, width=1.2)
 
     def _draw_photons(self, f, t, st):
@@ -570,6 +583,11 @@ class Rise(Scene):
         y = y0 - 0.22 * dx
         ln = 26.0 + 60.0 * (1 - ph)
         inten = b * 0.75 * (1 - ph) ** 1.6
+        if E.WALL:              # the wall: one photon in two, heavier; it still dies with the distance
+            k = slice(0, None, 2)
+            iw = E.wl(inten[k] * 1.4)
+            f.segments("w", x[k], y[k], (x + sgn * ln)[k], (y - 0.22 * ln)[k], iw, iw * 0.2, width=E.WALL_LINE)
+            return
         f.segments("w", x, y, x + sgn * ln, y - 0.22 * ln, inten, inten * 0.2)
 
     def _draw_level(self, f, t, st):
@@ -762,22 +780,22 @@ class Rise(Scene):
                 def PY(d):
                     return py1 - (np.log10(d) - d0) / (d1 - d0) * (py1 - py0)
 
-                f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.6)
+                f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], E.wl(0.6), width=E.ww(1.0))
                 decs = list(range(math.ceil(self.lR1), math.floor(self.lR0) + 1))
                 every = 1 if (px1 - px0) / max(len(decs), 1) >= 46 else 2
                 for j, dec in enumerate(decs):
                     xx = float(PX(dec))
-                    f.segments("w", [xx], [py1], [xx], [py1 + 6], 0.7)
+                    f.segments("w", [xx], [py1], [xx], [py1 + 6], E.wl(0.7), width=E.ww(1.0))
                     if j % every == 0:
                         f.text("w", xx + 3, py1 + 20, f"1E{dec:+d}", size=L.T_MICRO, alpha=0.6)
-                sel = slice(None, None, 8)
-                f.dots("w", PX(tb["lR"][sel]), PY(tb["dedx"][sel]), 1.0, 0.35)
+                sel = slice(None, None, 16 if E.WALL else 8)       # (the wall: half the points, larger, full white)
+                f.dots("w", PX(tb["lR"][sel]), PY(tb["dedx"][sel]), 1.6 if E.WALL else 1.0, E.wl(0.35) if not E.WALL else 1.0)
                 mu = st["mu"]
                 m = tb["lR"] >= mu["lR"]
                 if m.sum() > 1:
                     f.polyline("w", PX(tb["lR"][m][::-1]), PY(tb["dedx"][m][::-1]), 1.0, width=L.LW)
                 mx, my = float(PX(mu["lR"])), float(PY(mu["dedx"]))
-                f.segments("r", [mx, px0], [py0 - 4, my], [mx, px1], [py1, my], 0.45)
+                f.segments("r", [mx, px0], [py0 - 4, my], [mx, px1], [py1, my], E.wl(0.45), width=E.ww(1.0))
                 f.dots("r", [mx], [my], 4.4, 1.6)
                 lab = B.resolve("STOPPED", t - PEAK, 40.0, key=21, pad=True) if t >= PEAK else f"{mu['dedx']:07.3f} MEV/CM"
                 f.text("r", g1 - 4, y0 + 36, lab, size=L.T_SMALL, anchor="rs")

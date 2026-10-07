@@ -562,9 +562,10 @@ void Renderer::lift(float v)
     if (mW) finish(false);
 }
 
-void Renderer::tune(float glow, float red, float weight)
+void Renderer::tune(float glow, float glowRed, float red, float weight)
 {
     mGlow = std::max(0.0f, glow);
+    mGlowRed = std::max(0.0f, glowRed);
     mRed = std::max(0.0f, red);
     mWeight = std::max(0.0f, weight);
     if (mW) finish(false);                          // (glow and red: at once; the weight: when a frame is drawn)
@@ -606,6 +607,7 @@ void Renderer::finish(bool floatOut)
     mFrame.lift = mLift;
     mFrame.red = mRed;
     mFrame.bloomGain = mBloom0 * mGlow;
+    mFrame.bloomGainR = mBloom0 * mGlowRed;
     mCtx->UpdateSubresource(mFrameCB.Get(), 0, nullptr, &mFrame, 0, 0);
     ID3D11Buffer* cbs[2] = { mFrameCB.Get(), mDrawCB.Get() };
     mCtx->VSSetConstantBuffers(0, 2, cbs);
@@ -754,7 +756,7 @@ bool Renderer::render(const uint8_t* blob, size_t size, bool floatOut, std::stri
     mInfo.postops = v.count(dl::POSTOPS);
 
     FrameCB fc = { { (float)h.W, (float)h.H }, h.s, std::pow(h.s, 0.35f), h.exposure, h.text_gain, h.bloom_gain * mGlow,
-                   floatOut ? 0.0f : 1.0f, h.dither_seed, mLift, mRed, mWeight };
+                   floatOut ? 0.0f : 1.0f, h.dither_seed, mLift, mRed, mWeight, h.bloom_gain * mGlowRed };
     mBloom0 = h.bloom_gain;
     mFrame = fc;
     mCtx->UpdateSubresource(mFrameCB.Get(), 0, nullptr, &fc, 0, 0);

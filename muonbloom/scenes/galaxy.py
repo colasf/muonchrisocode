@@ -40,6 +40,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -57,6 +58,9 @@ WAVE_V = 0.42                   # speed of the ring a low hit of the music sends
 T_DELAY = 0.6                   # the dot alone, before the first trails leave it
 N_FOUND, GROW = 1700, 11.0      # founders: all born in the first GROW seconds, they never fade
 RATE, YOUNG = 60.0, (20.0, 28.0)   # then the core keeps emitting RATE trails / s, each fading between these ages
+# the wall rule (engine.WALL): the trails are drawn at full level and at the weight of a line that lands, so fewer
+# of them are drawn - a static choice per particle - and far fewer in the bulge, or the centre is a white block
+WALL_KEEP, WALL_KEEP_GEN, WALL_KEEP_BULGE = 0.34, 0.17, 0.1        # (GEN: the generation a strong hit sends out)
 PATTERN = 0.05                  # the two arms the core feeds turn at this speed (rad / s)
 STRONG = 0.65                   # a hit at least this strong makes the core answer with a new generation
 GEN_LIFE = (14.0, 20.0)
@@ -293,6 +297,15 @@ class Galaxy(Scene):
         self.lab_str = [f"{v:.{int(d)}f}" for v, d in zip(self.lab_val, self.lab_dig)]
         self.lab_r, self.lab_th = m.r[self.lab], m.th[self.lab]      # their tables (read some thirty times a frame)
         self.track = np.sort(rng.choice(cand, size=min(90, len(cand)), replace=False))
+        # the particles drawn under the wall rule: the labelled and the tracked ones always are
+        inner = m.bulge | (m.R < 0.3)
+        self.keep = hash01(np.arange(m.n), 91) < np.where(inner, WALL_KEEP_BULGE, np.where(m.kind == 2, WALL_KEEP_GEN, WALL_KEEP))
+        self.keep[self.lab] = True
+        self.keep[self.track] = True
+        # ... and where each one starts to be drawn: most of them only from some way out of the core (their line
+        # comes out of nothing over a short stretch), so that black stays between the trails at the centre
+        h = hash01(np.arange(m.n), 92)
+        self.rho0 = np.where(inner | (h < 0.12), 0.0, 0.09 + 0.33 * hash01(np.arange(m.n), 93)).astype(np.float32)
 
     def _unproject(self, sx, sy):
         """Screen point -> (r, azimuth) on the disc plane."""
@@ -307,13 +320,16 @@ class Galaxy(Scene):
         g = np.arange(-3.0, 3.001, 0.25)
         u = np.linspace(-3.0, 3.0, 61)
         a, b = [], []
-        for v in g:
+        half = []
+        for k, v in enumerate(g):
             p = np.stack([u, np.zeros_like(u), np.full_like(u, v)], 1)
             q = np.stack([np.full_like(u, v), np.zeros_like(u), u], 1)
             for line in (p, q):
                 a.append(line[:-1]); b.append(line[1:])
+                half.append(np.full(len(line) - 1, k % 2 == 0))
         self.fa = np.concatenate(a).astype(np.float32)
         self.fb = np.concatenate(b).astype(np.float32)
+        self.f_half = np.concatenate(half)          # one line in two (the axes are among them): the wall rule
         mid = 0.5 * (self.fa + self.fb)
         self.f_rho = np.hypot(mid[:, 0], mid[:, 2])
         self.f_axis = ((np.abs(self.fa[:, 0]) < 1e-6) & (np.abs(self.fb[:, 0]) < 1e-6)) | \
@@ -365,7 +381,11 @@ class Galaxy(Scene):
         fog = np.exp(-(self.f_rho / 2.3) ** 2) * np.clip(2.9 / np.maximum(az, 0.3), 0.3, 1.5)
         fog = fog * (0.12 + 0.88 * self._fade(0.5 * (ax + bx), 0.5 * (ay + by)))
         m = ok & ~self.f_axis
-        f.segments("w", ax[m], ay[m], bx[m], by[m], 0.24 * fog[m])
+        if E.WALL:                  # one line in two, at the level and the weight of a line that lands
+            m = m & self.f_half
+            f.segments("w", ax[m], ay[m], bx[m], by[m], E.wl(0.24 * fog[m]), width=E.ww(1.0))
+        else:
+            f.segments("w", ax[m], ay[m], bx[m], by[m], 0.24 * fog[m])
         m = ok & self.f_axis
         f.segments("r", ax[m], ay[m], bx[m], by[m], 0.7 * fog[m], width=L.LW)
         # range rings every 4 kpc, dotted, labelled on the near side: each one switches on as the galaxy reaches it
@@ -374,13 +394,14 @@ class Galaxy(Scene):
             if age <= 0:
                 continue
             rr = rk / KPC
-            n = int(260 * rr) + 60
+            n = (int(260 * rr) + 60) // (2 if E.WALL else 1)     # the wall rule: fewer, larger dots
             ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
             show = ang < 2 * np.pi * min(1.0, age / 0.8)              # it draws itself around
             P = np.stack([rr * np.cos(ang), np.zeros(n), rr * np.sin(ang)], 1).astype(np.float32)
             sx, sy, sz, ok = cam.project(P)
             ok = ok & show
-            f.dots("w", sx[ok], sy[ok], 1.4, 0.55 * (0.12 + 0.88 * self._fade(sx[ok], sy[ok])))
+            f.dots("w", sx[ok], sy[ok], 2.3 if E.WALL else 1.4,
+                   E.wl(0.55 * (0.12 + 0.88 * self._fade(sx[ok], sy[ok]))))
             if self._ring_xy[k] is not None:                      # its label is decoded while it draws itself
                 x, y = self._ring_xy[k]
                 f.text("w", x + 10, y + 22, B.resolve(f"{rk:02d} KPC", age, 30.0, 0.1, key=k), size=L.T_SMALL, alpha=0.75)
@@ -420,12 +441,29 @@ class Galaxy(Scene):
             okk = ok[:, :-1] & ok[:, 1:]
             wide = (m.b[idx] > 0.5)[:, None] & okk
             thin = okk & ~wide
-            f.segments("w", sx[:, :-1][thin], sy[:, :-1][thin], sx[:, 1:][thin], sy[:, 1:][thin],
-                       0.85 * i0[thin], 0.85 * i1[thin])
-            f.segments("w", sx[:, :-1][wide], sy[:, :-1][wide], sx[:, 1:][wide], sy[:, 1:][wide],
-                       0.8 * i0[wide], 0.8 * i1[wide], width=L.LW)
             hd = ok[:, 0]
-            f.dots("w", sx[hd, 0], sy[hd, 0], (1.0 + 1.6 * m.b[idx][hd]) * near[hd] ** 0.6, 1.3 * b[hd])
+            if E.WALL:
+                # fewer trails, each at the level of the wall (its tail still runs out) and never hotter than
+                # white, or the glow fills the black between them; the music swells the heads instead
+                kp = self.keep[idx]
+                bw = np.minimum(E.wl(b), 1.0)
+                out = smoothstep(self.rho0[idx][:, None], self.rho0[idx][:, None] + 0.05,
+                                 np.hypot(P[:, :, 0], P[:, :, 2]) + 1e-4)
+                i0 = bw[:, None] * fall[None, :-1] * out[:, :-1]
+                i1 = bw[:, None] * fall[None, 1:] * out[:, 1:]
+                thin, wide, hd = thin & kp[:, None], wide & kp[:, None], hd & kp
+                f.segments("w", sx[:, :-1][thin], sy[:, :-1][thin], sx[:, 1:][thin], sy[:, 1:][thin],
+                           i0[thin], i1[thin], width=E.WALL_LINE)
+                f.segments("w", sx[:, :-1][wide], sy[:, :-1][wide], sx[:, 1:][wide], sy[:, 1:][wide],
+                           i0[wide], i1[wide], width=2.1)
+                f.dots("w", sx[hd, 0], sy[hd, 0],
+                       (1.4 + 1.6 * m.b[idx][hd]) * near[hd] ** 0.6 * (1.0 + 0.25 * np.minimum(wave[hd], 2.0)) * out[hd, 0], bw[hd])
+            else:
+                f.segments("w", sx[:, :-1][thin], sy[:, :-1][thin], sx[:, 1:][thin], sy[:, 1:][thin],
+                           0.85 * i0[thin], 0.85 * i1[thin])
+                f.segments("w", sx[:, :-1][wide], sy[:, :-1][wide], sx[:, 1:][wide], sy[:, 1:][wide],
+                           0.8 * i0[wide], 0.8 * i1[wide], width=L.LW)
+                f.dots("w", sx[hd, 0], sy[hd, 0], (1.0 + 1.6 * m.b[idx][hd]) * near[hd] ** 0.6, 1.3 * b[hd])
             th_head = np.arctan2(P[:, 0, 2], P[:, 0, 0])
             sel = r_head > 0.1
             hist += np.histogram(th_head[sel] % (2 * np.pi), bins=N_BINS, range=(0, 2 * np.pi), weights=fade[sel])[0]
@@ -447,7 +485,7 @@ class Galaxy(Scene):
                 i0 = (b * wgt)[:, None] * fall[None, :-1]
                 i1 = (b * wgt)[:, None] * fall[None, 1:]
                 f.segments(lay, sx[:, :-1][okk], sy[:, :-1][okk], sx[:, 1:][okk], sy[:, 1:][okk], i0[okk], i1[okk],
-                           width=L.LW if lay == "r" else 1.0)
+                           width=L.LW if lay == "r" else E.ww(1.0))
             hd = ok[:, 0]
             f.dots("r", sx[hd, 0], sy[hd, 0], 2.0 * near[hd] ** 0.6, (1.6 * b * (1.0 - cool))[hd])
             f.dots("w", sx[hd, 0], sy[hd, 0], 1.0 * near[hd] ** 0.6, (1.1 * b)[hd])
@@ -482,7 +520,7 @@ class Galaxy(Scene):
         fl = min(1.5, self._flash(t))
         pulse = 0.6 + 0.4 * math.sin(2 * math.pi * t * 0.45) ** 2
         g = float(np.clip(a0 / 4.0, 0.0, 1.0))
-        if g > 0:
+        if g > 0 and not E.WALL:        # (a grey disc: on the wall it is a stain, the red dot carries the core)
             f.dots("w", [cx], [cy], 20.0 + 6.0 * kick + 10.0 * fl, (0.2 + 0.15 * kick + 0.3 * fl) * g)
         f.dots("r", [cx], [cy], 8.5 + 2.0 * pulse * (1 - g) + 2.0 * kick + 4.0 * fl, 1.6)
         f.dots("w", [cx], [cy], 2.6, 1.3)
@@ -548,7 +586,7 @@ class Galaxy(Scene):
         out, boxes = {}, []
         for q in np.nonzero(on)[0]:
             xq, yq = float(x[q]), float(y[q])
-            bx = (xq - 6, yq - 26, xq + 26 + 11 * len(self.lab_str[q]), yq + 12)
+            bx = (xq - 6, yq - 26, xq + 26 + (L.T_LABEL * CHAR_W if E.WALL else 11) * len(self.lab_str[q]), yq + 12)
             if _gap(bx, boxes) <= 0:
                 continue
             boxes.append(bx)
@@ -590,6 +628,8 @@ class Galaxy(Scene):
             a = B.io(since.get(q, 9.0), left.get(q), out=0.45, span=len(s) / cps + 0.35)
             if a <= 0.0:
                 continue
+            if E.WALL:                  # the trails give way under the number (it pushes them out as it is decoded)
+                f.occlude(x + 8, y - 13, x + 8 + (L.T_LABEL * CHAR_W * len(s) + 10) * min(1.0, a / 0.3), y + 12)
             f.dots("w", [x], [y], 2.8 * float(B.spring(a / 0.22)), 1.3)
             f.text("w", x + 12, y + 6, B.resolve(s, a, cps, 0.06, key=q), size=L.T_LABEL, alpha=0.88)
 
@@ -772,9 +812,9 @@ class Galaxy(Scene):
                   size=L.T_MICRO, pad=3)
             f.rects("w", xl, ys[~hm], xl + wmax * v[~hm], ys[~hm] + 4, 0.9)
             f.rects("r", xl, ys[hm], xl + wmax * v[hm], ys[hm] + 4, 1.0)
-            f.segments("w", [xl - 6], [top - 4], [xl - 6], [bot + 2], 0.6)
+            f.segments("w", [xl - 6], [top - 4], [xl - 6], [bot + 2], E.wl(0.6), width=E.ww(1.0))
             for k in range(0, N_BINS, N_BINS // 6):
-                f.segments("w", [xl - 13], [ys[k] + 2], [xl - 6], [ys[k] + 2], 0.8)
+                f.segments("w", [xl - 13], [ys[k] + 2], [xl - 6], [ys[k] + 2], E.wl(0.8), width=E.ww(1.0))
                 f.text("w", x0, ys[k] + 8, f"{k * 360 // N_BINS:03d}", size=L.T_MICRO, alpha=0.7)
         # rotation curve: speed against radius - the curve this galaxy turns with (omega). It is alive:
         #   * the tracked primaries ride it at their radius; the eight of the orbit log wear a tick, made as
@@ -795,7 +835,7 @@ class Galaxy(Scene):
         xp, yv, yk = float(X(rp)), float(Y(V(rp))), float(Y(K(rp)))
         with f.build(age - 0.9, (x0 - 8, y0 - 40, x1 + 4, y1 + 14), key=151, wave=0.4):
             f.tag("w", x0, y0 - 16, "ROTATION_CURVE // V(R)", size=L.T_MICRO, pad=3)
-            f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], 0.7)
+            f.segments("w", [px0, px0], [py0, py1], [px0, px1], [py1, py1], E.wl(0.7), width=E.ww(1.0))
             hud.ruler(f, px0, px1, py1, 0.0, 24.0, 1.0, 4.0 if w >= 300 else 8.0, fmt=lambda vv: f"{vv:.0f}", inten=0.6,
                       lab_dy=26)
             r = np.linspace(0.0, 1.5, 90)
@@ -807,7 +847,7 @@ class Galaxy(Scene):
             sa = (np.arange(-1, nd) + (0.1 * t) % 1.0) / nd
             ra = R_KEP + np.clip(sa, 0.0, 1.0) * (1.5 - R_KEP)
             rb = R_KEP + np.clip(sa + 0.55 / nd, 0.0, 1.0) * (1.5 - R_KEP)
-            f.segments("w", X(ra), Y(K(ra)), X(rb), Y(K(rb)), 0.6)
+            f.segments("w", X(ra), Y(K(ra)), X(rb), Y(K(rb)), E.wl(0.6), width=E.ww(1.0))
             yl = float(Y(K(1.5)))
             f.text("w", px1, yl + 20, "KEPLER // V ~ 1/SQRT(R)" if w >= 300 else "KEPLER", size=L.T_MICRO, alpha=0.6,
                    anchor="rs")
@@ -815,7 +855,7 @@ class Galaxy(Scene):
                 f.text("w", px1, yl + 38, "THE GAP = MASS NOT SEEN", size=L.T_MICRO, alpha=0.6, anchor="rs")
             # the probe: a stem from the axis while it is inside the solar circle, then the gap it holds open
             stem = 1.0 - float(smoothstep(R_KEP - 0.08, R_KEP + 0.08, rp))
-            f.segments("w", [xp, xp, xp], [py1 + 12.0, py1, yk], [xp, xp, xp], [py1, yv, yv], [0.9, 0.4 * stem, 0.95 * (1.0 - stem)],
+            f.segments("w", [xp, xp, xp], [py1 + 12.0, py1, yk], [xp, xp, xp], [py1, yv, yv], [0.9, E.wl(0.4 * stem), 0.95 * (1.0 - stem)],
                        width=L.LW)
             f.dots("w", [xp, xp], [yv, yk], [3.2, 2.2 * (1.0 - stem)], [1.5, 1.2 * (1.0 - stem)])
             kep = f"KEPLER {220.0 * float(K(rp)):03.0f}" if rp > R_KEP else "KEPLER ---"
@@ -836,10 +876,10 @@ class Galaxy(Scene):
                 after[order] = np.cumsum((s_in * live)[order]) - (s_in * live)[order]
                 wt = s_in * np.clip(8.0 - after, 0.0, 1.0)
                 xb, yb = X(r_head[sel]), Y(V(r_head[sel]))
-                f.dots("w", xb, yb, 1.5 + 1.1 * wt, (0.6 + 0.7 * wt) * live)
+                f.dots("w", xb, yb, (1.9 if E.WALL else 1.5) + 1.1 * wt, E.wl((0.6 + 0.7 * wt) * live))
                 on = wt > 0.0
                 hl = (9.0 * B.spring(wt[on]) * live[on]).astype(np.float32)
-                f.segments("w", xb[on], yb[on] - hl, xb[on], yb[on] + hl, 0.9 * live[on])
+                f.segments("w", xb[on], yb[on] - hl, xb[on], yb[on] + hl, 0.9 * live[on], width=E.ww(1.0))
         for tg, key, e in self.model.strong:
             a = t - tg
             if 0 <= a < 2.6:            # the marker of a strong hit: a line that is drawn, travels, and is withdrawn

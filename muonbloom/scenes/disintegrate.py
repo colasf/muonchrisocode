@@ -40,6 +40,7 @@ import math
 import numpy as np
 
 from .. import build as B
+from .. import engine as E
 from .. import hud
 from .. import layout as L
 from .. import showdata as sd
@@ -352,6 +353,8 @@ class Disintegrate(Sphere):
         view = unit(cam.pos.astype(np.float32)[None] - P0)
         nv = (N * view).sum(1)
         rim = (0.1 + 0.8 * (1 - np.abs(nv)) ** 2.2) * np.where(nv > 0, 1.0, 0.45)
+        if E.WALL:
+            return self._eroding_wall(f, t, a, gone, ok, sx, sy, rim)
         for (ia, ib, var, life, nd, base) in ((b.ea, b.eb, b.e_var, EDGE_LIFE, 5, None),
                                               (b.sa, b.sb, b.s_var, STRUT_LIFE, 8, 0.1)):
             te = np.minimum(self.rel[ia], self.rel[ib])
@@ -378,6 +381,36 @@ class Disintegrate(Sphere):
             fd = np.exp(-a[fl] / DOT_TAU)
             fresh = np.exp(-a[fl] / 0.25)
             f.dots("w", sx[fl], sy[fl], 1.5, 0.25 + 0.9 * fd + 0.8 * fresh)
+
+    def _eroding_wall(self, f, t, a, gone, ok, sx, sy, rim):
+        """The body under the wall rule: the dense web of dim hairlines is a white patch (or nothing) on the brick.
+        One edge in three, at the weight that lands and at full level where the surface turns away from the eye
+        (the rim lights the outline; the level still follows the rotation without a step), no struts, one node
+        in three as a full white dot. A piece that lets go is a larger full white dot that shrinks to a grain of
+        2.4 px (a smaller one is lost on the brick) and stays:
+        the dust does not go grey. The choice of one in three is by index: it never changes."""
+        b = self.body
+        ia, ib = b.ea[::3], b.eb[::3]
+        ae = t - np.minimum(self.rel[ia], self.rel[ib])
+        whole = ae < 0
+        i0, i1 = E.wl(1.6 * rim[ia] * b.e_var[::3]), E.wl(1.6 * rim[ib] * b.e_var[::3])
+        f.segments("w", sx[ia][whole], sy[ia][whole], sx[ib][whole], sy[ib][whole], i0[whole], i1[whole],
+                   width=E.WALL_LINE)
+        erd = (ae >= 0) & (ae < EDGE_LIFE)
+        if erd.any():                   # the edge is now three dots that go one by one
+            ua = (ae[erd] / EDGE_LIFE)[:, None]
+            s = (np.arange(3) + 0.5)[None, :] / 3
+            keep = hash01(np.nonzero(erd)[0][:, None], np.arange(3)[None, :], 31) > ua
+            X = sx[ia][erd][:, None] * (1 - s) + sx[ib][erd][:, None] * s
+            Y = sy[ia][erd][:, None] * (1 - s) + sy[ib][erd][:, None] * s
+            f.dots("w", X[keep], Y[keep], 1.6, 1.0)
+        pick = np.zeros(len(sx), bool)
+        pick[::3] = True
+        whole = ~gone & pick
+        f.dots("w", sx[whole], sy[whole], 1.6, E.wl(1.6 * rim[whole]))
+        fl = gone & ok & pick
+        if fl.any():
+            f.dots("w", sx[fl], sy[fl], 2.4 + 1.0 * np.exp(-a[fl] / 0.25), 1.0)
 
     def _falling_sticks(self, f, phi, v, t, follow=None):
         lay = self.lay
@@ -419,8 +452,11 @@ class Disintegrate(Sphere):
         f.segments("w", [px[0]], [py[0]], [px[1]], [py[1]], 1.3 * fd, 0.5 * fd, width=L.LW_BOLD if big else L.LW)
         f.dots("w", px[1:2], py[1:2], 2.4 if big else 1.6, 1.3 * fd)
         for k in (2, 3):                    # neutrinos: dotted, straight, leaving
-            n = int(max(4, math.hypot(px[k] - px[0], py[k] - py[0]) / 9.0))
+            n = int(max(4, math.hypot(px[k] - px[0], py[k] - py[0]) / (14.0 if E.WALL else 9.0)))
             s = (np.arange(n) + 0.5) / n
+            if E.WALL:                      # (single pixels do not land: dots, further apart)
+                f.dots("w", px[0] + (px[k] - px[0]) * s, py[0] + (py[k] - py[0]) * s, 1.6, 1.3 * fd * (1 - 0.6 * s))
+                continue
             f.pixels("w", px[0] + (px[k] - px[0]) * s, py[0] + (py[k] - py[0]) * s, 1.3 * fd * (1 - 0.6 * s))
         f.dots("r", px[0:1], py[0:1], 3.4 if big else 2.0, (1.6 if big else 1.2) * fd)
         if big:                             # (a ring that grows: always the same vertices, sphere.ring)
@@ -502,9 +538,9 @@ class Disintegrate(Sphere):
         rect = (x0, Y_LOW - 26.0, x1, Y_BASE + 34.0)
         with self._blk(f, "profile", t, rect, erode=e_txt):             # its boxes and rules: header, axes, ticks
             self._low_panel(f, lay.tomo, "INTEGRITY // N/N0 // DECAY LAW EXP(-T/TAU)", e_txt, 101, fr)
-            f.segments("w", [px0, px0], [py1, py1], [px0, px1], [py0, py1], 0.65)
+            f.segments("w", [px0, px0], [py1, py1], [px0, px1], [py0, py1], E.wl(0.65), width=E.ww(1.0))
             for q in (0.0, 0.5, 1.0):
-                f.segments("w", [px0], [float(Y(q))], [px0 - 8], [float(Y(q))], 0.8)
+                f.segments("w", [px0], [float(Y(q))], [px0 - 8], [float(Y(q))], E.wl(0.8), width=E.ww(1.0))
             hud.ruler(f, px0, px1, py1 + 2, T0, T1, 0.5, 2.0, inten=0.6)
         # what is really left
         n = self.body.n
@@ -518,7 +554,9 @@ class Disintegrate(Sphere):
                 f.text("w", float(X(tv)) + 3, py1 + 28, er(sd.tc(tv)[:5], e_txt, 103, fr), size=L.T_MICRO, alpha=0.7)
             tt = np.linspace(T0, T1, 150)
             keep = hash01(np.arange(150), 105) > e_txt
-            f.dots("w", X(tt)[keep], Y(remaining(tt))[keep], 1.3, 0.7)
+            if E.WALL:                      # the law as one dot in three, larger, full white
+                keep = keep & (np.arange(150) % 3 == 0)
+            f.dots("w", X(tt)[keep], Y(remaining(tt))[keep], 1.6 if E.WALL else 1.3, E.wl(0.7))
             for ch in self.chunks:
                 if ch["t"] > t:
                     break
