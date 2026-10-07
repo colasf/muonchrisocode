@@ -11,6 +11,8 @@ two rules:
          picture stands for the last ten seconds. CENTRE tower = heavy slow tracks, LEFT / RIGHT =
          fine fast ones, echo repeats of a hit = thin companions that are gone in a few seconds;
          older tracks fade to ghosts so 90-odd tracks in 40 s stay readable. The PoCA dots stay.
+         The hits are taken as they come, never read ahead (Sphere._update): the detectors are live on
+         site. The core is called when enough tracks have crossed it, whenever that is.
   DRUMS  every kick of the music is answered in white: the net swells, a ripple runs up both
          sides of the halo, a dotted shock ring leaves the body through the opacity histogram,
          the lattice crosses brighten. No full-frame flash.
@@ -65,6 +67,16 @@ def _span(look="sphere", default=(236.0, 276.0)):
 
 T0, T1 = _span()
 FOUND_W = 4.5                     # weighted scattered tracks (primary 1, echo 0.25) it takes to call the core
+# The detectors are live on site: a hit is only known once it has happened, so nothing here may depend on the
+# hits to come. What used to be measured on the whole scene in advance is a figure now (the ones the muon stem
+# of the previews gave):
+SEARCH_W = 13.5                   # the search: the confidence climbs to its ceiling over this many weighted tracks
+FULL_W = 4.0                      # the picture is complete this many weighted tracks after the core was called ...
+T_FULL = T1 - 10.0                # ... and 10 s before the end at the latest (it firms up by itself in the second before)
+T_CALL = T0 + 0.6 * (T1 - T0)     # the core is called then at the latest, whatever the tracks have said
+GHOSTS = 40                       # primary tracks that keep a line (the newest); the older ones keep their PoCA dot
+MANY = 120                        # more tracks than this: the lines that are gone are no longer drawn one by one
+HOT_DT = 1.0 / 30.0               # the flagged bins of the halo are looked for this often (Sphere._hot_scan)
 
 # the body at scale 1 (design px); Lay scales it to the bay it gets
 R_PX = 232.0                      # projected radius of the unit sphere
@@ -97,6 +109,9 @@ CORNER_W = 218.0
 TOMO_MIN, TEXT_MIN, DETS_MIN = 330.0, 190.0, 320.0
 
 _DIST = math.hypot(CAM_D, CAM_H)
+# when the confidence passes 0.6 by itself, if the tracks have not taken it there (the cross of the core)
+T_SURE = float(next(v for v in np.arange(T_FULL - 1.0, T_FULL + 0.02, 1.0 / 60.0)
+                    if 0.5 + 0.5 * float(smoothstep(T_FULL - 1.0, T_FULL, v)) > 0.6))
 _GLYPHS = "0123456789ABCDEF#%/*+-=<>"
 
 # the blocks of furniture: lag = when a block starts to build, in seconds after the scene has started;
@@ -664,11 +679,17 @@ class Body:
         return self.surface(tw, u)
 
 
-def build_tracks(det, t0, t1, core_from=None, core_at=None):
+def build_tracks(det, t0, t1, core_from=None, core_at=None, cache=None):
     """One muon track per detector onset in [t0, t1): path = far point, entry, PoCA, exit, far point.
     No track is aimed at the core before `core_from`; the primary hits of the first cluster at / after
-    `core_at` always are (their echo trains then pile up on the core: that is when the anomaly shows)."""
+    `core_at` always are (their echo trains then pile up on the core: that is when the anomaly shows).
+    Nothing is read ahead: a track depends on its own hit and on the hits before it (its random numbers come
+    from its tower and its rank among the hits of that tower since t0), so the tracks of the hits up to any
+    moment are the first tracks of the whole scene, the same in every scene worker.
+    cache = {} kept by the caller between two calls: a hit that is still the same gets the same track back
+    (live, the scene asks again at every hit; a hit whose energy is still rising is made again)."""
     out = []
+    used = {}
     forced = set()
     if core_at is not None:
         cand = []
@@ -682,6 +703,14 @@ def build_tracks(det, t0, t1, core_from=None, core_at=None):
         tt, ee, ec = det.hits(key, t0, t1)
         prev = None
         for i, (th, e, echo) in enumerate(zip(tt, ee, ec)):
+            ck = (key, i, float(th), float(e), bool(echo), (key, i) in forced, None if prev is None else prev["i"])
+            tr = cache.get(ck) if cache is not None else None
+            if tr is not None:
+                used[ck] = tr
+                out.append(tr)
+                if not echo:
+                    prev = tr
+                continue
             rng = np.random.default_rng([KEY_SEED[key], i, 77])
             heavy = key == "C"
             if echo and prev is not None:
@@ -709,13 +738,17 @@ def build_tracks(det, t0, t1, core_from=None, core_at=None):
             d2 = kink(d, theta, rng.uniform(0, 2 * np.pi))
             path = np.stack([K - d * reach(K, -d, R_FAR), K - d * reach(K, -d, 1.0), K,
                              K + d2 * reach(K, d2, 1.0), K + d2 * reach(K, d2, R_FAR)]).astype(np.float32)
-            tr = dict(t=float(th), key=key, e=float(e), echo=bool(echo), heavy=heavy, d=d, aim=aim, K=K, path=path,
+            tr = dict(t=float(th), key=key, i=i, e=float(e), echo=bool(echo), heavy=heavy, d=d, aim=aim, K=K, path=path,
                       through=through, mrad=theta * MRAD, p=0.4 + 7.5 * float(e) ** 1.6,
                       charge="+" if rng.random() < 0.56 else "-", dur=0.9 if heavy else 0.3,
                       zen=math.degrees(math.acos(min(1.0, -d[1]))), azi=math.degrees(math.atan2(d[2], d[0])) % 360)
+            used[ck] = tr
             out.append(tr)
             if not echo:
                 prev = tr
+    if cache is not None:
+        cache.clear()
+        cache.update(used)
     out.sort(key=lambda r: r["t"])
     for n, tr in enumerate(out):
         tr["id"] = n + 1
@@ -744,14 +777,14 @@ def persistence(past, t):
             out[tr["id"]] = math.exp(-max(0.0, age - 0.3) / 1.5) if age < 8.0 else 0.0
         else:
             k = rank[tr["id"]]
-            hold = 1.0 if k < 5 else (0.5 if k < 11 else 0.2)
+            hold = 1.0 if k < 5 else (0.5 if k < 11 else (0.2 if k < GHOSTS else 0.0))
             out[tr["id"]] = hold * (0.3 + 0.7 * math.exp(-age / 5.0))
     return out
 
 
-def ring_values(lay, cam, n_through, n_all, seed, jit):
-    """Opacity per polar bin (screen angle, 0 = right, counter-clockwise). Flat while there is no data,
-    then the peak towards the core grows with the tracks that crossed it."""
+def _ring_parts(lay, cam, seed):
+    """What the opacity histogram is made of, whatever the data: (bin angles, its flat profile, the peak
+    towards the core as this camera sees it, the angle of that peak)."""
     cx, cy, _, _ = cam.project(CORE[None].astype(np.float32))
     phc = math.atan2(-(float(cy[0]) - lay.cy), float(cx[0]) - lay.cx)
     phi = 2 * np.pi * (np.arange(N_BINS) + 0.5) / N_BINS
@@ -761,6 +794,13 @@ def ring_values(lay, cam, n_through, n_all, seed, jit):
     ph = rng.uniform(0, 2 * np.pi, 7)
     base = (amp * np.sin(k * phi[:, None] + ph)).sum(-1) / amp.sum()
     peak = np.exp(-(np.angle(np.exp(1j * (phi - phc))) / 0.22) ** 2)
+    return phi, base, peak, phc
+
+
+def ring_values(lay, cam, n_through, n_all, seed, jit):
+    """Opacity per polar bin (screen angle, 0 = right, counter-clockwise). Flat while there is no data,
+    then the peak towards the core grows with the tracks that crossed it."""
+    phi, base, peak, phc = _ring_parts(lay, cam, seed)
     data = min(1.0, n_all / 9.0)
     conf = min(1.0, n_through / 7.0)
     v = 0.1 + data * (0.24 + 0.2 * base) + 0.56 * peak * conf + (0.03 + 0.05 * data) * jit
@@ -780,35 +820,76 @@ class Sphere(Scene):
         super().__init__(ctx)
         self.lay = Lay(ctx)
         self.body = Body()
-        span = T1 - T0
-        self.tracks = sphere_tracks(ctx.det)
-        self.tr_t = np.array([tr["t"] for tr in self.tracks])
         self.ring_jit = hash01(np.arange(N_BINS), 77) - 0.5
         rng = np.random.default_rng(5)
         self.scan_order = rng.random(len(self.body.ea))          # draw-on order of the net at the start
-        self.t_first = float(self.tr_t[0]) if len(self.tr_t) else T0
-        # when the core is called, and when the picture is complete (10 s before the end)
+        self._init_motion(ctx, T0, T1)
+        # the halo, 30 times a second over the scene: where its peak sits as the camera turns (_hot_scan)
+        self._hot_ts = np.arange(T0, T1, HOT_DT)
+        parts = [_ring_parts(self.lay, self.lay.camera(float(tt), T0, T1 - T0)[0], 9) for tt in self._hot_ts]
+        self._hot_base = parts[0][1]
+        self._hot_peak = np.array([q[2] for q in parts])
+        self._cache, self._sig, self._est_done, self._hot_start = {}, None, [], {}
+        self._update(T0 - 1.0, ctx)
+
+    def _update(self, t, ctx):
+        """The muons so far, and what the scene derives from them: the tracks, the moment the core is called,
+        the cross at its centre, the muons that get a tag, the waves on the body, the estimate of the tomogram.
+        Nothing is read ahead - a hit is only known once it has happened - so all of it is derived again when
+        a hit comes in (or when its energy is still rising), from the hits up to now. A moment that has not
+        come yet (t_found, t_cross) holds the latest time it can come."""
+        end = min(float(np.nextafter(t, np.inf)), T1)
+        t0, span = T0 - 0.6, T1 - T0
+        sig = tuple(a.tobytes() for key in sd.KEYS for a in ctx.det.hits(key, t0, end))
+        if sig == self._sig:
+            return
+        self._sig = sig
+        was = getattr(self, "tr_t", np.zeros(0))
+        self.tracks = build_tracks(ctx.det, t0, end, core_from=T0 + 0.22 * span, core_at=T0 + 0.4 * span, cache=self._cache)
+        self.tr_t = np.array([tr["t"] for tr in self.tracks])
+        self.t_first = float(self.tr_t[0]) if len(self.tr_t) else T1 + 1e6
+        # when the core is called, and the cross at its centre comes on (confidence above 0.6)
         thr = [tr for tr in self.tracks if tr["through"]]
         self.thr_t = np.array([tr["t"] for tr in thr])
         self.thr_w = np.cumsum([0.25 if tr["echo"] else 1.0 for tr in thr]) if thr else np.zeros(0)
-        t_core = T0 + 0.4 * span
-        ok = (self.thr_w >= max(FOUND_W, self._w(t_core) + 3.0)) & (self.thr_t >= t_core)
-        self.t_found = float(self.thr_t[np.argmax(ok)]) if ok.any() else T0 + 0.5 * span
-        self.w_found = self._w(self.t_found)
-        self.w_full = max(self._w(T1 - 10.0), self.w_found + 2.0)
-        # when the cross at the centre of the core comes on (confidence above 0.6), when bins are flagged,
-        # and the muons that get the tag of the bottom-right corner
-        self.t_cross = next((float(tt) for tt in self.thr_t if tt >= self.t_found and self._conf(float(tt))[1] > 0.6),
-                            T1 + 1.0)
-        self.hot_iv = self._hot_intervals()
+        self.t_found, self.w_found = self._call(self.thr_t, self.thr_w)
+        self.t_cross = min([max(T_SURE, self.t_found)] +
+                           [float(tt) for tt in self.thr_t if tt >= self.t_found and self._conf(float(tt))[1] > 0.6][:1])
+        # the muons that get the tag of the bottom-right corner
         self.prim = [tr for tr in self.tracks if not tr["echo"]]
         self.prim_t = np.array([tr["t"] for tr in self.prim])
-        self._init_motion(ctx, T0, T1)
         # the waves the muons send over the body, and the estimate of the tomogram: where it stands after
         # every scattered track (it then moves there, it does not jump)
         self.waves = [(tr["t"], (0.3 if tr["echo"] else 1.0) * (0.55 + 0.6 * tr["e"]), unit(tr["path"][1].astype(np.float64)))
                       for tr in self.tracks]
-        self.est = self._est_steps([(tr["t"], [q for q in thr if q["t"] <= tr["t"]]) for tr in thr])
+        done = self._est_done                           # (one step per scattered track: only the new ones are worked out)
+        m = 0
+        while m < min(len(done), len(thr)) and done[m][0] is thr[m]:
+            m += 1
+        while 0 < m < len(thr) and thr[m - 1]["t"] == thr[m]["t"]:
+            m -= 1
+        del done[m:]
+        for tr in thr[m:]:
+            done.append((tr, self._est_steps([(tr["t"], [q for q in thr if q["t"] <= tr["t"]])])))
+        self.est = (np.concatenate([st[0] for _, st in done]) if done else np.array([]),
+                    np.concatenate([st[1] for _, st in done]) if done else np.array([]).reshape(-1, 3))
+        # the flagged bins of the halo (_hot_age)
+        self._hot_on = None
+        if not (len(self.tr_t) >= len(was) and np.array_equal(self.tr_t[:len(was)], was)):
+            self._hot_start = {}                        # (not the same past: the show was moved)
+
+    @staticmethod
+    def _call(thr_t, thr_w):
+        """(when the core is called, the weighted count of scattered tracks then) from the scattered tracks so
+        far: on the track that brings the count to FOUND_W and to 3 more than at 40 % of the scene - or at
+        T_CALL, if the tracks have not said it by then."""
+        def w(t):
+            i = int(np.searchsorted(thr_t, t, side="right"))
+            return float(thr_w[i - 1]) if i else 0.0
+        t_core = T0 + 0.4 * (T1 - T0)
+        ok = (thr_w >= max(FOUND_W, w(t_core) + 3.0)) & (thr_t >= t_core)
+        t_found = min(float(thr_t[np.argmax(ok)]), T_CALL) if ok.any() else T_CALL
+        return t_found, w(t_found)
 
     T_BUILD = T0                    # the furniture is constructed from here (DISINTEGRATE: from its own start)
 
@@ -891,26 +972,57 @@ class Sphere(Scene):
             return f.build(a0, rect, marks=False, **kw)
         return f.build(self._age(name, t, erode) - lag, rect, marks=b.get("marks", True) and a0 < 3.0, **kw)
 
-    def _hot_intervals(self, dt=1.0 / 30.0, shortest=0.4):
-        """[(t_in, t_out)] during which the opacity histogram has flagged bins. The PEAK labels are made at the
-        start of an interval and taken apart at its end; flickers shorter than `shortest` get no label."""
-        ts = np.arange(T0, T1, dt)
-        on = np.zeros(len(ts), bool)
-        for k, t in enumerate(ts):
-            cam, _ = self.lay.camera(float(t), T0, T1 - T0)
-            _, conf = self._conf(t)
-            n_prim = sum(1 for tr in self.tracks if tr["t"] <= t and not tr["echo"])
-            _, v, _ = ring_values(self.lay, cam, 7.0 * conf, 9.0 * min(1.0, n_prim / 4.0), 9, self.ring_jit)
-            on[k] = bool((v > HOT).any())
-        d = np.diff(np.r_[0, on.astype(int), 0])
-        return [(float(ts[i]), float(ts[j]) if j < len(ts) else 1e9)
-                for i, j in zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]) if (j - i) * dt >= shortest]
+    def _hot_scan(self, upto=None):
+        """Has the opacity histogram flagged bins? - at every instant of the scene (self._hot_ts), with the
+        muons known now (upto: with those up to that time only). Up to now it is what happened; after, what
+        will happen if no other muon comes (the camera goes on turning, the picture firms up by itself)."""
+        ts = self._hot_ts
+        thr_t, thr_w, prim_t = self.thr_t, self.thr_w, self.prim_t
+        if upto is not None:
+            k = int(np.searchsorted(thr_t, upto, side="right"))
+            thr_t, thr_w = thr_t[:k], thr_w[:k]
+            prim_t = prim_t[:int(np.searchsorted(prim_t, upto, side="right"))]
+        t_found, w_found = self._call(thr_t, thr_w)
+        i = np.searchsorted(thr_t, ts, side="right")
+        w = np.where(i > 0, np.r_[thr_w, 0.0][np.maximum(i - 1, 0)], 0.0)
+        firm = np.minimum(1.0, (w - w_found) / FULL_W)
+        conf = np.where(ts < t_found, 0.42 * np.minimum(1.0, w / max(SEARCH_W, 1e-6)),
+                        0.5 + 0.5 * np.maximum(firm, smoothstep(T_FULL - 1.0, T_FULL, ts)))
+        # (the same sums as ring_values, for every instant at once)
+        conf = np.minimum(1.0, 7.0 * conf / 7.0)
+        n_all = 9.0 * np.minimum(1.0, np.searchsorted(prim_t, ts, side="right") / 4.0)
+        data = np.minimum(1.0, n_all / 9.0)[:, None]
+        v = (0.1 + data * (0.24 + 0.2 * self._hot_base[None, :]) + 0.56 * self._hot_peak * conf[:, None]
+             + (0.03 + 0.05 * data) * self.ring_jit[None, :])
+        return (v > HOT).any(1)
 
-    def _hot_age(self, t):
-        """Age (for Frame.build) of the PEAK labels at t; negative when no bin is flagged."""
-        for a, b in self.hot_iv:
-            if a <= t < b:
-                return B.io(t - a, b - t, out=0.3, span=0.45)
+    def _hot_age(self, t, shortest=0.4):
+        """Age (for Frame.build) of the PEAK labels at t; negative when no bin is flagged. The labels are made
+        when bins get flagged and taken apart just before they are let go; a flicker shorter than `shortest`
+        gets no label. Both look a little ahead, which the live detectors do not allow: so they look at what
+        will happen if no other muon comes (_hot_scan). A muon that comes in between can keep the labels up
+        (they are then decoded again in place) or give a flicker its labels after all (they are made then)."""
+        ts = self._hot_ts
+        if self._hot_on is None:
+            d = np.diff(np.r_[0, self._hot_scan().astype(int), 0])
+            self._hot_on = list(zip(np.nonzero(d == 1)[0].tolist(), np.nonzero(d == -1)[0].tolist()))
+        for i, j in self._hot_on:
+            a, b = float(ts[i]), float(ts[j]) if j < len(ts) else 1e9
+            if not (a <= t < b):
+                continue
+            start = self._hot_start.get(i)
+            if start is None or start > t:
+                # since when is it known that this one lasts? at its start, or at a muon that came just after
+                start = None
+                for tau in [a] + [float(v) for v in self.tr_t[(self.tr_t > a) & (self.tr_t <= min(t, a + shortest))]]:
+                    on = self._hot_scan(upto=tau)
+                    n = i
+                    while n < len(on) and on[n]:
+                        n += 1
+                    if (n - i) * HOT_DT >= shortest:
+                        start = self._hot_start[i] = tau
+                        break
+            return -1.0 if start is None else B.io(t - start, b - t, out=0.3, span=0.45)
         return -1.0
 
     # ------------------------------------------------------------------ state
@@ -923,11 +1035,13 @@ class Sphere(Scene):
         return float(self.thr_w[i - 1]) if i else 0.0
 
     def _conf(self, t):
-        """(found, confidence 0..1): the search, then the picture firming up until 10 s before the end."""
+        """(found, confidence 0..1): the search, then the picture firming up with the tracks that cross the core
+        (complete 10 s before the end at the latest)."""
         w = self._w(t)
         if t < self.t_found:
-            return False, 0.42 * min(1.0, w / max(self.w_found, 1e-6))
-        return True, 0.5 + 0.5 * min(1.0, (w - self.w_found) / (self.w_full - self.w_found))
+            return False, 0.42 * min(1.0, w / max(SEARCH_W, 1e-6))
+        firm = min(1.0, (w - self.w_found) / FULL_W)
+        return True, 0.5 + 0.5 * max(firm, float(smoothstep(T_FULL - 1.0, T_FULL, t)))
 
     @staticmethod
     def _kicks(ctx, t, phi):
@@ -945,6 +1059,7 @@ class Sphere(Scene):
     # ----------------------------------------------------------------- render
     def draw(self, f, t, ctx):
         lay = self.lay
+        self._update(t, ctx)
         cam, yaw = lay.camera(t, T0, T1 - T0)
         self.pose, self._sl = self._pose(t, ctx), None
         past = self._past(t)
@@ -1189,6 +1304,16 @@ class Sphere(Scene):
     def _tracks(self, f, cam, t, past, ctx):
         """All the muons so far (their PoCA dots stay: they are the picture; the lines fade, see persistence)."""
         keep = persistence(past, t)
+        if len(past) > MANY:        # (a busy detector) the lines that are gone: their PoCA dots, in one go
+            old = [tr for tr in past if keep[tr["id"]] <= 0.0 and t - tr["t"] > 12.0]
+            if old:
+                gone = {tr["id"] for tr in old}
+                past = [tr for tr in past if tr["id"] not in gone]
+                px, py, _, ok = cam.project(np.array([tr["path"][2] for tr in old], np.float32))
+                echo = np.array([tr["echo"] for tr in old])
+                hot = ok & np.array([bool(tr["through"] and tr["mrad"] > 28) for tr in old])
+                f.dots("w", px[ok], py[ok], np.where(echo, 1.6, 2.2)[ok], 0.6)
+                f.dots("r", px[hot], py[hot], np.where(echo, 2.4, 3.6)[hot], 0.3)
         for tr in past:
             self._draw_track(f, cam, tr, t - tr["t"], ctx, persist=keep[tr["id"]])
 

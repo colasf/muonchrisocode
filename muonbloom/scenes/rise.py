@@ -249,7 +249,7 @@ class Rise(Scene):
                     b=rng.uniform(0.45, 1.0, n).astype(np.float32))
 
     def _build_events(self, rng, ctx):
-        cues, det = ctx.cues, ctx.det
+        cues = ctx.cues
         # bass: the strong kicks of the music bloom at the head of the centre tower
         kt, ka = cues.kicks(T0, self.off["C"] - 0.8)
         sel, last = [], -9.0
@@ -274,15 +274,55 @@ class Rise(Scene):
             vel = float(np.clip(an, 0.35, 1.2)) * (0.45 + 0.55 * lv) * (0.55 if tn >= PEAK else 1.0)
             notes.append((float(tn), idx, vel))
         self.notes = np.array(notes, np.float64).reshape(-1, 3)
-        # the real hits of the detectors while they are on
-        hits = []
+        # the real hits of the detectors are taken frame by frame, as they come (`_take_hits`): on site they
+        # are live, and a hit is only known once it has happened. Here, only where on its tower and at which
+        # angle the muon of each hit of the PREVIEW comes down (the hits rebuilt from the muon stem, the same
+        # in every scene worker whatever the detectors are): those keep the numbers they always had, and what
+        # is drawn after them from `rng` does not depend on what the detectors have said so far
+        script = sd.Detectors(cues)
+        self._where = {}
         for key in sd.KEYS:
-            tt, ee, ec = det.hits(key, T0 - 1.0, self.off[key])
+            tt, _, _ = script.hits(key, T0 - 1.0, self.off[key])
+            for th in tt:
+                self._where[(float(th), key)] = (float(rng.uniform(-0.38, 0.38)), float(rng.normal(0, 0.09)))
+        self._where_live = {}
+        self.hits, self.log = [], []
+        # the longest a muon takes from the top of the wall to the head of its tower (see _draw_muons)
+        self._fall = max((tw.top - (L.FY0 + 3)) / 2600.0 for tw in self.tw.values())
+
+    def _hit_where(self, th, key):
+        """Where on its tower (part of its width) and at which angle the muon of a hit comes down. A hit that is
+        not one of the preview draws its own numbers, from its time and its tower: every scene worker, and one
+        that starts in the middle of the scene, gives the same hit the same muon."""
+        w = self._where.get((th, key))
+        if w is None:
+            w = self._where_live.get((th, key))
+        if w is None:
+            if len(self._where_live) > 4000:
+                self._where_live.clear()
+            r = np.random.default_rng([int(round(th * 1000.0)), sd.KEYS.index(key), 9])
+            w = self._where_live[(th, key)] = (float(r.uniform(-0.38, 0.38)), float(r.normal(0, 0.09)))
+        return w
+
+    def _take_hits(self, t, ctx):
+        """The hits this frame works from: `self.hits`, the ones that are being drawn (the last two seconds),
+        and `self.log`, the latest fifteen of each detector for the hit stream. Nothing is kept from one frame
+        to the next. A hit is asked for up to the time its muon takes to come down the wall: the preview knows
+        it by then and its muon is seen falling; a live hit is not known before it happens, and its track is
+        there, whole, on the frame of the hit."""
+        det = ctx.det
+        hits, log = [], []
+        for key in sd.KEYS:
+            off = self.off[key]
+            tt, ee, ec = det.hits(key, max(t - 2.0, T0 - 1.0), min(t + self._fall + 1e-6, off))
             for th, e, echo in zip(tt, ee, ec):
-                hits.append((float(th), key, float(e), bool(echo), float(rng.uniform(-0.38, 0.38)),
-                             float(rng.normal(0, 0.09))))
+                hits.append((float(th), key, float(e), bool(echo)) + self._hit_where(float(th), key))
+            tt, ee, ec = det.hits(key, T0 - 1.0, min(t + 1e-9, off))
+            for th, e, echo in zip(tt[-15:], ee[-15:], ec[-15:]):
+                log.append((float(th), key, float(e), bool(echo), 0.0, 0.0))
         hits.sort()
-        self.hits = hits
+        log.sort()
+        self.hits, self.log = hits, log
 
     # ------------------------------------------------------------------ state
     def _power(self, key, t):
@@ -329,6 +369,7 @@ class Rise(Scene):
     def draw(self, f, t, ctx):
         t = float(np.clip(t, T0, T1 - 1e-6))
         st = self._state(t, ctx)
+        self._take_hits(t, ctx)
         view = (L.FX0 + 2, L.FY0 + 2, L.FX1 - 2, Y_LOW)
         f.set_clip(*view)
         self._draw_motes(f, t, st)
@@ -704,7 +745,7 @@ class Rise(Scene):
             hud.panel_header(f, x, x1, y - 26, _fit(["HIT_STREAM // DET_L DET_C DET_R", "HIT_STREAM"], w, L.T_MICRO))
             n_max = int(w / (L.T_MICRO * CHAR_W))
             k = 0
-            for (th, key, e_h, echo, _, _) in reversed(self.hits):
+            for (th, key, e_h, echo, _, _) in reversed(self.log):
                 if th > t:
                     continue
                 if k >= 15:

@@ -13,8 +13,9 @@ muon does: mu -> e + nu + nu.
                  the HUD text erodes, the counters run backwards, the log empties.
   09:45 - 09:48  the music drops into the pulse of scene 11: a few drifting dots and the lattice; the next
                  scene opens on "nothing chose when...".
-Everything is a closed-form function of t: the release time of every vertex / stick / track is
-fixed at start-up from the hit list (the realtime app does the same from the live stream).
+The hits are taken as they come, never read ahead (the detectors are live on site): the release time of a
+vertex / a stick is fixed by the hit that takes it, when that hit happens (Disintegrate._advance). With no
+hit at all the body still follows the decay law (the trickle) and is gone at the end.
 The layout is the one of the sphere scene (sphere.Lay): every block is dealt out from the columns
 the towers leave free, nothing has a fixed x.
 
@@ -46,6 +47,8 @@ from .. import layout as L
 from .. import showdata as sd
 from ..engine import hash01, smoothstep
 from ..show import Scene
+from .sphere import T0 as S_T0
+from .sphere import T1 as S_T1
 from .sphere import (BLK, BUS_Y, FOLLOW, HOT, N_BINS, R_FAR, Y_BASE, Y_LOW, Body, Lay, Sphere, draw_leader, er, fade,
                      one_tag, pop, ring, ring_values, sphere_tracks, unit)
 
@@ -56,6 +59,7 @@ EDGE_LIFE, STRUT_LIFE, DOT_TAU = 0.9, 1.2, 1.8
 G = 760.0                         # px / s2: the halo sticks fall
 KEEP = 7                          # vertices that never go: "almost" nothing
 UNMAKE = 0.4                      # s of build a line / a rule needs once the wave of its block has reached it
+LAW_LEAD = 0.3                    # s between the moment the decay law lets a halo stick go and its fall
 
 
 def remaining(t):
@@ -90,6 +94,8 @@ class Disintegrate(Sphere):
     name = "disintegrate"
     towers = "auto"
 
+    SNAPS = 12                        # states kept to go back to (a live hit gains energy during its first frames)
+
     def __init__(self, ctx):
         Scene.__init__(self, ctx)
         self.lay = Lay(ctx)
@@ -97,10 +103,49 @@ class Disintegrate(Sphere):
         self.ring_jit = hash01(np.arange(N_BINS), 77) - 0.5
         self.scan_order = np.zeros(len(self.body.ea))
         self.t_first = T0
-        # the picture it comes back with: the tracks of COSMIC GROOVE. Echo lines were gone long before the
-        # end of that scene (their PoCA dot is what is left), primary lines stand as ghosts, the newest
-        # ones clearest. Every track gets the moment it decays here.
-        self.old = sphere_tracks(ctx.det)
+        # the body still moves (sphere.Body.rho): the noise on the clock of the music, a ring from every bite.
+        # A piece that breaks off keeps the radius it had when it let go
+        self._init_motion(ctx, T0, T1)
+        # the tomogram loses its picture: when the erosion reaches each hash (a piece of the contour, a voxel,
+        # a point lets go then)
+        self._e_t = np.linspace(T0, T1, 1301)
+        self._e_v = np.maximum.accumulate(np.array([e_picture(float(v)) for v in self._e_t]))
+        self.t_line_gone = _when(e_text, 0.97)      # the staircase of the integrity panel goes with the last of its lettering
+        # what does not depend on the detectors: the trickle (single nodes let go when the decay law runs
+        # ahead of the hits - with no hit at all the body still follows the law, and is gone at the end), the
+        # ragged edges of the wounds, the order in which the sticks no bite takes follow the law, how they fall
+        self._trickle = [(float(tq), "", 0.0, False) for tq in np.arange(T0 + 0.3, T1, 0.07)]
+        self._trick_t = np.array([e[0] for e in self._trickle])
+        self._ragged = 4.5 * (self.body.rho(self.body.u, 0.0) - 1.0)         # smooth noise
+        rs = np.random.default_rng(2021)
+        self.stick_order = rs.permutation(N_BINS)
+        self.stick_v = rs.normal(0, 60.0, (N_BINS, 2)) + np.array([0.0, -40.0])
+        self.stick_w = rs.normal(0, 2.4, N_BINS)
+        self._phi = 2 * np.pi * (np.arange(N_BINS) + 0.5) / N_BINS
+        self._old_sig = None
+        self._scripted = None
+        self._restart()
+        self._derive()
+
+    # --------------------------------------------------- the picture it comes back with
+    def _picture(self, ctx):
+        """The tracks of COSMIC GROOVE, as the detectors gave them then (they are long past: nothing is read
+        ahead). Echo lines were gone long before the end of that scene (their PoCA dot is what is left),
+        primary lines stand as ghosts, the newest ones clearest. Every track gets the moment it decays here.
+        Made at the first frame, and again only if those hits are not the same any more (the engine started the
+        stream of the detectors again). If the live detectors caught nothing in that scene (the show was
+        started after it), the picture is the one of the scripted hits: there has to be one to take apart."""
+        det = ctx.det
+        sig = tuple((len(tt), float(np.sum(tt)), float(np.sum(ee)))
+                    for tt, ee, _ in (det.hits(key, S_T0 - 0.6, S_T1) for key in sd.KEYS))
+        if sig == self._old_sig:
+            return
+        self._old_sig = sig
+        if not any(s[0] for s in sig):
+            if self._scripted is None:
+                self._scripted = sd.Detectors(ctx.cues)
+            det = self._scripted
+        self.old = sphere_tracks(det)
         rng = np.random.default_rng(1010)
         prim = [tr for tr in self.old if not tr["echo"]]
         rank = {tr["id"]: k for k, tr in enumerate(prim[::-1])}        # 0 = the newest primary
@@ -114,34 +159,14 @@ class Disintegrate(Sphere):
                 tr["decay"] = float(min(T0 + 0.45 + rng.exponential(3.0), T0 + 9.0))
             tr["star"] = self._star_dirs(rng)
             tr["ee"] = float(self._michel_sample(rng))
-        self._schedule(ctx, np.random.default_rng(2020))
-        # the body still moves (sphere.Body.rho): the noise on the clock of the music, a ring from every bite.
-        # A piece that breaks off keeps the radius it had when it let go
-        self._init_motion(ctx, T0, T1)
-        self.waves = [(ch["t"], (0.3 if ch["echo"] else 1.0) * (0.55 + 0.6 * ch["e"]), np.asarray(ch["c"], np.float64))
-                      for ch in self.chunks]
-        b = self.body
-        self.rho_rel = np.ones(b.n)
-        for i in np.nonzero(np.isfinite(self.rel))[0]:
-            self.rho_rel[i] = float(b.rho(b.u[i:i + 1], self._pose(float(self.rel[i]), ctx))[0])
-        # the tomogram loses its picture: when the erosion reaches each hash (a piece of the contour, a voxel,
-        # a point lets go then), and where the estimate stands after every decay of a scattered track
-        self._e_t = np.linspace(T0, T1, 1301)
-        self._e_v = np.maximum.accumulate(np.array([e_picture(float(v)) for v in self._e_t]))
+        # where the estimate of the tomogram stands after every decay of a scattered track
         thr_all = [tr for tr in self.old if tr["through"]]
         self.est = self._est_steps([(T0 - 1.0, thr_all)] + [(d, [q for q in thr_all if q["decay"] > d])
                                                               for d in sorted(q["decay"] for q in thr_all)])
         self.decays = np.sort(np.array([tr["decay"] for tr in self.old]))
-        # the hits that get the tag of the bottom-right corner and the labels of their star
-        self.prim = [ch for ch in self.chunks if not ch["echo"]]
-        self.prim_t = np.array([ch["t"] for ch in self.prim])
-        for ch, nxt in zip(self.prim, list(self.prim_t[1:]) + [1e9]):
-            ch["next"] = float(nxt)
-        # when things of the HUD have to go (they are taken apart just before): the labels of the halo with
-        # its first stick; the estimate and the dotted core of the tomogram, the red circle of the core and
-        # its cross when too few scattered tracks are left to give them (or the picture is too far gone);
-        # the staircase of the integrity panel with the last of its lettering
-        self.t_drop0 = float(np.min(self.drop))
+        # when things of the HUD have to go (they are taken apart just before): the estimate and the dotted
+        # core of the tomogram, the red circle of the core and its cross when too few scattered tracks are left
+        # to give them (or the picture is too far gone)
         dec = sorted(tr["decay"] for tr in self.old if tr["through"])
         self.t_est_gone = min(dec[-2] if len(dec) >= 2 else T0, _when(e_picture, 0.9))
         self.t_ring_gone = dec[-3] if len(dec) >= 3 else T0
@@ -151,7 +176,6 @@ class Disintegrate(Sphere):
             n = sum(1 for d in dec if d > t)
             return (min(1.0, n / 7.0) if n >= 3 else 0.0) * max(0.0, min(1.0, float(remaining(t)) * 3.0))
         self.t_cross_gone = _when(lambda t: 0.6 - conf(t), 0.0)
-        self.t_line_gone = _when(e_text, 0.97)
 
     T_BUILD = T0                      # the furniture is constructed when the picture comes back
 
@@ -180,36 +204,89 @@ class Disintegrate(Sphere):
             if rng.random() < michel(x):
                 return x
 
-    def _schedule(self, ctx, rng):
-        b = self.body
-        n = b.n
-        u = b.u
+    # ------------------------------------------------- the body taken apart, hit by hit
+    # The state of the body is the result of the events so far, taken in order: the hits of the detectors and
+    # the ticks of the trickle. Nothing is read ahead - the detectors are live on site, a hit is only known
+    # once it has happened. Every frame the events up to its time that were not taken yet are taken
+    # (`_advance`). One random stream runs through them, so the same hits give the same body in every scene
+    # worker, and in a worker that starts in the middle of the scene (it takes them all at once).
+    def _restart(self):
+        n = self.body.n
+        self._s = dict(rng=np.random.default_rng(2020), done=[], rel=np.full(n, np.inf), vel=np.zeros((n, 3)),
+                       free=np.ones(n, bool), released=0, chunks=[], last_c={}, drop=np.full(N_BINS, np.inf),
+                       known=None, over=False)
+        self._snaps = []
+        self.rho_rel = np.ones(n)
+        self._rho_of = np.full(n, np.nan)       # the release time each rho_rel was worked out for
+
+    def _snap(self):
+        s = self._s
+        return dict(rng=s["rng"].bit_generator.state, n_done=len(s["done"]), rel=s["rel"].copy(), vel=s["vel"].copy(),
+                    free=s["free"].copy(), released=s["released"], n_chunks=len(s["chunks"]), last_c=dict(s["last_c"]),
+                    drop=s["drop"].copy(), known=s["known"], over=s["over"])
+
+    def _back(self, q):
+        s = self._s
+        s["rng"].bit_generator.state = q["rng"]
+        del s["done"][q["n_done"]:]
+        del s["chunks"][q["n_chunks"]:]
+        s.update(rel=q["rel"].copy(), vel=q["vel"].copy(), free=q["free"].copy(), released=q["released"],
+                 last_c=dict(q["last_c"]), drop=q["drop"].copy(), known=q["known"], over=q["over"])
+
+    def _advance(self, ctx, t):
         ev = []
         for key in sd.KEYS:
-            tt, ee, ec = ctx.det.hits(key, T0, T1)
+            tt, ee, ec = ctx.det.hits(key, T0, min(t + 1e-6, T1))
             ev += [(float(a), key, float(e), bool(c)) for a, e, c in zip(tt, ee, ec)]
-        ev += [(float(tq), "", 0.0, False) for tq in np.arange(T0 + 0.3, T1, 0.07)]      # the trickle
+        nt = int(np.searchsorted(self._trick_t, t, side="right"))
+        ev += self._trickle[:nt]
         ev.sort()
-        rel = np.full(n, np.inf)
-        ragged = 4.5 * (b.rho(u, 0.0) - 1.0)          # smooth noise: the wounds get ragged edges
-        vel = np.zeros((n, 3))
-        free = np.ones(n, bool)
-        released = 0
-        chunks = []
-        last_c = {}
-        for th, key, e, echo in ev:
-            want = int(n * (1.0 - float(remaining(th + 0.5)))) - released
-            room = n - KEEP - released
-            if room <= 0:
-                break
-            if key == "":                       # trickle: single nodes let go when the decay law runs ahead
-                if want > 14:
-                    idx = rng.choice(np.nonzero(free)[0], size=min(max(3, want // 3), room), replace=False)
-                    rel[idx] = th + rng.uniform(0, 0.07, len(idx))
-                    vel[idx] = u[idx] * rng.uniform(0.08, 0.2, (len(idx), 1)) + rng.normal(0, 0.03, (len(idx), 3))
-                    free[idx] = False
-                    released += len(idx)
-                continue
+        s = self._s
+        done = s["done"]
+        n = min(len(ev), len(done))
+        if ev[:n] != done[:n]:
+            # what was taken is not what happened: a live hit gained energy since (its first 80 ms), or the
+            # stream was started again. Back to the state before the first event that differs
+            p = next(i for i in range(n) if ev[i] != done[i])
+            since = min(ev[p][0], done[p][0])
+            ok = [q for q in self._snaps if q["n_done"] <= p]
+            if ok:
+                self._back(ok[-1])
+                self._snaps = ok
+                self._rho_of[s["rel"] >= since] = np.nan        # (the rings of the hits shape what lets go after them)
+            else:
+                self._restart()
+                s = self._s
+        elif len(ev) <= len(done):
+            return                          # nothing new (events taken for a later frame do not show at this one)
+        for e in ev[len(s["done"]):]:
+            if e[1] != "":
+                self._snaps = self._snaps[-(self.SNAPS - 1):] + [self._snap()]
+            self._take(e)
+            s["done"].append(e)
+        self._derive()
+
+    def _take(self, event):
+        """One event: a hit bites a chunk off the body, a tick of the trickle lets single nodes go."""
+        th, key, e, echo = event
+        s = self._s
+        b = self.body
+        n, u, rng = b.n, b.u, s["rng"]
+        rel, vel, free = s["rel"], s["vel"], s["free"]
+        want = int(n * (1.0 - float(remaining(th + 0.5)))) - s["released"]
+        room = n - KEEP - s["released"]
+        if room <= 0:
+            s["over"] = True                    # "almost" nothing is left: the body is done
+        if s["over"]:
+            pass
+        elif key == "":                         # trickle: single nodes let go when the decay law runs ahead
+            if want > 14:
+                idx = rng.choice(np.nonzero(free)[0], size=min(max(3, want // 3), room), replace=False)
+                rel[idx] = th + rng.uniform(0, 0.07, len(idx))
+                vel[idx] = u[idx] * rng.uniform(0.08, 0.2, (len(idx), 1)) + rng.normal(0, 0.03, (len(idx), 3))
+                free[idx] = False
+                s["released"] += len(idx)
+        else:
             # the bites follow the decay law: a hit takes what the law is owed (an echo a part of it); when
             # the body is ahead of the law it only chips a node or two
             base = int((4 if echo else 14) * (0.4 + e) * (1.5 if key == "C" else 1.0))
@@ -220,49 +297,80 @@ class Disintegrate(Sphere):
             else:
                 k = max(want, min(base, want + 6))
             k = int(min(k, room, 150))
-            if k <= 0:
-                continue
-            cand = np.nonzero(free)[0]
-            if echo and key in last_c:
-                c = unit(last_c[key] + rng.normal(0, 0.16, 3))
-            else:                               # a new crater, where the body is still whole (more often on top)
-                w = 1.3 + u[cand, 1]
-                c = unit(u[rng.choice(cand, p=w / w.sum())] + rng.normal(0, 0.1, 3))
-            last_c[key] = c
-            order = cand[np.argsort(-(u[cand] @ c + ragged[cand]))[:k]]
-            ang = np.arccos(np.clip(u[order] @ c, -1, 1))
-            rel[order] = th + 0.02 + 0.22 * ang
-            vel[order] = (c[None] * (0.14 + 0.2 * e) + u[order] * rng.uniform(0.05, 0.2, (k, 1))
-                          + rng.normal(0, 0.04, (k, 3)))
-            free[order] = False
-            released += k
-            chunks.append(dict(t=th, key=key, e=e, echo=echo, c=c, n=k, star=self._star_dirs(rng),
-                               ee=float(self._michel_sample(rng)), id=len(chunks) + 1))
-        self.rel, self.vel = rel, vel.astype(np.float32)
-        self.chunks = chunks
-        self.rel_sorted = np.sort(rel[np.isfinite(rel)])
-        # halo sticks: a chunk takes the sticks on its side of the limb with it; the rest follow the decay law
-        drop = np.full(N_BINS, np.inf)
-        phi = 2 * np.pi * (np.arange(N_BINS) + 0.5) / N_BINS
-        for ch in chunks:
-            cam, _ = self._cam(ch["t"])
-            px, py, _, _ = cam.project(np.stack([np.zeros(3), ch["c"]]).astype(np.float32))
-            pa = math.atan2(-(float(py[1]) - float(py[0])), float(px[1]) - float(px[0]))
-            lim = math.hypot(float(px[1]) - float(px[0]), float(py[1]) - float(py[0])) / self.lay.R   # 1 = on the limb
-            half = (0.06 + 0.5 * ch["n"] / 230.0) * (0.35 + 0.65 * lim)
-            d = np.abs(np.angle(np.exp(1j * (phi - pa))))
-            hit = (d < half) & np.isinf(drop)
-            drop[hit] = ch["t"] + 0.08 + 0.5 * d[hit] / max(half, 1e-3) * 0.4
-        rest = np.nonzero(np.isinf(drop))[0]
-        rng.shuffle(rest)
-        tgrid = np.linspace(T0, T1 - 0.6, 600)
-        frac = 1.0 - remaining(tgrid)
-        have = N_BINS - len(rest)
-        for j, bi in enumerate(rest[: len(rest) - 2]):
-            drop[bi] = float(np.interp((have + j + 1) / N_BINS, frac, tgrid))
-        self.drop = drop
-        self.stick_v = rng.normal(0, 60.0, (N_BINS, 2)) + np.array([0.0, -40.0])
-        self.stick_w = rng.normal(0, 2.4, N_BINS)
+            if k > 0:
+                cand = np.nonzero(free)[0]
+                if echo and key in s["last_c"]:
+                    c = unit(s["last_c"][key] + rng.normal(0, 0.16, 3))
+                else:                           # a new crater, where the body is still whole (more often on top)
+                    w = 1.3 + u[cand, 1]
+                    c = unit(u[rng.choice(cand, p=w / w.sum())] + rng.normal(0, 0.1, 3))
+                s["last_c"][key] = c
+                order = cand[np.argsort(-(u[cand] @ c + self._ragged[cand]))[:k]]
+                ang = np.arccos(np.clip(u[order] @ c, -1, 1))
+                rel[order] = th + 0.02 + 0.22 * ang
+                vel[order] = (c[None] * (0.14 + 0.2 * e) + u[order] * rng.uniform(0.05, 0.2, (k, 1))
+                              + rng.normal(0, 0.04, (k, 3)))
+                free[order] = False
+                s["released"] += k
+                ch = dict(t=th, key=key, e=e, echo=echo, c=c, n=k, star=self._star_dirs(rng),
+                          ee=float(self._michel_sample(rng)), id=len(s["chunks"]) + 1)
+                s["chunks"].append(ch)
+                self._chunk_sticks(ch)
+        self._law_sticks(th)
+
+    def _chunk_sticks(self, ch):
+        """Halo sticks: a chunk takes the sticks on its side of the limb with it."""
+        s = self._s
+        drop = s["drop"]
+        cam, _ = self._cam(ch["t"])
+        px, py, _, _ = cam.project(np.stack([np.zeros(3), ch["c"]]).astype(np.float32))
+        pa = math.atan2(-(float(py[1]) - float(py[0])), float(px[1]) - float(px[0]))
+        lim = math.hypot(float(px[1]) - float(px[0]), float(py[1]) - float(py[0])) / self.lay.R   # 1 = on the limb
+        half = (0.06 + 0.5 * ch["n"] / 230.0) * (0.35 + 0.65 * lim)
+        d = np.abs(np.angle(np.exp(1j * (self._phi - pa))))
+        hit = (d < half) & np.isinf(drop)
+        drop[hit] = ch["t"] + 0.08 + 0.5 * d[hit] / max(half, 1e-3) * 0.4
+        if hit.any() and s["known"] is None:
+            s["known"] = ch["t"]
+
+    def _law_sticks(self, th):
+        """... the rest follow the decay law: when the law is ahead of the sticks that have let go, the next
+        ones (in an order of their own) let go, LAW_LEAD s later. Two never do."""
+        s = self._s
+        drop = s["drop"]
+        cnt = int(np.isfinite(drop).sum())
+        k = min(int(N_BINS * (1.0 - float(remaining(th + LAW_LEAD)))) - cnt, N_BINS - 2 - cnt)
+        if k > 0:
+            nxt = self.stick_order[np.isinf(drop[self.stick_order])][:k]
+            drop[nxt] = th + LAW_LEAD + 0.02 * np.arange(len(nxt))
+            if s["known"] is None:
+                s["known"] = th
+
+    def _derive(self):
+        """What the frames read, from the state of the body."""
+        s = self._s
+        self.rel, self.vel = s["rel"], s["vel"].astype(np.float32)
+        self.chunks = s["chunks"]
+        self.rel_sorted = np.sort(s["rel"][np.isfinite(s["rel"])])
+        self.drop = s["drop"]
+        self.waves = [(ch["t"], (0.3 if ch["echo"] else 1.0) * (0.55 + 0.6 * ch["e"]), np.asarray(ch["c"], np.float64))
+                      for ch in self.chunks]
+        # the hits that get the tag of the bottom-right corner and the labels of their star
+        self.prim = [ch for ch in self.chunks if not ch["echo"]]
+        self.prim_t = np.array([ch["t"] for ch in self.prim])
+        for ch, nxt in zip(self.prim, list(self.prim_t[1:]) + [1e9]):
+            ch["next"] = float(nxt)
+        # the labels of the halo go with its first stick: they are taken apart in the 0.3 s before it lets go
+        # (a stick the law lets go is known that long before; one a bite takes is not, they then go with it)
+        self.t_lab = 1e9 if s["known"] is None else max(float(np.min(s["drop"])), s["known"] + LAW_LEAD)
+
+    def _let_go(self, t, ctx):
+        """A piece that breaks off keeps the radius it had when it let go: worked out when it does."""
+        new = np.nonzero((self.rel <= t) & (self._rho_of != self.rel))[0]
+        b = self.body
+        for i in new:
+            self.rho_rel[i] = float(b.rho(b.u[i:i + 1], self._pose(float(self.rel[i]), ctx))[0])
+        self._rho_of[new] = self.rel[new]
 
     def _cam(self, t):
         return self.lay.camera(t, T0, 92.0, phase=2.2)
@@ -291,6 +399,9 @@ class Disintegrate(Sphere):
     # ----------------------------------------------------------------- render
     def draw(self, f, t, ctx):
         lay = self.lay
+        self._picture(ctx)
+        self._advance(ctx, t)
+        self._let_go(t, ctx)
         cam, yaw = self._cam(t)
         self.pose, self._sl = self._pose(t, ctx), None
         e_txt = e_text(t)
@@ -304,7 +415,7 @@ class Disintegrate(Sphere):
         self._lattice(f)
         self._eroding_body(f, cam, t)
         self._ring(f, phi, v, 1.0, alive=self.drop > t, gain=1.0,          # its labels go with its first stick
-                   label_age=B.io(t - T0 - 0.4, self.t_drop0 - t, out=0.3, span=0.45), follow=follow)
+                   label_age=B.io(t - T0 - 0.4, self.t_lab - t, out=0.3, span=0.45), follow=follow)
         self._falling_sticks(f, phi, v, t, follow)
         for tr in self.old:                               # the old picture, decaying
             a = t - tr["decay"]

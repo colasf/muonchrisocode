@@ -11,8 +11,10 @@ angle), re-anchored on the towers and given the Muon Bloom data layer:
     keeps feeding two arms with new trails while the old ones wind up into the disc;
   * LIVE ("data on"): every detector onset is traced back to its source - a red burst of trails
     leaves that tower's detector, joins the rotation and cools to white, and a line is added to
-    the trace log (echoes dimmer). A strong hit also makes the core answer: a red shock ring on
-    the floor, a flash through the whole disc, a fast new generation of trails;
+    the trace log (echoes dimmer). The hits are taken as they come, never read ahead (the
+    detectors are live on site): each of the three towers sends its own red trails, hit by hit.
+    A strong hit also makes the core answer: a red shock ring on the floor, a flash through the
+    whole disc, a fast new generation of trails;
   * detail: labelled range rings, trace log, orbit log of tracked trails, arm-density histogram,
     rotation curve, counters, the three detector streams as a barcode. The rotation curve is alive: the
     tracked trails of the orbit log ride it at their radius, a probe runs along it and reads it, and the
@@ -98,43 +100,10 @@ def _cum(w):
     return np.concatenate([np.zeros((len(w), 1)), np.cumsum(0.5 * (w[:, 1:] + w[:, :-1]) * DT, axis=1)], 1)
 
 
-class Model:
-    """Particles of the galaxy: founders + continuous emission + one generation per strong hit (white),
-    and one traced burst per detector onset (red, cooling to white)."""
+class Trails:
+    """A set of white particles: when each is born, its tables of radius / angle against age, how it looks."""
 
-    def __init__(self, t0, t1, hits, inj, seed=5):
-        """hits = [(time, tower key, energy, echo)], inj = {key: (r, azimuth)}: where the towers sit on the disc."""
-        rng = np.random.default_rng(seed)
-        span = t1 - t0
-        ages = np.arange(0.0, span + 10.0 + DT, DT)
-        self.strong = [(a, k, e) for a, k, e, ec in hits if not ec and e >= STRONG and a < t1]
-        blocks = []
-
-        def block(n, tb, size, tau, th0, fade, kind):
-            bulge = rng.random(n) < 0.14
-            u = rng.random(n)
-            R = np.where(bulge, 0.02 + 0.2 * u, 0.14 + 1.3 * u ** 0.8) * size
-            tau_ = tau[0] + (tau[1] - tau[0]) * rng.random(n)
-            tau_ = tau_ * (1.0 + 0.2 * R / (1.5 * size))
-            loose = rng.random(n) < 0.1
-            th = np.where(loose, rng.uniform(0, 2 * np.pi, n), th0)
-            blocks.append(dict(tb=tb, R=R, tau=tau_, th0=th, bulge=bulge, f0=np.full(n, fade[0]),
-                               f1=np.full(n, fade[1]), kind=np.full(n, kind)))
-
-        # founders: the galaxy growing out of the dot
-        n = N_FOUND
-        block(n, t0 + T_DELAY + GROW * rng.random(n) ** 1.6, 1.0, (7.0, 11.0),
-              rng.integers(0, 2, n) * np.pi + rng.normal(0, 0.36, n), (1e9, 2e9), 0)
-        # the core keeps feeding two slowly turning arms
-        n = int(RATE * span)
-        tb = t0 + T_DELAY + rng.random(n) * span
-        block(n, tb, 0.9, (6.0, 9.0), rng.integers(0, 2, n) * np.pi + PATTERN * (tb - t0) + rng.normal(0, 0.3, n),
-              YOUNG, 1)
-        # a strong hit: the core answers
-        for k, (th_, key, e) in enumerate(self.strong):
-            n = int(350 + 500 * e)
-            block(n, th_ + rng.uniform(0.0, 0.35, n) ** 2, 0.95, (1.8, 3.4),
-                  rng.integers(0, 3, n) * (2 * np.pi / 3) + 0.7 * k + rng.normal(0, 0.4, n), GEN_LIFE, 2)
+    def __init__(self, rng, blocks, ages):
         cat = lambda key: np.concatenate([b[key] for b in blocks])
         self.tb, self.R, tau, th0 = cat("tb"), cat("R"), cat("tau"), cat("th0")
         self.bulge, self.kind = cat("bulge"), cat("kind")
@@ -149,45 +118,175 @@ class Model:
         self.b = (0.22 + 0.78 * rng.random(n) ** 2.2).astype(np.float32)
         self.ecc = (0.05 * rng.random(n)).astype(np.float32)
         self.eph = rng.uniform(0, 2 * np.pi, n).astype(np.float32)
-        # ---- red traced bursts (one per detector onset) ------------------------
-        rb, thb, tbb, hb, lb, bb = [], [], [], [], [], []
-        self.events = []
-        first = 0
-        strong_t = {s[0] for s in self.strong}
-        for th_, key, e, echo in hits:
-            stage = th_ in strong_t
-            m = 110 if stage else int((9 if echo else 30) * (0.45 + e))
-            r_i, a_i = inj[key]
-            if r_i < 0.03:                    # the centre tower sits on the core: a burst in every direction
-                Rk = (0.08 + 0.62 * rng.random(m) ** 0.9 * (0.5 + 0.6 * e)) * (1.5 if stage else 1.0)
-                tk = (1.2 + 1.4 * rng.random(m)) if stage else (2.2 + 1.5 * rng.random(m))
-                rr = Rk[:, None] * (1.0 - np.exp(-ages[None, :] / tk[:, None]))
-                a0, dth = rng.uniform(0, 2 * np.pi, m), np.zeros(m)
-            else:
-                dr = rng.normal(0.03, 0.11, m) * (0.6 + 0.6 * e) * (1.5 if stage else 1.0)
-                rr = np.maximum(r_i + dr[:, None] * (1.0 - np.exp(-ages[None, :] / 2.4)), 0.02)
-                a0, dth = np.full(m, a_i), rng.normal(0, 0.48 if stage else 0.3, m)
-            rb.append(rr)
-            thb.append(a0[:, None] + dth[:, None] * (1.0 - np.exp(-ages[None, :] / 1.1)) + _cum(omega(rr)))
-            tbb.append(np.full(m, th_))
-            hb.append(rng.normal(0, 0.01, m))
-            lb.append(1.4 + 2.6 * rng.random(m))
-            bb.append((0.45 + 0.55 * rng.random(m)) * (0.55 if echo else 1.0) * (0.5 + 0.6 * e))
-            self.events.append(dict(t=float(th_), key=key, e=float(e), echo=bool(echo), stage=stage, r=r_i,
-                                    a=a_i, first=first, gl=float(rng.uniform(0, 360)),
-                                    gb=float(rng.normal(0, 4.0)), d=float(rng.uniform(0.4, 14.0))))
-            first += m
-        if rb:
-            self.rr = np.concatenate(rb).astype(np.float32)
-            self.rth = np.concatenate(thb).astype(np.float32)
-            self.rtb = np.concatenate(tbb).astype(np.float64)
-            self.rh = np.concatenate(hb).astype(np.float32)
-            self.rlen = np.concatenate(lb).astype(np.float32)
-            self.rb = np.concatenate(bb).astype(np.float32)
+
+    FIELDS = ("tb", "R", "bulge", "kind", "f0", "f1", "r", "th", "h", "len", "b", "ecc", "eph", "keep", "rho0")
+
+    def take(self, n):
+        """The first n particles only."""
+        for k in self.FIELDS:
+            if hasattr(self, k):
+                setattr(self, k, getattr(self, k)[:n])
+        self.n = n
+        return self
+
+    @classmethod
+    def join(cls, sets):
+        out = cls.__new__(cls)
+        for k in cls.FIELDS:
+            setattr(out, k, np.concatenate([getattr(s, k) for s in sets]))
+        out.n = len(out.tb)
+        return out
+
+
+def _block(rng, n, tb, size, tau, th0, fade, kind):
+    bulge = rng.random(n) < 0.14
+    u = rng.random(n)
+    R = np.where(bulge, 0.02 + 0.2 * u, 0.14 + 1.3 * u ** 0.8) * size
+    tau_ = tau[0] + (tau[1] - tau[0]) * rng.random(n)
+    tau_ = tau_ * (1.0 + 0.2 * R / (1.5 * size))
+    loose = rng.random(n) < 0.1
+    th = np.where(loose, rng.uniform(0, 2 * np.pi, n), th0)
+    return dict(tb=tb, R=R, tau=tau_, th0=th, bulge=bulge, f0=np.full(n, fade[0]), f1=np.full(n, fade[1]),
+                kind=np.full(n, kind))
+
+
+class Model:
+    """Particles of the galaxy: founders + continuous emission (white, the galaxy itself: they do not depend on
+    the detectors), and what the detectors add - one traced burst per detection, leaving the tower that caught
+    it (red, cooling to white), and one generation of white trails from the core per strong hit.
+
+    What the detectors add is made hit by hit, as the hits come (`update`): a hit is only known once it has
+    happened (the detectors are live on site). Each hit draws its own random numbers, from its time and its
+    tower, so every scene worker makes the same burst for the same hit."""
+
+    M_BURST, N_GEN = 110, 850           # the most trails a burst / a generation can have
+    GEN_MAX, GEN_SPAN = 10, 14.0        # the core answers at most this many strong hits in this many seconds
+    DENSE, DENSE_SPAN = 30, 10.0        # more detections than this in this many seconds: each burst has fewer trails
+
+    def __init__(self, t0, t1, inj, seed=5):
+        """inj = {key: (r, azimuth)}: where the towers sit on the disc."""
+        rng = np.random.default_rng(seed)
+        span = t1 - t0
+        self.t0, self.t1, self.inj = t0, t1, inj
+        ages = np.arange(0.0, span + 10.0 + DT, DT)
+        blocks = []
+        # founders: the galaxy growing out of the dot
+        n = N_FOUND
+        blocks.append(_block(rng, n, t0 + T_DELAY + GROW * rng.random(n) ** 1.6, 1.0, (7.0, 11.0),
+                             rng.integers(0, 2, n) * np.pi + rng.normal(0, 0.36, n), (1e9, 2e9), 0))
+        # the core keeps feeding two slowly turning arms
+        n = int(RATE * span)
+        tb = t0 + T_DELAY + rng.random(n) * span
+        blocks.append(_block(rng, n, tb, 0.9, (6.0, 9.0),
+                             rng.integers(0, 2, n) * np.pi + PATTERN * (tb - t0) + rng.normal(0, 0.3, n), YOUNG, 1))
+        self.base = Trails(rng, blocks, ages)
+        self.ages_gen = np.arange(0.0, GEN_LIFE[1] * 1.15 + 1.0 + DT, DT)
+        self.ages_red = np.arange(0.0, RED_LIFE[1] + 1.0 + DT, DT)
+        self._bursts, self._gens, self._extra = {}, {}, {}
+        self._sig = None
+        self.strong, self.events, self.gen = [], [], None
+        self._no_red()
+
+    def _no_red(self):
+        self.rr = self.rth = np.zeros((0, len(self.ages_red)), np.float32)
+        self.rtb = np.zeros(0)
+        self.rh = self.rlen = self.rb = np.zeros(0, np.float32)
+
+    # ---- one hit ------------------------------------------------------------
+    @staticmethod
+    def _rng(th_, key, what):
+        return np.random.default_rng([int(round(th_ * 1000.0)), sd.KEYS.index(key), what])
+
+    def _burst(self, th_, key, e, echo, stage, part=1.0):
+        """The red trails of one detection: they leave the detector of its tower. The random numbers are drawn
+        for the largest burst and the first m are used: a hit whose energy is still rising (live, its first
+        frames) keeps the trails it has and gains some. part: the share of its trails it gets (see DENSE)."""
+        rng = self._rng(th_, key, 1)
+        M, ages = self.M_BURST, self.ages_red
+        m = max(4, int((M if stage else int((9 if echo else 30) * (0.45 + e))) * part))
+        u = rng.random((6, M))
+        g = rng.normal(size=(3, M))
+        r_i, a_i = self.inj[key]
+        if r_i < 0.03:                    # the centre tower sits on the core: a burst in every direction
+            Rk = (0.08 + 0.62 * u[0] ** 0.9 * (0.5 + 0.6 * e)) * (1.5 if stage else 1.0)
+            tk = (1.2 + 1.4 * u[1]) if stage else (2.2 + 1.5 * u[1])
+            rr = Rk[:m, None] * (1.0 - np.exp(-ages[None, :] / tk[:m, None]))
+            a0, dth = 2 * np.pi * u[2], np.zeros(M)
         else:
-            self.rr = self.rth = np.zeros((0, len(ages)), np.float32)
-            self.rtb = np.zeros(0)
-            self.rh = self.rlen = self.rb = np.zeros(0, np.float32)
+            dr = (0.03 + 0.11 * g[0]) * (0.6 + 0.6 * e) * (1.5 if stage else 1.0)
+            rr = np.maximum(r_i + dr[:m, None] * (1.0 - np.exp(-ages[None, :] / 2.4)), 0.02)
+            a0, dth = np.full(M, a_i), (0.48 if stage else 0.3) * g[1]
+        return dict(rr=rr.astype(np.float32),
+                    rth=(a0[:m, None] + dth[:m, None] * (1.0 - np.exp(-ages[None, :] / 1.1)) + _cum(omega(rr))).astype(np.float32),
+                    rtb=np.full(m, th_), rh=(0.01 * g[2][:m]).astype(np.float32),
+                    rlen=(1.4 + 2.6 * u[3][:m]).astype(np.float32),
+                    rb=((0.45 + 0.55 * u[4][:m]) * (0.55 if echo else 1.0) * (0.5 + 0.6 * e)).astype(np.float32))
+
+    def _generation(self, th_, key, e):
+        """A strong hit: the core answers with a generation of white trails."""
+        rng = self._rng(th_, key, 2)
+        N = self.N_GEN
+        blk = _block(rng, N, th_ + rng.uniform(0.0, 0.35, N) ** 2, 0.95, (1.8, 3.4),
+                     rng.integers(0, 3, N) * (2 * np.pi / 3) + rng.uniform(0, 2 * np.pi) + rng.normal(0, 0.4, N), GEN_LIFE, 2)
+        s = Trails(rng, [blk], self.ages_gen)
+        # the wall rule (see Galaxy._build for the galaxy itself): which ones are drawn, and from how far out
+        inner = s.bulge | (s.R < 0.3)
+        s.keep = rng.random(N) < np.where(inner, WALL_KEEP_BULGE, WALL_KEEP_GEN)
+        s.rho0 = np.where(inner | (rng.random(N) < 0.12), 0.0, 0.09 + 0.33 * rng.random(N)).astype(np.float32)
+        return s.take(int(350 + 500 * e))
+
+    def _extras(self, th_, key):
+        x = self._extra.get((th_, key))
+        if x is None:
+            rng = self._rng(th_, key, 3)
+            x = self._extra[(th_, key)] = (float(rng.uniform(0, 360)), float(rng.normal(0, 4.0)), float(rng.uniform(0.4, 14.0)))
+        return x
+
+    # ---- the hits so far ------------------------------------------------------
+    def update(self, hits, t):
+        """hits = [(time, tower key, energy, echo)] up to time t, in order. Makes what is new, drops what is over."""
+        red_from = t - RED_LIFE[1] - 1.0
+        gen_from = t - self.ages_gen[-1]
+        sig = (tuple(hits), sum(1 for h in hits if h[0] < red_from), sum(1 for h in hits if h[0] < gen_from))
+        if sig == self._sig:
+            return
+        self._sig = sig
+        self.strong, self.events = [], []
+        bursts, gens, red, gen = {}, {}, [], []
+        first = 0
+        lo = 0
+        for n, (th_, key, e, echo) in enumerate(hits):
+            while hits[lo][0] < th_ - self.DENSE_SPAN:
+                lo += 1
+            # (many detections in a short time: every one still has its burst, with fewer trails)
+            part = round(min(1.0, self.DENSE / (n - lo + 1)), 2)
+            # a strong hit makes the core answer (unless it has just answered many: a detector that only says
+            # 0 or 1 would have it answer every hit)
+            stage = (not echo and e >= STRONG and th_ < self.t1
+                     and sum(1 for s in self.strong if th_ - s[0] < self.GEN_SPAN) < self.GEN_MAX)
+            if stage:
+                self.strong.append((th_, key, e))
+            gl, gb, d = self._extras(th_, key)
+            r_i, a_i = self.inj[key]
+            ev = dict(t=float(th_), key=key, e=float(e), echo=bool(echo), stage=stage, r=r_i, a=a_i, first=-1,
+                      gl=gl, gb=gb, d=d)
+            self.events.append(ev)
+            k = (th_, key, e, echo, stage, part)
+            if th_ >= red_from:
+                b = bursts[k] = self._bursts.get(k) or self._burst(*k)
+                red.append(b)
+                ev["first"] = first
+                first += len(b["rtb"])
+            if stage and th_ >= gen_from:
+                s = gens[k] = self._gens.get(k) or self._generation(th_, key, e)
+                gen.append(s)
+        self._bursts, self._gens = bursts, gens
+        if red:
+            for name in ("rr", "rth", "rtb", "rh", "rlen", "rb"):
+                setattr(self, name, np.concatenate([b[name] for b in red]))
+        else:
+            self._no_red()
+        self.gen = Trails.join(gen) if gen else None
 
     @staticmethod
     def _interp(tab, age):
@@ -198,16 +297,18 @@ class Model:
         rows = np.arange(tab.shape[0])[:, None]
         return tab[rows, i] * (1 - fr) + tab[rows, i + 1] * fr
 
-    def trails(self, t, m=15, red=False):
-        """World positions of the trail samples at time t. Returns (P (n, m, 3), age (n,), idx)."""
+    def trails(self, t, m=15, red=False, src=None):
+        """World positions of the trail samples at time t. Returns (P (n, m, 3), age (n,), idx). src: the set
+        of white particles (the galaxy itself, or the generations of the strong hits)."""
         if red:
             tb, tab_r, tab_t, h, ln = self.rtb, self.rr, self.rth, self.rh, self.rlen
             a = t - tb
             idx = np.nonzero((a > 0.0) & (a < RED_LIFE[1]))[0]
         else:
-            tb, tab_r, tab_t, h, ln = self.tb, self.r, self.th, self.h, self.len
+            s = src or self.base
+            tb, tab_r, tab_t, h, ln = s.tb, s.r, s.th, s.h, s.len
             a = t - tb
-            idx = np.nonzero((a > 0.0) & (a < self.f1))[0]
+            idx = np.nonzero((a > 0.0) & (a < s.f1))[0]
         if not len(idx):
             return np.zeros((0, m, 3), np.float32), a[idx], idx
         a = a[idx]
@@ -222,7 +323,7 @@ class Model:
         r = tab_r[rows, i] * (1 - fr) + tab_r[rows, i + 1] * fr
         th = tab_t[rows, i] * (1 - fr) + tab_t[rows, i + 1] * fr
         if not red:
-            r = r * (1.0 + self.ecc[idx][:, None] * np.cos(2 * (th - self.eph[idx][:, None])))
+            r = r * (1.0 + s.ecc[idx][:, None] * np.cos(2 * (th - s.eph[idx][:, None])))
         P = np.stack([r * np.cos(th), h[idx][:, None] * np.minimum(r / 0.4, 1.0), r * np.sin(th)], -1)
         return P.astype(np.float32), a, idx
 
@@ -275,19 +376,24 @@ class Galaxy(Scene):
 
     # ------------------------------------------------------------------ build
     def _build(self, t, ctx):
-        """Everything that depends on where the look sits in the show (its span, the detector onsets in it).
-        Rebuilt only if the look is auditioned somewhere else."""
+        """Everything that depends on where the look sits in the show (its span): built once, and again only if
+        the look is auditioned somewhere else. Then, every frame, the detections up to now (`Model.update`):
+        nothing is read ahead, the detectors are live on site."""
         _, sec, _ = sd.section_at(t)
         t0, t1 = sd.look_span(sec[4], t) if sec[4] == self.name else (sec[2], sec[3])
-        if self.span == (t0, t1):
-            return
-        self.span = (t0, t1)
+        if self.span != (t0, t1):
+            self.span = (t0, t1)
+            self._build_span(t0, t1)
         hits = []
         for key in sd.KEYS:
-            tt, ee, ec = ctx.det.hits(key, t0, t1 + 1.0)
+            tt, ee, ec = ctx.det.hits(key, t0, min(t, t1 + 1.0) + 1e-6)
             hits += [(float(a), key, float(b), bool(c)) for a, b, c in zip(tt, ee, ec)]
         hits.sort()
-        self.model = m = Model(t0, t1, hits, self.inj)
+        self.model.update(hits, t)
+
+    def _build_span(self, t0, t1):
+        self.model = Model(t0, t1, self.inj)
+        m = self.model.base
         rng = np.random.default_rng(77)
         cand = np.nonzero(~m.bulge & (m.R > 0.22) & (m.R < 1.25) & (m.b > 0.45))[0]
         self.lab = rng.choice(cand, size=min(260, len(cand)), replace=False)
@@ -299,7 +405,7 @@ class Galaxy(Scene):
         self.track = np.sort(rng.choice(cand, size=min(90, len(cand)), replace=False))
         # the particles drawn under the wall rule: the labelled and the tracked ones always are
         inner = m.bulge | (m.R < 0.3)
-        self.keep = hash01(np.arange(m.n), 91) < np.where(inner, WALL_KEEP_BULGE, np.where(m.kind == 2, WALL_KEEP_GEN, WALL_KEEP))
+        self.keep = hash01(np.arange(m.n), 91) < np.where(inner, WALL_KEEP_BULGE, WALL_KEEP)
         self.keep[self.lab] = True
         self.keep[self.track] = True
         # ... and where each one starts to be drawn: most of them only from some way out of the core (their line
@@ -420,34 +526,36 @@ class Galaxy(Scene):
         empty = (np.zeros(0, int), np.zeros(0), np.zeros(0), np.zeros(0, bool), np.zeros(0), np.zeros(0), np.zeros(0))
         self._heads = self._rheads = empty
         gain = 1.0 + 0.6 * self._flash(t)
-        # ---- white primaries
+        # ---- white primaries: the galaxy itself, then the generations the strong hits sent out of the core
         M = 15
-        P, age, idx = m.trails(t, M)
-        if len(idx):
+        for src, keep, rho0 in ((m.base, self.keep, self.rho0),) + (((m.gen, m.gen.keep, m.gen.rho0),) if m.gen else ()):
+            P, age, idx = m.trails(t, M, src=src)
+            if not len(idx):
+                continue
             sx, sy, sz, ok = cam.project(P.reshape(-1, 3))
             sx, sy, sz, ok = (v.reshape(-1, M) for v in (sx, sy, sz, ok))
             r_head = np.hypot(P[:, 0, 0], P[:, 0, 2])
             wave = self._wave(r_head, t, ctx)
             near = np.clip(DIST / np.maximum(sz[:, 0], 0.4), 0.55, 1.9) ** 0.9
             born = np.clip(age / 0.5, 0.0, 1.0)
-            fade = 1.0 - smoothstep(m.f0[idx], m.f1[idx], age)
-            n_alive = int((fade > 0.5).sum())
-            b = m.b[idx] * near * born * fade * gain * (0.8 + 0.25 * kick) * (1.0 + 1.5 * wave)
+            fade = 1.0 - smoothstep(src.f0[idx], src.f1[idx], age)
+            n_alive += int((fade > 0.5).sum())
+            b = src.b[idx] * near * born * fade * gain * (0.8 + 0.25 * kick) * (1.0 + 1.5 * wave)
             b = b * (0.06 + 0.94 * self._fade(sx[:, 0], sy[:, 0]))
             b = b * (0.38 + 0.62 * smoothstep(0.03, 0.3, r_head))        # keep the structure of the core readable
             fall = (1.0 - np.arange(M) / (M - 1)) ** 1.25
             i0 = b[:, None] * fall[None, :-1]
             i1 = b[:, None] * fall[None, 1:]
             okk = ok[:, :-1] & ok[:, 1:]
-            wide = (m.b[idx] > 0.5)[:, None] & okk
+            wide = (src.b[idx] > 0.5)[:, None] & okk
             thin = okk & ~wide
             hd = ok[:, 0]
             if E.WALL:
                 # fewer trails, each at the level of the wall (its tail still runs out) and never hotter than
                 # white, or the glow fills the black between them; the music swells the heads instead
-                kp = self.keep[idx]
+                kp = keep[idx]
                 bw = np.minimum(E.wl(b), 1.0)
-                out = smoothstep(self.rho0[idx][:, None], self.rho0[idx][:, None] + 0.05,
+                out = smoothstep(rho0[idx][:, None], rho0[idx][:, None] + 0.05,
                                  np.hypot(P[:, :, 0], P[:, :, 2]) + 1e-4)
                 i0 = bw[:, None] * fall[None, :-1] * out[:, :-1]
                 i1 = bw[:, None] * fall[None, 1:] * out[:, 1:]
@@ -457,17 +565,18 @@ class Galaxy(Scene):
                 f.segments("w", sx[:, :-1][wide], sy[:, :-1][wide], sx[:, 1:][wide], sy[:, 1:][wide],
                            i0[wide], i1[wide], width=2.1)
                 f.dots("w", sx[hd, 0], sy[hd, 0],
-                       (1.4 + 1.6 * m.b[idx][hd]) * near[hd] ** 0.6 * (1.0 + 0.25 * np.minimum(wave[hd], 2.0)) * out[hd, 0], bw[hd])
+                       (1.4 + 1.6 * src.b[idx][hd]) * near[hd] ** 0.6 * (1.0 + 0.25 * np.minimum(wave[hd], 2.0)) * out[hd, 0], bw[hd])
             else:
                 f.segments("w", sx[:, :-1][thin], sy[:, :-1][thin], sx[:, 1:][thin], sy[:, 1:][thin],
                            0.85 * i0[thin], 0.85 * i1[thin])
                 f.segments("w", sx[:, :-1][wide], sy[:, :-1][wide], sx[:, 1:][wide], sy[:, 1:][wide],
                            0.8 * i0[wide], 0.8 * i1[wide], width=L.LW)
-                f.dots("w", sx[hd, 0], sy[hd, 0], (1.0 + 1.6 * m.b[idx][hd]) * near[hd] ** 0.6, 1.3 * b[hd])
+                f.dots("w", sx[hd, 0], sy[hd, 0], (1.0 + 1.6 * src.b[idx][hd]) * near[hd] ** 0.6, 1.3 * b[hd])
             th_head = np.arctan2(P[:, 0, 2], P[:, 0, 0])
             sel = r_head > 0.1
             hist += np.histogram(th_head[sel] % (2 * np.pi), bins=N_BINS, range=(0, 2 * np.pi), weights=fade[sel])[0]
-            self._heads = (idx, sx[:, 0], sy[:, 0], ok[:, 0], age, r_head, th_head)
+            if src is m.base:
+                self._heads = (idx, sx[:, 0], sy[:, 0], ok[:, 0], age, r_head, th_head)
         # ---- red traced bursts
         M = 11
         P, age, idx = m.trails(t, M, red=True)
@@ -562,12 +671,12 @@ class Galaxy(Scene):
 
     def _label_heads(self, t):
         """Head of every labelled trail at time t: (screen x, screen y, age of the particle, alive and in view)."""
-        m, k = self.model, self.lab
+        m, k = self.model.base, self.lab
         a = t - m.tb[k]
         ok = (a > 0.0) & (a < m.f1[k])
         age = np.maximum(a, 0.0)[:, None]
-        r = m._interp(self.lab_r, age)[:, 0]
-        th = m._interp(self.lab_th, age)[:, 0]
+        r = Model._interp(self.lab_r, age)[:, 0]
+        th = Model._interp(self.lab_th, age)[:, 0]
         r = r * (1.0 + m.ecc[k] * np.cos(2 * (th - m.eph[k])))
         P = np.stack([r * np.cos(th), m.h[k] * np.minimum(r / 0.4, 1.0), r * np.sin(th)], -1).astype(np.float32)
         sx, sy, _, pok = self.cam.project(P)
@@ -581,7 +690,7 @@ class Galaxy(Scene):
         x, y, age, ok = self._label_heads(t)
         k = self.lab
         ph = np.floor((t + self.lab_ph) / LAB_PERIOD).astype(np.int64)
-        on = ok & (age > 2.0) & (age < self.model.f0[k] - 1.0) & (hash01(np.arange(len(k)), ph) <= 0.4)
+        on = ok & (age > 2.0) & (age < self.model.base.f0[k] - 1.0) & (hash01(np.arange(len(k)), ph) <= 0.4)
         on[on] = self._margin(x[on], y[on], self._ring_labels_at(t)) > 0
         out, boxes = {}, []
         for q in np.nonzero(on)[0]:
@@ -867,7 +976,7 @@ class Galaxy(Scene):
             sel = self._tracked()[0]
             if len(sel):
                 idx, p_age, r_head = self._heads[0], self._heads[4], self._heads[5]
-                m = self.model
+                m = self.model.base
                 ab = p_age[sel]
                 live = np.clip(ab / 0.5, 0.0, 1.0) * (1.0 - smoothstep(m.f0[idx[sel]], m.f1[idx[sel]], ab))
                 s_in = np.clip((ab - 2.0) / 0.3, 0.0, 1.0)
