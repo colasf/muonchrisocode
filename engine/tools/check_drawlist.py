@@ -137,7 +137,7 @@ def main():
     if a.times:
         times = [parse_time(v) for v in a.times]
     elif a.sweep > 0:
-        times = [float(t) for t in np.arange(0.5, sd.TRACK_END - 0.5, a.sweep)]
+        times = [float(t) for t in np.arange(0.5, sd.LOOP_END - 0.5, a.sweep)]
     else:
         times, seen = [], set()
         for code, name, t0, t1, look in sd.SECTIONS:

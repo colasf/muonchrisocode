@@ -110,3 +110,25 @@ A scene only ever asks `ctx.det` for hits and values, so live data can replace i
 
 `subtitletimecode.txt` (`text  MM:SS:FF`, FF = frames at 60 fps) drives the box at the top
 right. Single words (YOU, A MUON, A BLOOM, WAITING, NOTHING) are set as a large tag.
+
+### Between two shows: the standby (12:38.5 - 20:00)
+
+The loop is 20 minutes (`showdata.LOOP_END`). When the music has ended the wall does not go
+dark: `scenes/standby.py` runs to the next show, on the detectors alone (no voice, no sound to
+follow). Its header says where the loop is and counts down to the next show.
+
+| | | |
+|---|---|---|
+| 13.0 | FOLLOW, 12:38.5 - 13:40 | two QR codes to scan (Instagram: Tyrell, Christo Squier) |
+| 13.1 | FLUX, 13:40 - 15:46 | the lattice of crosses is the metre grid of the wall: every square metre says how many muons went through it in its last second |
+| 13.2 | COINCIDENCE, 15:46 - 17:53 | every muon caught sends a circle over the wall from its tower; red points where the circles of two towers cross |
+| 13.3 | RECORD, 17:53 - 20:00 | the last 45 seconds as a stack of lines, now at the bottom; a muon raises the line at its tower |
+
+* The times are the four rows `13.x` of `showdata.SECTIONS`: move them there, the scenes follow.
+* The hits come from `ctx.det` like everywhere else. With live detectors they are the real ones;
+  for the previews, hits are dealt at random after the end of the muon stem
+  (`showdata.Detectors`, the same at every run).
+* The QR codes are written as modules in `standby.py` (`QR`), so the show needs no new library.
+  `python tools/build_qr.py` makes the rows for an address (needs `segno` and `zxing-cpp`),
+  `python tools/build_qr.py --check` reads the two codes back.
+* At 20:00 everything has been taken apart: the wall is black for the first second of the show.

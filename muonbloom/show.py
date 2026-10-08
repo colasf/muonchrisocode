@@ -37,6 +37,10 @@ LOOKS = {
     "disintegrate": ("disintegrate", "Disintegrate"),
     "outro": ("outro", "Outro"),
     "credits": ("outro", "Outro"),
+    "follow": ("standby", "Follow"),            # between two shows (scenes/standby.py)
+    "flux": ("standby", "Flux"),
+    "coincidence": ("standby", "Coincidence"),
+    "record": ("standby", "Record"),
 }
 
 

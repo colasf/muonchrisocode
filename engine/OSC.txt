@@ -18,6 +18,10 @@ Numbers        float32 (f) is expected. int32 (i), double (d), int64 (h) and tru
                                  most), never by a step. It is moved only for a locate: a time more
                                  than 0.5 s away that stays there for 0.3 s.
                                  Ignored when the engine plays its own sound (--sound, --audio).
+                                 The show is a loop of 20:00 (1200 s): the music ends at 12:38.5 and
+                                 the picture goes on to 20:00 (the standby, between two shows). Keep
+                                 sending the time during the standby and come back to 0 at 1200: a
+                                 time that stands still at the end of the music pauses the picture.
 
 /muonbloom/start   <0 or 1>      Play the show from its beginning (00:00), wherever it is, playing or
                                  paused. It happens when the value goes from 0 to 1 (a button): a 1

@@ -277,6 +277,14 @@ engine\run.bat --loop                   start again at the end
 engine\build\muonengine.exe bench       the whole show in real time, no window: frames in time per scene
 ```
 
+The show the engine plays is the whole loop: 20:00 since 2026-10-07 (the show to 12:38.5, then the
+standby, `muonbloom/scenes/standby.py`: a minute with the QR codes and three generative scenes that
+follow the detectors alone). The engine takes that length from the scenes, nothing is set here. On
+its own timer `--loop` starts it again at 20:00. When it follows `/muonbloom/time`, the sender decides:
+Ableton has to go on counting through the standby and come back to 0 at 20:00 (a time that stops at
+the end of the music pauses the picture there; if nothing is sent any more the engine goes on by its
+own timer, and needs `--loop` to come back to 00:00).
+
 `run.bat` is the way to run it unattended: if the engine stops by itself (a crash, the
 graphics driver reset) it is started again where it was; it is not started again when
 somebody closed it, or when it cannot start as it is set up. The messages of the engine

@@ -20,6 +20,7 @@ from .layout import DATA, ROOT
 # -64 s) and from 10:00 on everything is V7 - 75.56 s. The music ends at 12:38.5 (the file is padded with silence).
 SHOW_END = 726.44               # 12:06.4, end of scene 11: the credits follow
 TRACK_END = 758.48              # 12:38.5, the end of the music
+LOOP_END = 1200.0               # 20:00, the loop: from the end of the music to the next show, the standby (scene 13)
 
 T_BLOOM_CUT = 133.3             # the cut to the towers lands on the hit under "A bloom", not on 02:13.0
 
@@ -56,6 +57,12 @@ SECTIONS = [
     ("11.1", "CRESCENDO / ACCELERANDO", 664.44, 700.44, "outro"),
     ("11.2", "SWIRLING OUTRO", 700.44, SHOW_END, "outro"),
     ("12.0", "CREDITS", SHOW_END, TRACK_END, "credits"),
+    # between two shows (scenes/standby.py): a minute with the codes to scan, then three generative scenes that
+    # share the rest of the loop. No music under them: they only follow the detectors
+    ("13.0", "STANDBY // FOLLOW", TRACK_END, 820.0, "follow"),
+    ("13.1", "STANDBY // FLUX", 820.0, 946.0, "flux"),
+    ("13.2", "STANDBY // COINCIDENCE", 946.0, 1073.0, "coincidence"),
+    ("13.3", "STANDBY // RECORD", 1073.0, LOOP_END, "record"),
 ]
 
 # detector life cycle: scene 2 reveals them, scene 3 switches them on, then they stay on to the end of the music
@@ -271,6 +278,7 @@ class Detectors:
     tower, 0..1); hits are its rising edges with their peak as energy."""
 
     TAU = 0.32          # decay of the pulse a hit leaves on the stream (s)
+    STANDBY_RATE = 0.55 # hits per second and per tower dealt for the standby, once the muon stem has ended
 
     def __init__(self, cues: Cues):
         self.t, self.e, self.echo = {}, {}, {}
@@ -279,6 +287,16 @@ class Detectors:
             self.t[key] = cues.det_t[idx].astype(np.float64)
             self.e[key] = cues.det_e[idx].astype(np.float64)
             self.echo[key] = cues.det_echo[idx]
+            # between two shows the towers go on catching. The stem says nothing of it: for the previews (and
+            # for an engine that plays scripted detectors) hits are dealt at random, the same at every run,
+            # from the end of the stem to the end of the loop. Live detectors replace them like the others
+            rng = np.random.default_rng(9100 + k)
+            t0 = max(TRACK_END, float(self.t[key][-1]) + 1.0 if len(self.t[key]) else 0.0)
+            tt = t0 + np.cumsum(rng.exponential(1.0 / self.STANDBY_RATE, int(3.0 * self.STANDBY_RATE * (LOOP_END - t0)) + 50))
+            tt = tt[tt < LOOP_END]
+            self.t[key] = np.r_[self.t[key], tt]
+            self.e[key] = np.r_[self.e[key], np.clip(0.16 + 0.84 * rng.random(len(tt)) ** 1.7, 0.0, 1.0)]
+            self.echo[key] = np.r_[self.echo[key], np.zeros(len(tt), bool)]
 
     # -- life cycle ----------------------------------------------------------
     @staticmethod

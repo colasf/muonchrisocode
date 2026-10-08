@@ -47,7 +47,7 @@ def main():
     a = ap.parse_args()
     from muonbloom import showdata as sd
     if a.sweep > 0:
-        times = list(np.arange(0.5, sd.TRACK_END - 0.5, a.sweep))
+        times = list(np.arange(0.5, sd.LOOP_END - 0.5, a.sweep))
         bad = 0
         with Pool(a.workers) as pool:
             for t, img, dt, err in pool.imap(_one, [(float(t),) for t in times], chunksize=1):

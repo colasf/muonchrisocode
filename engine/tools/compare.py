@@ -99,7 +99,7 @@ def main():
     if a.probes:
         times += probe_times()
     if a.sweep > 0:
-        times += [float(t) for t in np.arange(0.5, sd.TRACK_END - 0.5, a.sweep)]
+        times += [float(t) for t in np.arange(0.5, sd.LOOP_END - 0.5, a.sweep)]
     if not times:
         ap.error("no time given")
     if not EXE.exists():
