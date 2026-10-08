@@ -64,8 +64,8 @@ from ..engine import OrthoCamera, font, hash01, smoothstep
 from ..show import Scene
 from .dance import BEAT, N_PHRASES, PANEL_BLOCKS, PHRASE, T0, Y_GROUND, Dance
 from .muon import ROW_H, static
-from .shower import (VIEW_Y0, VIEW_Y1, altitude_rules, auto_callout, bottom_panels, draw_info, flow, info_layout,
-                     stage_for)
+from .shower import (VIEW_Y0, VIEW_Y1, altitude_rules, auto_callout, bottom_panels, col_type, draw_info, flow,
+                     info_layout, stage_for)
 
 T_IN = 415.0
 T_DRUMS = T0 + 13 * PHRASE          # 422.666: the kick that brings the drums back
@@ -2522,7 +2522,7 @@ class Glitch(Scene):
                 f.tag("w", cx0 + 4, cy0 + 32, "PARTICLE_STREAM", size=L.T_MICRO, pad=3, alpha=a)
                 f.segments("w", [cx1, cx0], [cy0, cy1], [cx1, cx1], [cy1, cy1], E.wl(0.6 * a), width=E.ww(1.0))
             row = f"00000 MU-   003871.00 {(x - geo.x_mid) / geo.S:+06.2f} {alt:05.2f} +00.00"
-            f.text("r", cx0 + 8, cy0 + 62, B.decode(row, age0 - 0.2, cps=120.0, key=85), size=L.T_MICRO, alpha=0.95)
+            f.text("r", cx0 + 8, cy0 + 62, B.decode(row, age0 - 0.2, cps=120.0, key=85), size=col_type(st.col), alpha=0.95)
             f.text("w", cx0 + 8, cy1 - 10, B.roll("N 000001", age0, 0.4, 0.3, key=86), size=L.T_SMALL, alpha=0.9 * a)
         py0, py1 = ctx.slots["y0"], ctx.slots["y1"]
         place = flow(bottom_panels(ctx), PANEL_BLOCKS)

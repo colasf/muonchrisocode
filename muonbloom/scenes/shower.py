@@ -450,7 +450,7 @@ class Stage:
 
 def col_type(rect):
     """Type size of the rows of a particle column: the 41 characters of a row have to fit between its rules."""
-    return L.T_MICRO if rect[2] - rect[0] >= 41 * 0.61 * L.T_MICRO + 14.0 else 13
+    return min(float(L.T_MICRO), (rect[2] - rect[0] - 14.0) / (41 * 0.61))
 
 
 def _perp_basis(d):

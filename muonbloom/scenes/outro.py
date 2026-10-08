@@ -589,7 +589,10 @@ class Outro(Scene):
                 x0, x1 = self.cred["A"]
                 out.append((x0 - 20, 352.0, x1 + 20, 540.0, 0.93 * min(1.0, a / 1.5) * keep))
                 if t > T_CRED_LINES - 0.5:
-                    out.append((x0 - 20, 540.0, x1 + 20, 960.0, 0.93 * min(1.0, (t - T_CRED_LINES + 0.5) / 1.5) * keep))
+                    lines, s = self._credit_lines(x1 - x0)
+                    yb = 380.0 + fit(104, 12, x1 - x0 - 40) * 1.3 + s * 2.2 + (len(lines) - 1) * s * 1.55 + 60.0
+                    out.append((x0 - 20, 540.0, x1 + 20, max(960.0, yb),
+                                0.93 * min(1.0, (t - T_CRED_LINES + 0.5) / 1.5) * keep))
             if self.cred["B"] and t > T_CRED_B:
                 x0, x1 = self.cred["B"]
                 out.append((x0 - 20, 352.0, x1 + 20, 830.0, 0.93 * min(1.0, (t - T_CRED_B) / 1.5) * keep))
@@ -1389,18 +1392,34 @@ class Outro(Scene):
         cols = int(w / (s * CHAR_W) + 1e-6)
         head = hud.wrap("A LIVE PERFORMANCE FOR THREE COSMIC-RAY MUON DETECTORS", cols)
         lines = [(ln, 0.9) for ln in head] + [("BLINK // CINCINNATI // OCTOBER 2026", 0.9), ("", 0)]
-        who = [("CONCEPT + MUSIC", "CHRISTO SQUIER"), ("VISUALS", "TYRELL"),
-               ("DETECTORS", "NAME TBC"),                     # (the only name still to come)
-               ("WITH THANKS TO", "ALL THE TEAM OF THE BLINK FESTIVAL")]
+        who = [("CONCEPT, COMPOSITION, PRODUCTION, VOICE-OVER", ("CHRISTO SQUIER",)),
+               ("VISUALS", ("TYRELL",)),
+               ("ADDITIONAL CREATIVE TECHNOLOGISTS", ("CHRIS BALL & THOMAS BLACKBURN",)),
+               ("SCIENTIFIC ADVISOR", ("DR. TEPPEI KATORI",)),
+               ("ADDITIONAL MUSIC PRODUCTION", ("ENDLESS MOW",)),
+               ("MIXING AND MASTERING", ("WILLIAM ROBERTSON",)),
+               ("SCIENCE COMMUNICATION", ("MAITHILI PITEA",)),
+               None,
+               ("WITH THANKS TO", ("COSMIC WATCH", "ARTS COUNCIL ENGLAND"))]
         if cols >= 39:
-            p = min(29, cols - 19)                            # where the names start
-            for lab, name in who:
-                for k, part in enumerate(hud.wrap(name, cols - p)):
-                    lines.append((f"{lab} {'.' * (p - len(lab) - 2)} {part}" if k == 0 else " " * p + part, 0.75))
+            p = min(31, cols - 19)                            # where the names start
+            for cr in who:
+                if cr is None:
+                    lines.append(("", 0))
+                    continue
+                labs = hud.wrap(cr[0], p - 2)                 # a label too long for its place runs on under itself too
+                parts = [part for name in cr[1] for part in hud.wrap(name, cols - p)]
+                for k in range(max(len(labs), len(parts))):
+                    lab, part = labs[k] if k < len(labs) else "", parts[k] if k < len(parts) else ""
+                    lines.append((f"{lab} {'.' * (p - len(lab) - 2)} {part}" if k == 0 else f"{lab:<{p}}{part}".rstrip(),
+                                  0.75))
         else:
-            for lab, name in who:
-                lines.append((lab, 0.55))
-                lines += [("  " + part, 0.8) for part in hud.wrap(name, max(cols - 2, 8))]
+            for cr in who:
+                if cr is None:
+                    lines.append(("", 0))
+                    continue
+                lines += [(lab, 0.55) for lab in hud.wrap(cr[0], cols)]
+                lines += [("  " + part, 0.8) for name in cr[1] for part in hud.wrap(name, max(cols - 2, 8))]
         return lines, s
 
     def _credits(self, f, t, ctx):

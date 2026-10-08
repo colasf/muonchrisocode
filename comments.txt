@@ -18,3 +18,8 @@
 [x] 05:59:10 | dance | 2026-10-07 18:52 | we don't see the details it look more like white block [drawing: snapshots/05-59-10_dance_drawn.png]
 [x] 07:39:00 | outlast | 2026-10-07 19:33 | snapshot snapshots/07-39-00_outlast_drawn.png
 [x] 07:39:00 | outlast | 2026-10-07 19:34 | i don't like these line gradients we don't see the red line coming from the top anymore don't do the line gradients
+[x] 12:48:46 | follow | 2026-10-08 00:02 | snapshot snapshots/12-48-46_follow_drawn.png
+[x] 13:51:45 | flux | 2026-10-08 00:02 | snapshot snapshots/13-51-45_flux_drawn.png
+[x] 15:49:39 | coincidence | 2026-10-08 00:02 | snapshot snapshots/15-49-39_coincidence_drawn.png
+[x] 18:05:19 | record | 2026-10-08 00:02 | snapshot snapshots/18-05-19_record_drawn.png
+[x] 07:00:03 | glitch | 2026-10-08 01:46 | snapshot snapshots/07-00-03_glitch_drawn.png
