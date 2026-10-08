@@ -41,6 +41,7 @@ LOOKS = {
     "flux": ("standby", "Flux"),
     "coincidence": ("standby", "Coincidence"),
     "record": ("standby", "Record"),
+    "tyrell": ("standby", "Tyrell"),
 }
 
 

@@ -2,7 +2,7 @@
 
 The music has ended and the wall is black. Until the next show the instrument stays on and shows what its three
 detectors catch: three generative scenes, one simple system each - no voice, no sound to follow, only the muons -
-after a minute that says where to find us:
+after a minute that says where to find us, and with half a minute for who made the picture:
 
   13.0  FOLLOW        two codes to scan (Instagram: Tyrell, Christo Squier), large enough for brick
   13.1  RECORD        when       the last three quarters of a minute as a stack of lines. The line at the bottom is
@@ -11,7 +11,10 @@ after a minute that says where to find us:
   13.2  COINCIDENCE   where      every muon caught sends a circle over the wall from its detector, at walking
                                  pace. A dashed circle leaves the three towers together every few seconds: the
                                  time base. Where the circles of two towers cross, a red point rides the crossing
-  13.3  FLUX          how many   the lattice of crosses is the metre grid of the wall; every square metre says how
+  13.3  VISUALS BY               the Tyrell logo is constructed across the wall, in white only: the lines it is
+                                 set out on leave the centre tower, pens trace its outline, a rain of tracks
+                                 hatches it, a front crosses the wall and lays the ink. Then it is taken apart
+  13.4  FLUX          how many   the lattice of crosses is the metre grid of the wall; every square metre says how
                                  many muons went through it in its last second (1 /cm2/min = 167 a second, never
                                  twice the same). When a tower really catches one, its square metre is framed and a
                                  red wave leaves it: the figures it passes are taken again
@@ -39,7 +42,7 @@ from .. import showdata as sd
 from ..engine import CHAR_W, text_w
 from ..show import Scene
 
-LOOKS = ("follow", "flux", "coincidence", "record")
+LOOKS = ("follow", "record", "coincidence", "tyrell", "flux")
 T0, T1 = sd.TRACK_END, sd.LOOP_END                  # the standby: from the end of the music to the end of the loop
 SPAN = {s[4]: (s[2], s[3]) for s in sd.SECTIONS if s[4] in LOOKS}
 OUT = 1.3                                           # s: a scene takes its picture apart before the next one
@@ -81,6 +84,23 @@ class Sparse:
         return tt[m], ee[m], ec[m]
 
 
+class Quiet:
+    """The detectors, without the hits of a stretch of time: the towers do not answer those in red."""
+    LIFE = 2.6                      # s: how long the reply of a tower lasts (towers.burst)
+
+    def __init__(self, det, t0, t1):
+        self.det, self.t0, self.t1 = det, t0, t1
+
+    def hits(self, key, t0, t1, echoes=True):
+        tt, ee, ec = self.det.hits(key, t0, t1, echoes)
+        m = (tt < self.t0) | (tt >= self.t1)
+        return tt[m], ee[m], ec[m]
+
+    def last(self, key, t, echoes=False):
+        tt, ee, _ = self.hits(key, t - 3.0, t + 1e-6, echoes)
+        return (float(t - tt[-1]), float(ee[-1])) if len(tt) else (99.0, 0.0)
+
+
 def rand(a, b, salt=0):
     """Pseudo-random floats in [0, 1) from two integer arrays (well mixed in both: engine.hash01 is not)."""
     with np.errstate(over="ignore"):
@@ -103,6 +123,7 @@ class Standby(Scene):
     edge_ticks = False
     frame = False
     strip_grows = False
+    quiet = None                    # (from, to): the towers do not answer the muons of that time in red (see Quiet)
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -157,15 +178,16 @@ class Standby(Scene):
 
     def _towers(self, f, t, ctx):
         clip = (L.FX0 + 2, L.HEAD_Y + 6, L.FX1 - 2, L.FY1 - 2)
+        det = ctx.det if self.quiet is None else Quiet(ctx.det, *self.quiet)
         for i, key in enumerate(L.ORDER):
             tw = ctx.towers[key]
             f.occlude(tw.x0, tw.top, tw.x1, tw.bot)             # a tower stands in front of the wall
             a = self.chrome(t, 0.4 + 0.25 * i, out=0.7, span=1.1)
-            age, e = ctx.det.last(key, t, echoes=True)
+            age, e = det.last(key, t, echoes=True)
             with f.build(a, (tw.x0 - 4, tw.top - 30, tw.x1 + 4, tw.bot), flow="bt", wave=0.5, marks=False, key=30 + i):
                 towers.face(f, tw, t, power=1.0, value=float(ctx.det.value(key, t)), hit_age=age, hit_e=e, dim=0.0)
             if a > 1.0:
-                towers.burst(f, tw, t, Sparse(ctx.det, BURST_EVERY), clip=clip, size=BURST)
+                towers.burst(f, tw, t, Sparse(det, BURST_EVERY), clip=clip, size=BURST)
 
     def _scopes(self, f, t, ctx, span=3.0):
         for k, key in enumerate(L.ORDER):
@@ -346,7 +368,7 @@ class Follow(Standby):
 
 
 # ----------------------------------------------------------------------------
-# 13.3  FLUX
+# 13.4  FLUX
 # ----------------------------------------------------------------------------
 
 class Flux(Standby):
@@ -642,3 +664,280 @@ class Record(Standby):
         opt = self.furniture(f, t, ctx)
         self._figure(f, t, ctx, "RATE // LAST 20 S", f"{self.rate(ctx, t):.2f}", "MUONS / S")
         return opt
+
+
+# ----------------------------------------------------------------------------
+# 13.3  VISUALS BY
+# ----------------------------------------------------------------------------
+
+class Tyrell(Standby):
+    """Who made the picture: the logo is constructed across the wall, in white only.
+
+      the lines it is set out on    an axis rises from the centre tower; the level lines leave it both ways, from
+                                    the lowest to the highest, faster and faster; the plumb lines rise, from the
+                                    axis outwards
+      its outline                   traced by pens that share it: the first one starts alone, near the axis, the
+                                    others join it faster and faster, and they all close at the same moment
+      the rain                      leaning tracks fall through the wall, a few, then a downpour: each one leaves
+                                    a line where it went through the logo (the hatching of a drawing)
+      the ink                       after a moment of stillness a leaning front crosses the whole wall: it takes
+                                    the outline and the hatching with it and lays the white behind it; the axis
+                                    goes away
+
+    Then the logo stands on its construction lines, a plumb line measures it, and it is taken apart the way it
+    was made, only faster. The ink has no glow (the edge of the logo is sharp); the lines keep theirs."""
+    name = look = "tyrell"
+    title = "VISUALS BY"
+    WIDTH = 2560.0                  # px: the logo, from edge to edge of its ink
+    SLANT = 0.55                    # the front of the fill and the tracks of the rain lean (px of x per px of y)
+    LW = 2.4                        # px: the outline
+    LG = 1.8                        # px: a construction line, a line of the hatching
+    INK = 2.0                       # level of the fill: full white
+    # the build, in seconds after the cut
+    T_AXIS = (0.3, 1.1)             # the axis rises
+    T_LEVEL = (0.6, 2.6, 1.2, 0.6)  # level lines: when the first and the last start, how long they take
+    T_PLUMB = (1.7, 3.2, 0.75, 0.45)
+    T_TRACE = (3.3, 4.9, 6.6)       # the outline: when the first and the last pen start, when they all close
+    T_RAIN = (6.2, 8.8)             # the tracks start to fall (a few, then more and more)
+    T_FILL = (9.8, 11.3)            # the front crosses the wall
+    T_CLEAR = (11.3, 12.0)          # the axis is taken away
+    PEN = 800.0                     # px of outline per pen
+    HATCH = 14.0                    # px between two tracks of the rain
+    FALL = 2400.0                   # px / s: a track falls
+    TAIL = 110.0                    # px: what is seen of a track while it falls
+    SWEEP = 9.0                     # s: a plumb line crosses the finished logo and comes back, in that long each way
+
+    def __init__(self, ctx):
+        super().__init__(ctx)
+        from PIL import Image, ImageDraw
+        z = np.load(L.DATA / "tyrell_logo.npz")                 # the outlines of the logo (tools/build_logo.py)
+        cut = np.cumsum(z["n"])[:-1]
+        k = self.WIDTH / float(z["x"].max() - z["x"].min())
+        ox, oy = float(z["x"].min()), float(z["y"].min())
+        w, h = int(math.ceil(self.WIDTH)) + 2, int(math.ceil(k * float(z["y"].max() - oy))) + 2
+        self.x0 = x0 = float(round(0.5 * (L.FX0 + L.FX1) - 0.5 * w))
+        self.y0 = y0 = float(round(0.5 * (VIEW_Y0 + VIEW_Y1) - 0.5 * h))
+        self.w, self.h = w, h
+        self.xc = x0 + 0.5 * w                                  # the axis: the centre tower stands on it
+        ss = 2
+        mask = Image.new("1", (w * ss, h * ss), 0)
+        paths = []
+        for qx, qy in zip(np.split(z["x"], cut), np.split(z["y"], cut)):
+            px, py = (np.r_[qx, qx[0]] - ox) * k, (np.r_[qy, qy[0]] - oy) * k
+            keep = np.r_[True, np.hypot(np.diff(px), np.diff(py)) > 1e-6]
+            px, py = px[keep], py[keep]
+            ImageDraw.Draw(mask).polygon(list(zip(px * ss, py * ss)), fill=1)       # (the outlines do not overlap)
+            paths.append((px + x0, py + y0))
+        m = np.asarray(mask.convert("L").resize((w, h), Image.BOX)) > 127
+
+        def runs(a):
+            """Runs of True of every row of a mask: (row, first column, column after the last)."""
+            d = np.diff(np.c_[np.zeros(len(a), bool), a, np.zeros(len(a), bool)].astype(np.int8), axis=1)
+            r, ca = np.nonzero(d == 1)
+            return r, ca, np.nonzero(d == -1)[1]
+
+        r, ca, cb = runs(m)
+        self.ry, self.ra, self.rb = r + y0, ca + x0, cb + x0     # the ink, row by row
+        # no glow on the ink (the edge of the logo is sharp): its runs again, on the half-size grid the glow is
+        # made on, less the towers (they stand in front of it and keep their glow)
+        ex, ey = int(x0) % 2, int(y0) % 2
+        mp = np.zeros((h + ey + (h + ey) % 2, w + ex + (w + ex) % 2), bool)
+        mp[ey: ey + h, ex: ex + w] = m
+        m2 = mp.reshape(mp.shape[0] // 2, 2, mp.shape[1] // 2, 2).any(axis=(1, 3))
+        gx, gy = x0 - ex, y0 - ey
+        for q in ctx.towers.values():
+            ja, jb = int(math.floor((q.x0 - gx) / 2.0)), int(math.ceil((q.x1 - gx) / 2.0))
+            if jb > 0 and ja < m2.shape[1]:
+                m2[max(int(math.floor((q.top - gy) / 2.0)), 0):, max(ja, 0): jb] = False
+        r, ca, cb = runs(m2)
+        self.mute = (gx + 2.0 * ca, gy + 2.0 * r, gx + 2.0 * cb, gy + 2.0 * r + 2.0)
+        self.mute_all = np.c_[self.mute].tolist()
+
+        # the lines the logo is set out on: where its outline runs level or plumb for a while (two that are a
+        # pixel apart are one line: the one that carries more of the outline)
+        hs, vs = {}, {}
+        for px, py in paths:
+            dx, dy = np.diff(px), np.diff(py)
+            ln = np.hypot(dx, dy)
+            for i in np.flatnonzero((ln > 60.0) & (np.abs(dy) < 0.5)):
+                hs[round(float(py[i]))] = hs.get(round(float(py[i])), 0.0) + ln[i]
+            for i in np.flatnonzero((ln > 60.0) & (np.abs(dx) < 0.5)):
+                vs[round(float(px[i]))] = vs.get(round(float(px[i])), 0.0) + ln[i]
+
+        def lines(d):
+            out = []
+            for v in sorted(d):
+                if out and v - out[-1] < 3:
+                    if d[v] > d[out[-1]]:
+                        out[-1] = v
+                else:
+                    out.append(v)
+            return np.array(out, np.float64)
+
+        gh = lines(hs)[::-1]                                    # the level lines, from the lowest to the highest
+        gv = lines(vs)
+        gv = gv[np.argsort(np.abs(gv - self.xc), kind="stable")]    # the plumb lines, from the axis outwards
+        self.gv = gv
+        self.plumb_y = (y0 + h + 70.0, y0 - 70.0)               # a plumb line: from under the logo to over it
+        xl, xr = L.FX0 + 40.0, L.FX1 - 40.0
+
+        def strokes(lines):
+            """Strokes of one segment each -> (xa, ya, xb, yb, fa, fb, stroke)."""
+            a = np.asarray(lines, np.float64).reshape(-1, 4)
+            n = len(a)
+            return a[:, 0], a[:, 1], a[:, 2], a[:, 3], np.zeros(n), np.ones(n), np.arange(n)
+
+        # every level line is two strokes that leave the axis, every plumb line rises
+        self.s_level = strokes([(self.xc, y, x, y) for y in gh for x in (xl, xr)])
+        self.s_plumb = strokes([(x, self.plumb_y[0], x, self.plumb_y[1]) for x in gv])
+        foot = min([q.top for q in ctx.towers.values() if q.x0 <= self.xc <= q.x1] + [VIEW_Y1])
+        self.s_axis = strokes([(self.xc, foot, self.xc, VIEW_Y0)])     # the axis leaves the top of the centre tower
+        uh = np.arange(len(gh)) / max(len(gh) - 1, 1)
+        uv = np.arange(len(gv)) / max(len(gv) - 1, 1)
+        acc = lambda u: 2.0 * u - u * u                         # starts that come closer and closer
+        self.level_t = (np.repeat(self.T_LEVEL[0] + (self.T_LEVEL[1] - self.T_LEVEL[0]) * acc(uh), 2),
+                        np.repeat(self.T_LEVEL[2] + (self.T_LEVEL[3] - self.T_LEVEL[2]) * uh, 2))
+        self.plumb_t = (self.T_PLUMB[0] + (self.T_PLUMB[1] - self.T_PLUMB[0]) * acc(uv),
+                        self.T_PLUMB[2] + (self.T_PLUMB[3] - self.T_PLUMB[2]) * uv)
+
+        # the outline: every contour is shared between pens that draw the same length of it
+        S, at = [], []
+        n_pen = 0
+        for px, py in paths:
+            s = np.r_[0.0, np.cumsum(np.hypot(np.diff(px), np.diff(py)))]
+            n = max(1, int(round(s[-1] / self.PEN)))
+            lp = s[-1] / n
+            sv = np.unique(np.r_[s, np.arange(1, n) * lp])      # (a chord that two pens share is cut in two)
+            X, Y = np.interp(sv, s, px), np.interp(sv, s, py)
+            j = np.minimum((0.5 * (sv[:-1] + sv[1:]) / lp).astype(int), n - 1)
+            S.append(np.c_[X[:-1], Y[:-1], X[1:], Y[1:], sv[:-1] / lp - j, sv[1:] / lp - j, n_pen + j])
+            at += list(np.interp((np.arange(n) + 0.5) * lp, s, px))     # where each pen works (the middle of its part)
+            n_pen += n
+        S = np.concatenate(S).T
+        self.s_out = tuple(S[:6]) + (S[6].astype(int),)
+        rank = np.argsort(np.argsort(np.abs(np.array(at) - self.xc), kind="stable")) / max(n_pen - 1, 1)
+        self.pen_t = self.T_TRACE[0] + (self.T_TRACE[1] - self.T_TRACE[0]) * acc(rank)     # from the axis outwards
+
+        # the rain: leaning tracks (they lean like the front of the fill), and what each one leaves in the logo
+        n_tr = int(math.ceil((w + self.SLANT * h) / self.HATCH))
+        c = (np.arange(n_tr) + 0.5) * self.HATCH                # x of a track at the top of the logo
+        yy = np.arange(h)
+        xi = np.round(c[:, None] - self.SLANT * yy[None, :]).astype(int)
+        ok = (xi >= 0) & (xi < w)
+        ins = np.zeros(xi.shape, bool)
+        ins[ok] = m[np.broadcast_to(yy, xi.shape)[ok], xi[ok]]
+        r, ca, cb = runs(ins)
+        keep = cb - ca >= 6
+        self.h_tr = r[keep]
+        self.h_ya, self.h_yb = ca[keep] + y0 + 1.5, cb[keep] + y0 - 1.5      # (a line of the hatching ends under the outline)
+        self.tr_c = x0 + c
+        self.tr_t = (self.T_RAIN[1] - self.T_RAIN[0]) * np.sqrt(rand(np.arange(n_tr), 0, 211))    # more and more
+        self.t_wet = self.T_RAIN[1] + (VIEW_Y1 - VIEW_Y0 + self.TAIL) / self.FALL      # the last track has landed
+
+    def _draw(self, f, S, head, tail=0.0, width=1.8, level=0.95, dot=3.2, front=None):
+        """Strokes while they are drawn. S = the segments of all the strokes (xa, ya, xb, yb, where each one
+        sits along its stroke: from fa to fb in 0..1, its stroke); head = how far the pen of each stroke is
+        (0..1), tail = how far the stroke has been taken away behind it. front = x of the front of the ink at the
+        top of the logo: what is behind it is not drawn (the ink took it)."""
+        xa, ya, xb, yb, fa, fb, k = S
+        hd = head[k] if np.ndim(head) else head
+        tl = tail[k] if np.ndim(tail) else tail
+        d = fb - fa
+        a, b = np.clip((tl - fa) / d, 0.0, 1.0), np.clip((hd - fa) / d, 0.0, 1.0)
+        ok = b > a
+        if not ok.any():
+            return
+        dx, dy = (xb - xa)[ok], (yb - ya)[ok]
+        px, py, qx, qy = xa[ok] + dx * a[ok], ya[ok] + dy * a[ok], xa[ok] + dx * b[ok], ya[ok] + dy * b[ok]
+        tip = b[ok] < 1.0                                       # where a pen is
+        if front is not None:
+            gp = px + self.SLANT * (py - self.y0) - front       # > 0: ahead of the front
+            gq = qx + self.SLANT * (qy - self.y0) - front
+            ok = (gp > 0.0) | (gq > 0.0)
+            if not ok.any():
+                return
+            px, py, qx, qy, gp, gq, tip = px[ok], py[ok], qx[ok], qy[ok], gp[ok], gq[ok], tip[ok]
+            u = np.clip(-gp / np.where(gq != gp, gq - gp, 1.0), 0.0, 1.0)       # where a segment meets the front
+            cp, cq = gp <= 0.0, gq <= 0.0
+            mx, my = px + (qx - px) * u, py + (qy - py) * u
+            px, py = np.where(cp, mx, px), np.where(cp, my, py)
+            qx, qy = np.where(cq, mx, qx), np.where(cq, my, qy)
+            tip &= ~cq
+        f.segments("w", px, py, qx, qy, level, width=width)
+        if dot and tip.any():
+            f.dots("w", qx[tip], qy[tip], dot, 1.6)
+
+    def draw(self, f, t, ctx):
+        a = t - self.t0
+        left = self.t_out - t                                   # the scene is taken apart the way it was made
+        back = lambda span: float(B.ease(B.lin(left, span[0], span[1])))
+        io = lambda x: x * x * (3.0 - 2.0 * x)                  # a move that starts and lands softly
+        step = lambda t0, dur: B.ease(np.clip((a - t0) / dur, 0.0, 1.0))
+        x0, y0, x1, y1 = self.x0, self.y0, self.x0 + self.w, self.y0 + self.h
+        f.set_clip(L.FX0, VIEW_Y0, L.FX1, VIEW_Y1)
+        lw, lv = self.LG, 0.95
+        # ---- the lines it is set out on
+        g_out = back((0.1, 1.2))
+        self._draw(f, self.s_level, step(*self.level_t) * g_out, width=lw, level=lv)
+        pp = step(*self.plumb_t) * g_out
+        self._draw(f, self.s_plumb, pp, width=lw, level=lv)
+        for on, y in ((pp > 0.0, self.plumb_y[0]), (pp >= 1.0, self.plumb_y[1])):    # a cross where a line starts,
+            if on.any():                                                             # one where it has arrived
+                f.crosses("w", self.gv[on], np.full(int(on.sum()), y), 9.0, lv, width=lw)
+        if a < self.T_CLEAR[1]:                                 # the axis: only there to build, it leaves by the top
+            self._draw(f, self.s_axis, step(self.T_AXIS[0], self.T_AXIS[1] - self.T_AXIS[0]),
+                       io(B.lin(a, *self.T_CLEAR)), width=lw, level=lv)
+        # ---- the ink: where the front is
+        pf = min(io(B.lin(a, *self.T_FILL)), back((2.8, 5.0)))
+        fa = L.FX0 - self.SLANT * (y0 - VIEW_Y0) - 12.0         # the front comes in by the left edge of the wall
+        fb = L.FX1 + self.SLANT * (VIEW_Y1 - y0) + 12.0         # ... and leaves by the right one
+        F = fa + (fb - fa) * pf                                 # x of the front at the top of the logo
+        # ---- the rain
+        if self.T_RAIN[0] < a < self.T_FILL[1]:
+            yh = VIEW_Y0 + self.FALL * (a - self.T_RAIN[0] - self.tr_t)             # the head of every track
+            X = lambda i, y: self.tr_c[i] - self.SLANT * (y - y0)
+            e = np.minimum(self.h_yb, yh[self.h_tr])
+            ok = (e > self.h_ya) & (self.tr_c[self.h_tr] > F)                       # (the front takes the hatching)
+            if ok.any():
+                i = self.h_tr[ok]
+                f.segments("w", X(i, self.h_ya[ok]), self.h_ya[ok], X(i, e[ok]), e[ok], lv, width=lw)
+            if a < self.t_wet:
+                on = np.flatnonzero((yh > VIEW_Y0) & (yh < VIEW_Y1 + self.TAIL))
+                if len(on):
+                    f.segments("w", X(on, yh[on] - self.TAIL), yh[on] - self.TAIL, X(on, yh[on]), yh[on], lv, width=self.LW)
+                    f.dots("w", X(on, yh[on]), yh[on], 3.4, 1.6)
+        # ---- the outline: the pens start one after the other and all close at the same moment
+        if pf < 1.0:
+            pt = io(np.clip((a - self.pen_t) / (self.T_TRACE[2] - self.pen_t), 0.0, 1.0)) * back((0.9, 3.4))
+            self._draw(f, self.s_out, pt, width=self.LW, level=lv, dot=4.6, front=F if pf > 0.0 else None)
+        # ---- the ink
+        if pf > 0.0:
+            b = np.minimum(self.rb, F - self.SLANT * (self.ry - y0))
+            ok = b > self.ra
+            f.rects("w", self.ra[ok], self.ry[ok], b[ok], self.ry[ok] + 1.0, self.INK)
+            if pf < 1.0:
+                mx0, my0, mx1, my1 = self.mute
+                b = np.minimum(mx1, F - self.SLANT * (my0 + 1.0 - y0))
+                ok = b > mx0
+                f.noglow_rects.extend(np.c_[mx0[ok], my0[ok], b[ok], my1[ok]].tolist())
+                f.segments("w", [F + self.SLANT * (y0 - VIEW_Y0)], [VIEW_Y0], [F - self.SLANT * (VIEW_Y1 - y0)], [VIEW_Y1],
+                           lv, width=3.0)
+            else:
+                f.noglow_rects.extend(self.mute_all)
+        # ---- the finished logo is measured: a plumb line crosses it and comes back
+        ps = min(float(B.ease(B.lin(a, self.T_CLEAR[1], self.T_CLEAR[1] + 0.8))), back((5.0, 5.8)))
+        if ps > 0.0:
+            u = (a - self.T_CLEAR[1]) / self.SWEEP
+            u = 0.5 - 0.5 * math.cos(math.pi * u)               # (eased at both ends, there and back)
+            xs = x0 - 60.0 + (self.w + 120.0) * u
+            ym = 0.5 * (y0 + y1)
+            hh = (0.5 * self.h + 70.0) * ps
+            f.segments("w", [xs], [ym - hh], [xs], [ym + hh], lv, width=self.LW)
+            f.crosses("w", [xs, xs], [ym - hh, ym + hh], 9.0 * ps, lv, width=lw)
+        f.set_clip()
+        return self.furniture(f, t, ctx)
+
+
+# The logo is in white only: the towers do not answer in red the muons of its time. No scene of the standby does
+# (the one before it stops a reply early enough for none to be left half-way at the cut).
+Standby.quiet = (SPAN["tyrell"][0] - Quiet.LIFE, SPAN["tyrell"][1]) if "tyrell" in SPAN else None

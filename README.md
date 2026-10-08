@@ -120,9 +120,10 @@ follow). Its header says where the loop is and counts down to the next show.
 | | | |
 |---|---|---|
 | 13.0 | FOLLOW, 12:38.5 - 13:40 | two QR codes to scan (Instagram: Tyrell, Christo Squier) |
-| 13.1 | RECORD, 13:40 - 15:46 | the last 45 seconds as a stack of lines, now at the bottom; a muon raises the line at its tower |
-| 13.2 | COINCIDENCE, 15:46 - 17:53 | every muon caught sends a circle over the wall from its tower; red points where the circles of two towers cross |
-| 13.3 | FLUX, 17:53 - 20:00 | the lattice of crosses is the metre grid of the wall: every square metre says how many muons went through it in its last second |
+| 13.1 | RECORD, 13:40 - 15:50 | the last 45 seconds as a stack of lines, now at the bottom; a muon raises the line at its tower |
+| 13.2 | COINCIDENCE, 15:50 - 18:00 | every muon caught sends a circle over the wall from its tower; red points where the circles of two towers cross |
+| 13.3 | VISUALS BY, 18:00 - 18:30 | the Tyrell logo constructed across the wall, white only: construction lines that leave the centre tower, pens that trace its outline, a rain of leaning tracks that hatches it, a front that crosses the wall and lays the ink (outlines in `data/tyrell_logo.npz`, `tools/build_logo.py`) |
+| 13.4 | FLUX, 18:30 - 20:00 | the lattice of crosses is the metre grid of the wall: every square metre says how many muons went through it in its last second |
 
 * The times are the four rows `13.x` of `showdata.SECTIONS`: move them there, the scenes follow.
 * The hits come from `ctx.det` like everywhere else. With live detectors they are the real ones;
