@@ -5,16 +5,16 @@ detectors catch: three generative scenes, one simple system each - no voice, no 
 after a minute that says where to find us:
 
   13.0  FOLLOW        two codes to scan (Instagram: Tyrell, Christo Squier), large enough for brick
-  13.1  FLUX          how many   the lattice of crosses is the metre grid of the wall; every square metre says how
-                                 many muons went through it in its last second (1 /cm2/min = 167 a second, never
-                                 twice the same). When a tower really catches one, its square metre is framed and a
-                                 red wave leaves it: the figures it passes are taken again
+  13.1  RECORD        when       the last three quarters of a minute as a stack of lines. The line at the bottom is
+                                 now: a muon raises it at its tower and the swell runs out along the wall; every
+                                 second a copy of it is kept and moves up. A red point = a muon
   13.2  COINCIDENCE   where      every muon caught sends a circle over the wall from its detector, at walking
                                  pace. A dashed circle leaves the three towers together every few seconds: the
                                  time base. Where the circles of two towers cross, a red point rides the crossing
-  13.3  RECORD        when       the last three quarters of a minute as a stack of lines. The line at the bottom is
-                                 now: a muon raises it at its tower and the swell runs out along the wall; every
-                                 second a copy of it is kept and moves up. A red point = a muon
+  13.3  FLUX          how many   the lattice of crosses is the metre grid of the wall; every square metre says how
+                                 many muons went through it in its last second (1 /cm2/min = 167 a second, never
+                                 twice the same). When a tower really catches one, its square metre is framed and a
+                                 red wave leaves it: the figures it passes are taken again
 
 Everything is a function of the show time and of the hits known at that time (nothing is read ahead: with live
 detectors the picture is made of what the towers say; in the previews the hits after the muon stem are pretend
@@ -346,7 +346,7 @@ class Follow(Standby):
 
 
 # ----------------------------------------------------------------------------
-# 13.1  FLUX
+# 13.3  FLUX
 # ----------------------------------------------------------------------------
 
 class Flux(Standby):
@@ -518,7 +518,7 @@ class Coincidence(Standby):
 
 
 # ----------------------------------------------------------------------------
-# 13.3  RECORD
+# 13.1  RECORD
 # ----------------------------------------------------------------------------
 
 class Record(Standby):

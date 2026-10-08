@@ -60,9 +60,9 @@ SECTIONS = [
     # between two shows (scenes/standby.py): a minute with the codes to scan, then three generative scenes that
     # share the rest of the loop. No music under them: they only follow the detectors
     ("13.0", "STANDBY // FOLLOW", TRACK_END, 820.0, "follow"),
-    ("13.1", "STANDBY // FLUX", 820.0, 946.0, "flux"),
+    ("13.1", "STANDBY // RECORD", 820.0, 946.0, "record"),
     ("13.2", "STANDBY // COINCIDENCE", 946.0, 1073.0, "coincidence"),
-    ("13.3", "STANDBY // RECORD", 1073.0, LOOP_END, "record"),
+    ("13.3", "STANDBY // FLUX", 1073.0, LOOP_END, "flux"),
 ]
 
 # detector life cycle: scene 2 reveals them, scene 3 switches them on, then they stay on to the end of the music
