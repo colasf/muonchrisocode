@@ -4,6 +4,12 @@
     python engine/package.py E:\\MuonBloom       ... or the folder given (it must not exist, or be an old package)
     python engine/package.py --no-cache         without data/cache (142 MB; the shower worlds are then rebuilt on
                                                 the first run, which takes a while)
+    python engine/package.py --expires 2026-10-15
+                                                a copy tied to this show and to a date (engine/src/lock.h): its
+                                                engine is built for it (engine/build_lock), does not start after
+                                                that day and only plays the files of the show as they are packaged
+                                                here. The settings of the place can still be changed there
+                                                (data/towers.json, engine/output.json, engine/detectors.json).
 
 What goes in:
 
@@ -21,7 +27,9 @@ Needs the network once (python.org and PyPI); what was downloaded is kept in eng
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata as md
+import re
 import shutil
 import subprocess
 import sys
@@ -80,15 +88,49 @@ def python(dst, cache):
     subprocess.check_call([str(dst / "python.exe"), "-c", "import numpy, PIL.ImageFont, mmap"])
 
 
+def lock_hash(dst):
+    """SHA-256 of the files of the show in a package: what engine/src/lock.h (intact) computes there."""
+    files = []
+    for d, exts in (("muonbloom", (".py", ".ttf")), ("muonbloom/scenes", (".py",)), ("engine/shaders", None), ("data", (".npz",))):
+        files += [f"{d}/{p.name}" for p in (dst / d).iterdir() if p.is_file() and (exts is None or p.suffix.lower() in exts)]
+    files += ["engine/worker.py", "engine/detectors.py", "tools/test_card.py", "subtitletimecode.txt"]
+    h = hashlib.sha256()
+    for name in sorted(files, key=lambda s: s.encode("utf-8")):
+        b = (dst / name).read_bytes() if (dst / name).is_file() else b""
+        h.update(name.encode("utf-8") + b"\0" + len(b).to_bytes(8, "little") + b)
+    return h.hexdigest()
+
+
+def build_locked(day, digest):
+    """engine/build_lock/muonengine.exe: the engine that only plays that package, until that day."""
+    vcvars = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+    if not Path(vcvars).exists():
+        sys.exit(f"Visual Studio 2022 not found: {vcvars}")
+    eng = ROOT / "engine"
+    bat = eng / "out" / "build_lock.bat"
+    bat.parent.mkdir(exist_ok=True)
+    bat.write_text("@echo off\n"
+                   f'call "{vcvars}" >nul\n'
+                   f'cmake -S "{eng}" -B "{eng / "build_lock"}" -G Ninja -DCMAKE_BUILD_TYPE=Release -DMUON_EXPIRES={day} '
+                   f'-DMUON_LOCK_HASH={digest} || exit /b 1\n'
+                   f'cmake --build "{eng / "build_lock"}" || exit /b 1\n')
+    say(f"building the engine of this copy: until {day}, files {digest[:12]}...")
+    subprocess.check_call(["cmd", "/c", str(bat)])
+    return eng / "build_lock" / "muonengine.exe"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dest", nargs="?", default=str(ROOT / "engine" / "out" / "MuonBloom"))
     ap.add_argument("--no-cache", action="store_true")
+    ap.add_argument("--expires", default="", help="YYYY-MM-DD: a copy tied to this show, that does not start after that day")
     a = ap.parse_args()
+    if a.expires and not re.fullmatch(r"20\d\d-[01]\d-[0-3]\d", a.expires):
+        sys.exit("--expires YYYY-MM-DD")
     sys.path.insert(0, str(ROOT))
     dst = Path(a.dest).resolve()
     exe = ROOT / "engine" / "build" / "muonengine.exe"
-    if not exe.exists():
+    if not a.expires and not exe.exists():
         sys.exit("engine\\build\\muonengine.exe is missing: run engine\\build.bat first")
     if dst.exists():
         if not (dst / MARK).exists():
@@ -99,8 +141,7 @@ def main():
 
     (dst / "engine" / "build").mkdir(parents=True)
     (dst / MARK).write_text("made by engine/package.py\n")
-    shutil.copy2(exe, dst / "engine" / "build")
-    for name in ("worker.py", "detectors.py", "run.bat", "OSC.txt", "output.json", "detectors.json", "claude_args.txt"):
+    for name in ("worker.py", "detectors.py", "run.bat", "OSC.txt", "output.json", "detectors.json") + (() if a.expires else ("claude_args.txt",)):
         if (ROOT / "engine" / name).exists():
             shutil.copy2(ROOT / "engine" / name, dst / "engine")
     shutil.copytree(ROOT / "engine" / "shaders", dst / "engine" / "shaders", ignore=SKIP)
@@ -116,10 +157,15 @@ def main():
     shutil.copy2(ROOT / "tools" / "test_card.py", dst / "tools")
     shutil.copy2(ROOT / "subtitletimecode.txt", dst)
     (dst / "run.bat").write_text(RUN)
+    if a.expires:                                   # the engine of this copy, made for the files that are in it now
+        exe = build_locked(a.expires.replace("-", ""), lock_hash(dst))
+    shutil.copy2(exe, dst / "engine" / "build")
     python(dst / "python", ROOT / "engine" / "out" / "package_cache")
 
     size = sum(p.stat().st_size for p in dst.rglob("*") if p.is_file())
     say(f"{dst}: {size / 1e6:.0f} MB. Copy the folder to the other computer and start run.bat")
+    if a.expires:
+        say(f"this copy does not start after {a.expires} and only plays the files of the show that are in it")
 
 
 if __name__ == "__main__":

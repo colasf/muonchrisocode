@@ -1,4 +1,5 @@
 #include "pool.h"
+#include "lock.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -45,7 +46,9 @@ bool Pool::start(int n, const std::wstring& python, const std::wstring& script, 
         SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
 
         wchar_t cmd[2048];
-        swprintf(cmd, 2048, L"\"%ls\" \"%ls\" --shm %ls --size %zu --bufs %d%ls", python.c_str(), script.c_str(), name, bufBytes, bufs, extra.c_str());
+        // (a copy tied to the show, lock.h: Python takes nothing from the environment and leaves no byte code)
+        swprintf(cmd, 2048, L"\"%ls\"%ls \"%ls\" --shm %ls --size %zu --bufs %d%ls", python.c_str(), lock::on ? L" -I -B" : L"", script.c_str(), name,
+                 bufBytes, bufs, extra.c_str());
         STARTUPINFOW si = { sizeof si };
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdInput = inRead;

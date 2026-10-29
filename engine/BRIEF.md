@@ -319,9 +319,9 @@ Added 2026-10-03, in the bar under the picture (`engine/src/gui.h`, drawn with a
   every line (a 1 px hairline starts to gain above 0.25: a line is drawn in several passes from 1.25 px on).
   `Renderer::tune`, `gRed` / `gWeight` in the frame constants; kept in `engine/output.json`. At 1, 1, 0 the
   picture is the reference (compare.py). They change the picture itself: preview, Spout and output alike.
-- `CLAUDE` button, or key A: the same line, but Enter sends it to Claude Code (`claude -p`, started in the
+- Key A (the `CLAUDE` button was taken out of the bar on 2026-10-08, the prompt stays): the same line, but Enter sends it to Claude Code (`claude -p`, started in the
   repository folder, with the time code and the scene on screen in front of the text). The answer comes in a
-  panel above the bar; Shift+A (or Shift and the button) hides and shows it. Every prompt of one run of the
+  panel above the bar; Shift+A hides and shows it. Every prompt of one run of the
   engine goes on in one conversation. Nobody can approve a permission there: what it may do is on its command
   line (`Claude::ARGS` in `live.cpp`: edit files, run python), or the one line of `engine/claude_args.txt`
   when that file exists. Never in the Spout or HDMI output.

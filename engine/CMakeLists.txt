@@ -31,4 +31,15 @@ target_compile_definitions(muonengine PRIVATE
     MUON_ROOT_DIR=L"${CMAKE_CURRENT_SOURCE_DIR}/.."
     NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS)
 target_compile_options(muonengine PRIVATE /W3 /utf-8)
+# a copy tied to this show and to a date (src/lock.h; engine/package.py --expires gives the two):
+#   -DMUON_EXPIRES=20261015 -DMUON_LOCK_HASH=<sha-256 of the files of the show>
+set(MUON_EXPIRES "" CACHE STRING "last day the engine starts, YYYYMMDD (empty: no limit)")
+set(MUON_LOCK_HASH "" CACHE STRING "SHA-256 of the files of the show the engine plays (empty: any)")
+if(MUON_EXPIRES)
+    target_compile_definitions(muonengine PRIVATE MUON_EXPIRES=${MUON_EXPIRES})
+endif()
+if(MUON_LOCK_HASH)
+    target_compile_definitions(muonengine PRIVATE MUON_LOCK_HASH="${MUON_LOCK_HASH}")
+    target_link_libraries(muonengine PRIVATE bcrypt)
+endif()
 target_link_libraries(muonengine PRIVATE spout d3d11 dxgi d3dcompiler dxguid winmm xaudio2 ws2_32 comdlg32 windowscodecs ole32 shell32)

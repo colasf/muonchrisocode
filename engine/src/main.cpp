@@ -22,7 +22,7 @@
 //       button): choose the WAV file(s) the engine plays and follows from then on; Shift+O: no sound again.
 //       C (or the COMMENT button): type a comment, Enter writes it with its time code to comments.txt in
 //       the repository folder (Esc cancels); the show is paused while it is typed.
-//       A (or the CLAUDE button): the same line, sent to Claude Code; its answer comes in a panel above the
+//       A: the same line, sent to Claude Code; its answer comes in a panel above the
 //       bar (Shift+A hides and shows it).
 //       S (or the SNAPSHOT button): the picture on screen is written to snapshots/MM-SS-FF_scene.png in the
 //       repository folder, to be drawn and written on, and a line of comments.txt names it. Shift+S (or
@@ -76,6 +76,7 @@
 
 #include "gpu.h"
 #include "live.h"
+#include "lock.h"
 #include "player.h"
 #include "renderer.h"
 
@@ -100,7 +101,7 @@ static fs::path exeDir()
 static std::wstring shaderDir()
 {
     wchar_t env[1024];
-    if (GetEnvironmentVariableW(L"MUONENGINE_SHADERS", env, 1024)) return env;
+    if (!lock::on && GetEnvironmentVariableW(L"MUONENGINE_SHADERS", env, 1024)) return env;
     for (const fs::path& p : { exeDir() / L"shaders", exeDir().parent_path() / L"shaders" })
         if (fs::exists(p / L"segments.hlsl")) return p.wstring();
     return MUON_SHADER_DIR;
@@ -150,10 +151,10 @@ static PlayerOptions playerOptions(const Args& a)
     o.workers = (int)a.num(L"--workers", o.workers);
     o.lead = (int)a.num(L"--lead", o.lead);
     o.fps = a.num(L"--fps", o.fps);
-    o.root = a.str(L"--root", rootDir());
+    o.root = lock::on ? rootDir() : a.str(L"--root", rootDir());     // (a copy tied to the show: its own folder)
     // a "python" folder beside muonbloom/ (engine/package.py makes one): that interpreter, nothing to install
     fs::path own = fs::path(o.root) / L"python" / L"python.exe";
-    o.python = a.str(L"--python", fs::exists(own) ? own.wstring() : o.python);
+    o.python = lock::on ? own.wstring() : a.str(L"--python", fs::exists(own) ? own.wstring() : o.python);
     o.shaders = shaderDir();
     o.debug = a.flag(L"--debug");
     return o;
@@ -353,8 +354,16 @@ int wmain(int argc, wchar_t** argv)
 {
     Args a(argc, argv);
     std::wstring cmd = argc >= 2 ? argv[1] : L"";
+    if (lock::on && cmd == L"render") {             // (a copy tied to the show draws nothing else)
+        fprintf(stderr, "not in this copy\n");
+        return 2;
+    }
     if (cmd == L"render") return cmdRender(a);
-    if (cmd == L"bench") return cmdBench(a);
+    if (cmd == L"bench") {
+        std::string why;
+        if (lock::on && !lock::allowed(rootDir(), why)) { fprintf(stderr, "%s\n", why.c_str()); return 2; }
+        return cmdBench(a);
+    }
     if (cmd == L"spoutcheck") {
         std::string name;
         for (wchar_t c : a.str(L"--name", L"")) name += (char)c;

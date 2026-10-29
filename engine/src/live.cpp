@@ -26,6 +26,7 @@
 #include "audio.h"
 #include "gui.h"
 #include "live.h"
+#include "lock.h"
 #include "player.h"
 
 namespace fs = std::filesystem;
@@ -39,8 +40,8 @@ const float BAR_PAD = 12.0f;                // its margin left and right
 const float BTN_W = 44.0f;                  // the play / pause button, at its left
 const float TC_W = 114.0f;                  // the time code MM:SS:FF, after the button
 const float BAR_X0 = BTN_W + TC_W + BAR_PAD; // where the time line starts
-const float TWR_W = 90.0f, OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W = 102.0f, ASK_W = 90.0f;      // the TOWERS, OUTPUT, SOUND,
-const float RIGHT_W = TWR_W + OUT_W + SND_W + SNP_W + CMT_W + ASK_W;                          // SNAPSHOT, COMMENT and CLAUDE buttons, at its right
+const float TWR_W = 90.0f, OUT_W = 90.0f, SND_W = 78.0f, SNP_W = 114.0f, CMT_W = 102.0f;      // the TOWERS, OUTPUT, SOUND,
+const float RIGHT_W = TWR_W + OUT_W + SND_W + SNP_W + CMT_W;                                  // SNAPSHOT and COMMENT buttons, at its right
 const float BOX_H = 40.0f;                  // the line a comment is typed in, above the bar
 const float PANEL_H = 134.0f;               // the OUTPUT panel and the TOWERS panel, above the bar
 const float GLOW_MAX = 2.0f, RED_MAX = 3.0f, WEIGHT_MAX = 1.5f;      // the ends of its GLOW W, GLOW R, RED and WEIGHT sliders
@@ -245,10 +246,9 @@ struct Window {
     bool overButton() const { return overBar() && mx < BTN_W; }         // the play / pause button
     bool overTowers() const { return overBar() && mx >= w - RIGHT_W && mx < w - RIGHT_W + TWR_W; }
     bool overOutput() const { return overBar() && mx >= w - RIGHT_W + TWR_W && mx < w - RIGHT_W + TWR_W + OUT_W; }
-    bool overSound() const { return overBar() && mx >= w - RIGHT_W + TWR_W + OUT_W && mx < w - SNP_W - CMT_W - ASK_W; }
-    bool overSnapshot() const { return overBar() && mx >= w - SNP_W - CMT_W - ASK_W && mx < w - CMT_W - ASK_W; }
-    bool overComment() const { return overBar() && mx >= w - CMT_W - ASK_W && mx < w - ASK_W; }
-    bool overAsk() const { return overBar() && mx >= w - ASK_W; }
+    bool overSound() const { return overBar() && mx >= w - RIGHT_W + TWR_W + OUT_W && mx < w - SNP_W - CMT_W; }
+    bool overSnapshot() const { return overBar() && mx >= w - SNP_W - CMT_W && mx < w - CMT_W; }
+    bool overComment() const { return overBar() && mx >= w - CMT_W; }
     float lineEnd() const { return std::max(BAR_X0 + 1.0f, (float)w - RIGHT_W - BAR_PAD); }    // where the time line ends
     bool overLine() const { return overBar() && mx >= BAR_X0 - 6.0f && mx <= lineEnd() + 6.0f; }
     // mouse position -> 0..1 along the time line
@@ -806,13 +806,14 @@ struct BarState {
     bool towers = false;                    // the TOWERS panel is open
     bool snapped = false;                   // a snapshot has just been taken
     int claude = 0;                         // the prompt box: 1 a prompt is being typed, 2 Claude is working
-    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT, 4 OUTPUT, 5 SNAPSHOT, 6 CLAUDE, 7 TOWERS
+    int hot = 0;                            // button under the mouse: 1 play / pause, 2 SOUND, 3 COMMENT, 4 OUTPUT, 5 SNAPSHOT, 7 TOWERS
     const std::vector<gui::Comments::Mark>* marks = nullptr;
 };
 
 // The time bar of the preview window: a play / pause button, the time code, then the scenes of the show as
 // blocks, what has been played, where the clock is, where the mouse points, where the comments are; at the
-// right the TOWERS, OUTPUT, SOUND, SNAPSHOT, COMMENT and CLAUDE buttons. Window pixels.
+// right the TOWERS, OUTPUT, SOUND, SNAPSHOT and COMMENT buttons (the prompt for Claude has no button: key A).
+// Window pixels.
 void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Pool::Look>& looks, double end, double t, double hover,
              bool playing, const BarState& st)
 {
@@ -857,7 +858,7 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
     // the buttons at the right: OUTPUT (white while a display takes the raster, yellow when that display is
     // gone, red while the test card is on), SOUND (white while the engine plays sound), SNAPSHOT (lit for a
     // moment when one is taken), COMMENT (yellow while one is typed)
-    const float xt = (float)w - RIGHT_W, xo = xt + TWR_W, xs = xo + OUT_W, xa = (float)w - ASK_W, xc = xa - CMT_W, xn = xc - SNP_W;
+    const float xt = (float)w - RIGHT_W, xo = xt + TWR_W, xs = xo + OUT_W, xa = (float)w, xc = xa - CMT_W, xn = xc - SNP_W;
     o.push_back({ xt, y0 + 6.0f, xt + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
     if (st.hot == 7) o.push_back({ xt + 4.0f, y0 + 4.0f, xo - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
     {                                               // TOWERS: white and underlined while its panel is open
@@ -879,11 +880,6 @@ void timeBar(std::vector<Renderer::Over>& o, int w, int h, const std::vector<Poo
     if (st.hot == 2) o.push_back({ xs + 4.0f, y0 + 4.0f, xn - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
     if (st.hot == 5 || st.snapped) o.push_back({ xn + 4.0f, y0 + 4.0f, xc - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, st.snapped ? 0.32f : 0.14f });
     if (st.hot == 3) o.push_back({ xc + 4.0f, y0 + 4.0f, xa - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
-    o.push_back({ xa, y0 + 6.0f, xa + 1.0f, y1 - 6.0f, 0.35f, 0.35f, 0.35f, 1.0f });
-    if (st.hot == 6) o.push_back({ xa + 4.0f, y0 + 4.0f, (float)w - 4.0f, y1 - 4.0f, 1.0f, 1.0f, 1.0f, 0.14f });
-    gui::text(o, xa + 0.5f * (ASK_W - gui::textWidth(6, 2.0f)), y0 + 11.0f, "CLAUDE", 2.0f, st.claude ? 0.35f : 0.8f, 0.8f, st.claude ? 1.0f : 0.8f);
-    if (st.claude == 2 && (int)(now() * 2.0) % 2)           // working: its name is underlined, on and off
-        o.push_back({ xa + 0.5f * (ASK_W - gui::textWidth(6, 2.0f)), y1 - 8.0f, xa + 0.5f * (ASK_W + gui::textWidth(6, 2.0f)), y1 - 6.0f, 0.35f, 0.8f, 1.0f, 1.0f });
     const float gs = st.sound ? 1.0f : 0.55f, gn = st.snapped ? 1.0f : 0.8f;
     gui::text(o, xs + 0.5f * (SND_W - gui::textWidth(5, 2.0f)), y0 + 11.0f, "SOUND", 2.0f, gs, gs, gs);
     gui::text(o, xn + 0.5f * (SNP_W - gui::textWidth(8, 2.0f)), y0 + 11.0f, "SNAPSHOT", 2.0f, gn, gn, gn);
@@ -1450,6 +1446,14 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         gLog = _wfopen(lo.log.c_str(), L"a");
     }
     say("muonengine live: root %s, shaders %s", narrow(o.root).c_str(), narrow(o.shaders).c_str());
+    if (lock::on) {                                 // a copy tied to this show and to a date (lock.h)
+        std::string why;
+        if (!lock::allowed(o.root, why)) {
+            warn("%s", why.c_str());
+            MessageBoxA(nullptr, why.c_str(), "MUON : BLOOM", MB_OK | MB_ICONSTOP | MB_SETFOREGROUND);
+            return 2;
+        }
+    }
 
     // nobody is at the keyboard for hours: the machine must not go to sleep or switch its screens off, and
     // a click in the console (text selection) must not suspend the engine
@@ -1726,6 +1730,18 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     double offset = lo.offset;                      // the picture is drawn this much ahead of the sound
     double soundRetryAt = 0;
     int rc = 0;
+    double lockAt = now();
+    // the scenes are built again; a copy tied to this show (lock.h) first looks whether its files are still its own
+    auto reloadScenes = [&] {
+        std::string why;
+        if (lock::on && !lock::allowed(o.root, why)) {
+            warn("%s: stopping", why.c_str());
+            rc = 2;
+            win.closed = true;
+            return;
+        }
+        p.reload();
+    };
 
     auto play = [&] {
         if (audio.ok()) {
@@ -1774,7 +1790,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
     bool commenting = false, commentResume = false;
     double commentT = 0;
     std::wstring commentText;
-    // the prompt box (key A, or the CLAUDE button): the same line, sent to Claude Code instead of written to the
+    // the prompt box (key A): the same line, sent to Claude Code instead of written to the
     // file; the answer comes in a panel above the bar (Shift+A hides and shows it)
     bool asking = false;                            // the line being typed is a prompt
     Claude claude;
@@ -1919,6 +1935,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         // ---- keys ----
         auto startComment = [&](bool ask = false) {
             if (commenting || !warmed) return;
+            if (ask && lock::on) { note = "NO PROMPT IN THIS COPY: ITS FILES CANNOT BE CHANGED"; barDirty = true; return; }
             if (ask && claude.running) { note = "CLAUDE IS STILL WORKING"; claude.show = true; barDirty = true; return; }
             asking = ask;
             commenting = true;
@@ -2017,7 +2034,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
             case '0': levelSel = -1; panel = true; break;
             case VK_UP: setLevels(levelSel, shift ? 0.05f : 0.01f, true); panel = true; break;
             case VK_DOWN: setLevels(levelSel, shift ? -0.05f : -0.01f, true); panel = true; break;
-            case 'R': p.reload(); note = "reloading"; break;
+            case 'R': reloadScenes(); note = "reloading"; break;
             case 'C': startComment(); break;
             case 'A':                               // the prompt box; Shift: its panel away / back
                 if (shift) { claude.show = !claude.show; barDirty = true; }
@@ -2059,7 +2076,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         // ---- mouse: the time bar first, then the tower tool ----
         double hover = -1.0;
         const int hotButton = !win.bar || scrubbing ? 0 : win.overButton() ? 1 : win.overSound() ? 2 : win.overComment() ? 3 : win.overOutput() ? 4
-                              : win.overSnapshot() ? 5 : win.overAsk() ? 6 : win.overTowers() ? 7 : 0;
+                              : win.overSnapshot() ? 5 : win.overTowers() ? 7 : 0;
         if (win.bar && win.pressed && win.overTowers()) {       // the TOWERS button: the placement tool and its panel
             if (tool.on && !outPanel.open) tool.on = false;
             else if (tool.on || tool.start()) outPanel.open = false;
@@ -2171,12 +2188,6 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         }
         if (win.bar && win.pressed && win.overComment()) {
             if (commenting) endComment(true); else startComment();
-            win.pressed = false;
-        }
-        if (win.bar && win.pressed && win.overAsk()) {          // the CLAUDE button; with Shift: its panel away / back
-            if (commenting) endComment(true);
-            else if (GetKeyState(VK_SHIFT) < 0) { claude.show = !claude.show; barDirty = true; }
-            else startComment(true);
             win.pressed = false;
         }
         {
@@ -2338,7 +2349,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
                 }
                 else if (m.addr == "/muonbloom/pause") { if (playing) pause(); }
                 else if (m.addr == "/muonbloom/seek") { if (!m.args.empty()) seek(m.args[0]); }
-                else if (m.addr == "/muonbloom/reload") { if (warmed) { p.reload(); note = "reloading"; say("reloading the scenes (OSC)"); } }
+                else if (m.addr == "/muonbloom/reload") { if (warmed) { reloadScenes(); note = "reloading"; say("reloading the scenes (OSC)"); } }
             } else if (liveDet && m.addr.rfind(lo.detPrefix, 0) == 0) {
                 // stamped with the first frame that can still show it: the frames up to there are already asked
                 double stamp = std::max(0.0, clock.now() + offset) + (o.lead + 1) / o.fps;
@@ -2388,7 +2399,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         // ---- the files of the show ----
         if (warmed && watch.poll()) {               // (during a reload too: what was being started is already old)
             say(p.reloading() ? "a file of the show changed again: starting the reload again" : "a file of the show changed: reloading the scenes");
-            p.reload();
+            reloadScenes();
             note = "reloading";
         }
         if (p.reloadStep(t)) {
@@ -2415,7 +2426,7 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         if (warmed && p.pool->dead() && !p.reloading() && now() - respawnAt > 5.0) {     // a worker died: start a new set
             respawnAt = now();
             warn("a scene worker stopped: starting the workers again");
-            p.reload();
+            reloadScenes();
         }
 
         // ---- clock ----
@@ -2545,6 +2556,14 @@ int runLive(const PlayerOptions& options, const LiveOptions& lo)
         }
 
         if (lo.quitAfter > 0 && warmed && now() - playedSince > lo.quitAfter) win.closed = true;
+        if (lock::on && now() - lockAt > 20.0) {        // the last day of this copy has ended while it ran
+            lockAt = now();
+            if (lock::expired()) {
+                warn("the last day of this copy of MUON : BLOOM has ended: stopping");
+                rc = 2;
+                win.closed = true;
+            }
+        }
 
         // ---- once a second or so: the title, what went wrong, where we are ----
         double w = now();
