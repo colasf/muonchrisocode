@@ -12,8 +12,9 @@ after a minute that says where to find us, and with half a minute for who made t
                                  pace. A dashed circle leaves the three towers together every few seconds: the
                                  time base. Where the circles of two towers cross, a red point rides the crossing
   13.3  VISUALS BY               the Tyrell logo is constructed across the wall, in white only: the lines it is
-                                 set out on leave the centre tower, pens trace its outline, a rain of tracks
-                                 hatches it, a front crosses the wall and lays the ink. Then it is taken apart
+                                 set out on leave the centre tower, pens trace its outline while a compass on every
+                                 tower strikes arcs through its corners, a front lays the ink. A line
+                                 at the top says who it is for. Then it is taken apart
   13.4  FLUX          how many   the lattice of crosses is the metre grid of the wall; every square metre says how
                                  many muons went through it in its last second (1 /cm2/min = 167 a second, never
                                  twice the same). When a tower really catches one, its square metre is framed and a
@@ -678,33 +679,39 @@ class Tyrell(Standby):
                                     axis outwards
       its outline                   traced by pens that share it: the first one starts alone, near the axis, the
                                     others join it faster and faster, and they all close at the same moment
-      the rain                      leaning tracks fall through the wall, a few, then a downpour: each one leaves
-                                    a line where it went through the logo (the hatching of a drawing)
+      the arcs                      a compass stands on every tower, as the circles of COINCIDENCE leave them: it
+                                    strikes a few arcs over the wall, one after the other, each through a corner
+                                    of the logo - the geometry a draughtsman sets out before he draws. Its arm
+                                    is seen while it works
       the ink                       after a moment of stillness a leaning front crosses the whole wall: it takes
-                                    the outline and the hatching with it and lays the white behind it; the axis
+                                    the outline and the arcs with it and lays the white behind it; the axis
                                     goes away
 
-    Then the logo stands on its construction lines, a plumb line measures it, and it is taken apart the way it
-    was made, only faster. The ink has no glow (the edge of the logo is sharp); the lines keep theirs."""
+    Then the logo stands on its construction lines, a plumb line measures it, the dedication is written at the
+    top of the wall, and it is taken apart the way it was made, only faster. The ink has no glow (the edge of the logo is sharp); the lines keep theirs."""
     name = look = "tyrell"
     title = "VISUALS BY"
     WIDTH = 2560.0                  # px: the logo, from edge to edge of its ink
-    SLANT = 0.55                    # the front of the fill and the tracks of the rain lean (px of x per px of y)
+    SLANT = 0.55                    # the front of the fill leans (px of x per px of y)
     LW = 2.4                        # px: the outline
-    LG = 1.8                        # px: a construction line, a line of the hatching
+    LG = 1.8                        # px: a construction line, an arc
     INK = 2.0                       # level of the fill: full white
     # the build, in seconds after the cut
     T_AXIS = (0.3, 1.1)             # the axis rises
     T_LEVEL = (0.6, 2.6, 1.2, 0.6)  # level lines: when the first and the last start, how long they take
     T_PLUMB = (1.7, 3.2, 0.75, 0.45)
     T_TRACE = (3.3, 4.9, 6.6)       # the outline: when the first and the last pen start, when they all close
-    T_RAIN = (6.2, 8.8)             # the tracks start to fall (a few, then more and more)
+    T_COMP = (2.5, 8.9)             # the compasses work
     T_FILL = (9.8, 11.3)            # the front crosses the wall
     T_CLEAR = (11.3, 12.0)          # the axis is taken away
     PEN = 800.0                     # px of outline per pen
-    HATCH = 14.0                    # px between two tracks of the rain
-    FALL = 2400.0                   # px / s: a track falls
-    TAIL = 110.0                    # px: what is seen of a track while it falls
+    ARCS = 5                        # arcs a compass strikes
+    SPAN = 1400.0                   # px: the widest a compass opens (each one works on its part of the logo)
+    LIFT = 0.3                      # s between two arcs: the pen is lifted, the arm is set to the next radius
+    ARM = 0.45                      # s: the arm of a compass opens before its first arc, closes after the last
+    FOR = ("FOR MANON, JUNE AND SYLVAIN", "COLAS")      # the dedication and who signs it
+    FOR_SIZE = (44.0, 30.0)         # px: its type
+    T_FOR = 12.3                    # s: it is written when the axis has left
     SWEEP = 9.0                     # s: a plumb line crosses the finished logo and comes back, in that long each way
 
     def __init__(self, ctx):
@@ -779,6 +786,12 @@ class Tyrell(Standby):
         gv = gv[np.argsort(np.abs(gv - self.xc), kind="stable")]    # the plumb lines, from the axis outwards
         self.gv = gv
         self.plumb_y = (y0 + h + 70.0, y0 - 70.0)               # a plumb line: from under the logo to over it
+        # the dedication, at the top of the wall: the plumb lines that reach into it draw back under it
+        wl = text_w(self.FOR[0], self.FOR_SIZE[0])
+        self.for_at = (self.xc - 0.5 * wl, VIEW_Y0 + 58.0, wl)  # its left end, its base line, its width
+        self.for_room = (self.for_at[0] - 26.0, self.xc + 0.5 * wl + 26.0, self.for_at[1] + 64.0)
+        under = (gv > self.for_room[0]) & (gv < self.for_room[1])
+        self.for_cut = np.where(under, (self.for_room[2] - self.plumb_y[1]) / (self.plumb_y[0] - self.plumb_y[1]), 0.0)
         xl, xr = L.FX0 + 40.0, L.FX1 - 40.0
 
         def strokes(lines):
@@ -818,21 +831,54 @@ class Tyrell(Standby):
         rank = np.argsort(np.argsort(np.abs(np.array(at) - self.xc), kind="stable")) / max(n_pen - 1, 1)
         self.pen_t = self.T_TRACE[0] + (self.T_TRACE[1] - self.T_TRACE[0]) * acc(rank)     # from the axis outwards
 
-        # the rain: leaning tracks (they lean like the front of the fill), and what each one leaves in the logo
-        n_tr = int(math.ceil((w + self.SLANT * h) / self.HATCH))
-        c = (np.arange(n_tr) + 0.5) * self.HATCH                # x of a track at the top of the logo
-        yy = np.arange(h)
-        xi = np.round(c[:, None] - self.SLANT * yy[None, :]).astype(int)
-        ok = (xi >= 0) & (xi < w)
-        ins = np.zeros(xi.shape, bool)
-        ins[ok] = m[np.broadcast_to(yy, xi.shape)[ok], xi[ok]]
-        r, ca, cb = runs(ins)
-        keep = cb - ca >= 6
-        self.h_tr = r[keep]
-        self.h_ya, self.h_yb = ca[keep] + y0 + 1.5, cb[keep] + y0 - 1.5      # (a line of the hatching ends under the outline)
-        self.tr_c = x0 + c
-        self.tr_t = (self.T_RAIN[1] - self.T_RAIN[0]) * np.sqrt(rand(np.arange(n_tr), 0, 211))    # more and more
-        self.t_wet = self.T_RAIN[1] + (VIEW_Y1 - VIEW_Y0 + self.TAIL) / self.FALL      # the last track has landed
+        # the compasses: one stands on every tower and strikes a few arcs over the wall, each through a corner of
+        # the logo (a corner = where two straight edges of the outline meet), swinging there and back
+        vx, vy = [], []
+        for px, py in paths:
+            ln = np.hypot(np.diff(px), np.diff(py))
+            ok = (ln > 40.0) & (np.roll(ln, 1) > 40.0)
+            vx += list(px[:-1][ok])
+            vy += list(py[:-1][ok])
+        vx, vy = np.array(vx), np.array(vy)
+        th = np.arange(2048) / 2048.0 * 2 * np.pi
+        S, self.comp = [], []
+        n_arc = 0
+        for i, key in enumerate(sd.KEYS):
+            cx, cy = ctx.towers[key].det
+            d = np.sort(np.hypot(vx - cx, vy - cy))
+            d = d[(d > 140.0) & (d < self.SPAN)]
+            arcs = []
+            for q in np.linspace(0.12, 0.97, self.ARCS):
+                r = float(d[np.argmin(np.abs(d - q * d[-1]))])
+                if any(abs(r - v[0]) < 90.0 for v in arcs):
+                    continue
+                x, y = cx + r * np.cos(th), cy + r * np.sin(th)
+                ins = (x > L.FX0) & (x < L.FX1) & (y > VIEW_Y0) & (y < VIEW_Y1)
+                if ins.all():
+                    ta, tb = -0.5 * np.pi, 1.5 * np.pi          # (a whole circle is struck from its top)
+                elif ins.any():                                 # its longest piece on the wall
+                    sh = int(np.argmin(ins))
+                    e = np.diff(np.r_[False, np.roll(ins, -sh), False].astype(np.int8))
+                    ja, jb = np.flatnonzero(e == 1), np.flatnonzero(e == -1)
+                    k = int(np.argmax(jb - ja))
+                    ta, tb = th[1] * (ja[k] + sh - 1), th[1] * (jb[k] + sh)
+                else:
+                    continue
+                arcs.append((r, tb, ta) if len(arcs) % 2 else (r, ta, tb))
+            arcs = np.array(arcs)
+            slot = (self.T_COMP[1] - self.T_COMP[0]) / len(arcs)
+            ts = self.T_COMP[0] + slot * np.arange(len(arcs))
+            for (r, ta, tb), t0 in zip(arcs, ts):
+                n = max(8, int(r * abs(tb - ta) / 8.0))
+                an = np.linspace(ta, tb, n + 1)
+                x, y = cx + r * np.cos(an), cy + r * np.sin(an)
+                S.append(np.c_[x[:-1], y[:-1], x[1:], y[1:], np.arange(n) / n, (np.arange(n) + 1.0) / n, np.full(n, n_arc)])
+                n_arc += 1
+            self.comp.append((cx, cy, arcs, ts, slot - self.LIFT))
+        S = np.concatenate(S).T
+        self.s_comp = tuple(S[:6]) + (S[6].astype(int),)
+        self.comp_t = np.concatenate([c[3] for c in self.comp])
+        self.comp_d = np.concatenate([np.full(len(c[3]), c[4]) for c in self.comp])
 
     def _draw(self, f, S, head, tail=0.0, width=1.8, level=0.95, dot=3.2, front=None):
         """Strokes while they are drawn. S = the segments of all the strokes (xa, ya, xb, yb, where each one
@@ -880,10 +926,14 @@ class Tyrell(Standby):
         g_out = back((0.1, 1.2))
         self._draw(f, self.s_level, step(*self.level_t) * g_out, width=lw, level=lv)
         pp = step(*self.plumb_t) * g_out
-        self._draw(f, self.s_plumb, pp, width=lw, level=lv)
-        for on, y in ((pp > 0.0, self.plumb_y[0]), (pp >= 1.0, self.plumb_y[1])):    # a cross where a line starts,
-            if on.any():                                                             # one where it has arrived
-                f.crosses("w", self.gv[on], np.full(int(on.sum()), y), 9.0, lv, width=lw)
+        # (the lines that reach into the dedication draw back under it before it is written, and grow again after)
+        room = min(float(B.ease(B.lin(a, self.T_FOR - 1.0, self.T_FOR - 0.1))), back((4.3, 5.2)))
+        end = 1.0 - self.for_cut * room                         # how far up each plumb line goes
+        self._draw(f, self.s_plumb, pp * end, width=lw, level=lv)
+        y_end = self.plumb_y[0] + (self.plumb_y[1] - self.plumb_y[0]) * end
+        for on, y in ((pp > 0.0, np.full(len(pp), self.plumb_y[0])), (pp >= 1.0, y_end)):    # a cross where a line
+            if on.any():                                                                     # starts, one at its end
+                f.crosses("w", self.gv[on], y[on], 9.0, lv, width=lw)
         if a < self.T_CLEAR[1]:                                 # the axis: only there to build, it leaves by the top
             self._draw(f, self.s_axis, step(self.T_AXIS[0], self.T_AXIS[1] - self.T_AXIS[0]),
                        io(B.lin(a, *self.T_CLEAR)), width=lw, level=lv)
@@ -892,20 +942,28 @@ class Tyrell(Standby):
         fa = L.FX0 - self.SLANT * (y0 - VIEW_Y0) - 12.0         # the front comes in by the left edge of the wall
         fb = L.FX1 + self.SLANT * (VIEW_Y1 - y0) + 12.0         # ... and leaves by the right one
         F = fa + (fb - fa) * pf                                 # x of the front at the top of the logo
-        # ---- the rain
-        if self.T_RAIN[0] < a < self.T_FILL[1]:
-            yh = VIEW_Y0 + self.FALL * (a - self.T_RAIN[0] - self.tr_t)             # the head of every track
-            X = lambda i, y: self.tr_c[i] - self.SLANT * (y - y0)
-            e = np.minimum(self.h_yb, yh[self.h_tr])
-            ok = (e > self.h_ya) & (self.tr_c[self.h_tr] > F)                       # (the front takes the hatching)
-            if ok.any():
-                i = self.h_tr[ok]
-                f.segments("w", X(i, self.h_ya[ok]), self.h_ya[ok], X(i, e[ok]), e[ok], lv, width=lw)
-            if a < self.t_wet:
-                on = np.flatnonzero((yh > VIEW_Y0) & (yh < VIEW_Y1 + self.TAIL))
-                if len(on):
-                    f.segments("w", X(on, yh[on] - self.TAIL), yh[on] - self.TAIL, X(on, yh[on]), yh[on], lv, width=self.LW)
-                    f.dots("w", X(on, yh[on]), yh[on], 3.4, 1.6)
+        # ---- the compasses
+        if self.T_COMP[0] - self.ARM < a < self.T_FILL[1]:
+            self._draw(f, self.s_comp, io(np.clip((a - self.comp_t) / self.comp_d, 0.0, 1.0)), width=lw, level=lv,
+                       dot=0.0, front=F if pf > 0.0 else None)  # (the front takes the arcs)
+            turn = lambda v: (v + np.pi) % (2 * np.pi) - np.pi
+            for cx, cy, arcs, ts, dur in self.comp:             # the arm of each one: from the tower to the pen
+                j = int(np.clip(np.searchsorted(ts, a) - 1, 0, len(ts) - 1))
+                r, ta, tb = arcs[j]
+                u = (a - ts[j]) / dur
+                if u < 0.0:                                     # it opens
+                    r, ang = r * io(B.lin(a, ts[0] - self.ARM, ts[0])), ta
+                elif u <= 1.0:                                  # it strikes an arc
+                    ang = ta + (tb - ta) * io(u)
+                elif j + 1 < len(ts):                           # the pen is lifted: to the next radius
+                    v = io(B.lin(a, ts[j] + dur, ts[j + 1]))
+                    r, ang = r + (arcs[j + 1][0] - r) * v, tb + turn(arcs[j + 1][1] - tb) * v
+                else:                                           # it closes
+                    r, ang = r * (1.0 - io(B.lin(a, ts[j] + dur, ts[j] + dur + self.ARM))), tb
+                if r > 2.0:
+                    qx, qy = cx + r * math.cos(ang), cy + r * math.sin(ang)
+                    f.segments("w", [cx], [cy], [qx], [qy], lv, width=lw)
+                    f.dots("w", [qx], [qy], 4.2, 1.6)
         # ---- the outline: the pens start one after the other and all close at the same moment
         if pf < 1.0:
             pt = io(np.clip((a - self.pen_t) / (self.T_TRACE[2] - self.pen_t), 0.0, 1.0)) * back((0.9, 3.4))
@@ -932,9 +990,21 @@ class Tyrell(Standby):
             xs = x0 - 60.0 + (self.w + 120.0) * u
             ym = 0.5 * (y0 + y1)
             hh = (0.5 * self.h + 70.0) * ps
-            f.segments("w", [xs], [ym - hh], [xs], [ym + hh], lv, width=self.LW)
-            f.crosses("w", [xs, xs], [ym - hh, ym + hh], 9.0 * ps, lv, width=lw)
+            away = max(self.for_room[0] - xs, xs - self.for_room[1], 0.0) / 140.0     # it dips under the dedication
+            yu = ym - hh + max(self.for_room[2] - (ym - hh), 0.0) * room * (1.0 - io(min(away, 1.0)))
+            f.segments("w", [xs], [yu], [xs], [ym + hh], lv, width=self.LW)
+            f.crosses("w", [xs, xs], [yu, ym + hh], 9.0 * ps, lv, width=lw)
         f.set_clip()
+        # ---- who it is for: written at the top of the wall when the logo stands, signed under its end
+        line, name = self.FOR
+        fs, ns = self.FOR_SIZE
+        xa, yt, wl = self.for_at
+        with f.build(B.io(a - self.T_FOR, left - 5.2, out=0.8, span=1.4), (xa - 10, yt - 50, xa + wl + 10, yt + 56),
+                     wave=0.6, marks=False, key=180):
+            f.text("w", xa, yt, line, size=fs, bold=True)
+            f.text("w", xa + wl, yt + 44.0, name, size=ns, bold=True, anchor="rs")
+            xn = xa + wl - text_w(name, ns) - 16.0
+            f.segments("w", [xn - 70.0], [yt + 34.0], [xn], [yt + 34.0], 0.95, width=self.LW)
         return self.furniture(f, t, ctx)
 
 
